@@ -82,6 +82,8 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
     public let currentInput: String
     public let shell: String
     public let workingDirectory: String
+    public let columns: Int
+    public let rows: Int
 
     public init(
         paneID: PaneID,
@@ -90,7 +92,9 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
         transcript: String,
         currentInput: String,
         shell: String,
-        workingDirectory: String
+        workingDirectory: String,
+        columns: Int = 80,
+        rows: Int = 24
     ) {
         self.paneID = paneID
         self.sessionID = sessionID
@@ -99,6 +103,8 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
         self.currentInput = currentInput
         self.shell = shell
         self.workingDirectory = workingDirectory
+        self.columns = columns
+        self.rows = rows
     }
 
     public var renderedText: String {
@@ -110,19 +116,22 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     private final class SessionState {
         let descriptor: SessionDescriptor
         let runtimeSurfaceID: String
-        var transcript: String
-        var currentInput: String
+        let runtimeSession: InteractiveTerminalRuntimeSession
+        let screenBuffer: TerminalScreenBuffer
+        var size: TerminalSize
 
         init(
             descriptor: SessionDescriptor,
             runtimeSurfaceID: String,
-            transcript: String = "",
-            currentInput: String = ""
+            runtimeSession: InteractiveTerminalRuntimeSession,
+            screenBuffer: TerminalScreenBuffer = TerminalScreenBuffer(),
+            size: TerminalSize = .default
         ) {
             self.descriptor = descriptor
             self.runtimeSurfaceID = runtimeSurfaceID
-            self.transcript = transcript
-            self.currentInput = currentInput
+            self.runtimeSession = runtimeSession
+            self.screenBuffer = screenBuffer
+            self.size = size
         }
     }
 
@@ -168,12 +177,20 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         let surface = try createSurface(for: pane)
         try runtime.attach(session: session, to: surface.runtimeSurfaceID)
 
+        let runtimeSession = try InteractiveTerminalRuntimeSession(
+            descriptor: session,
+            initialSize: .default,
+            onOutput: { [weak self] data in
+                self?.acceptRuntimeOutput(data, for: pane.id)
+            }
+        )
+
         lock.lock()
         sessionsByPane[pane.id] = session.id
         sessionStateByPane[pane.id] = SessionState(
             descriptor: session,
             runtimeSurfaceID: surface.runtimeSurfaceID,
-            transcript: "OpenMUX session attached to \(session.workingDirectory)\n$ "
+            runtimeSession: runtimeSession
         )
         lock.unlock()
 
@@ -190,7 +207,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.lock()
         let surface = surfaces.removeValue(forKey: paneID)
         sessionsByPane.removeValue(forKey: paneID)
-        sessionStateByPane.removeValue(forKey: paneID)
+        let sessionState = sessionStateByPane.removeValue(forKey: paneID)
         observers.removeValue(forKey: paneID)
         lock.unlock()
 
@@ -198,6 +215,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             throw TerminalBridgeError.missingSurface(paneID)
         }
 
+        sessionState?.runtimeSession.stop()
         try runtime.destroySurface(runtimeSurfaceID: surface.runtimeSurfaceID)
     }
 
@@ -251,80 +269,59 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             return
         }
 
-        switch event.key {
-        case "\u{7F}":
-            lock.lock()
-            sessionStateByPane[paneID]?.currentInput = String(sessionStateByPane[paneID]?.currentInput.dropLast() ?? "")
-            lock.unlock()
-            publishSnapshot(for: paneID)
-        case "\r", "\n":
-            let command: String?
-            lock.lock()
-            command = sessionStateByPane[paneID]?.currentInput
-            sessionStateByPane[paneID]?.transcript += "\n"
-            sessionStateByPane[paneID]?.currentInput = ""
-            lock.unlock()
-            publishSnapshot(for: paneID)
-
-            if let command {
-                try run(command: command, inPane: paneID)
-            }
-        default:
-            guard let text = event.text, event.route != .shortcut else {
-                return
-            }
-
-            lock.lock()
-            sessionStateByPane[paneID]?.currentInput += text
-            lock.unlock()
-            publishSnapshot(for: paneID)
-        }
-    }
-
-    public func run(command: String, inPane paneID: PaneID) throws {
-        guard let state = snapshot(for: paneID) else {
-            throw TerminalBridgeError.missingSession(paneID)
-        }
-
-        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedCommand.isEmpty {
-            appendTranscript("$ ", to: paneID)
+        guard event.route != .shortcut else {
             return
         }
 
-        appendTranscript("$ \(trimmedCommand)\n", to: paneID)
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: state.shell)
-            process.arguments = ["-lc", trimmedCommand]
-            process.currentDirectoryURL = URL(fileURLWithPath: state.workingDirectory)
-
-            var environment = ProcessInfo.processInfo.environment
-            state.sessionEnvironment.forEach { environment[$0.key] = $0.value }
-            process.environment = environment
-
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let data = stdout.fileHandleForReading.readDataToEndOfFile() + stderr.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                self?.appendTranscript(output.isEmpty ? "$ " : output + (output.hasSuffix("\n") ? "$ " : "\n$ "), to: paneID)
-            } catch {
-                self?.appendTranscript("command failed: \(error)\n$ ", to: paneID)
-            }
+        let data = data(for: event)
+        guard data.isEmpty == false else {
+            return
         }
+
+        try write(data, toPane: paneID)
     }
 
-    private func appendTranscript(_ text: String, to paneID: PaneID) {
+    public func run(command: String, inPane paneID: PaneID) throws {
+        guard snapshot(for: paneID) != nil else {
+            throw TerminalBridgeError.missingSession(paneID)
+        }
+
+        var commandData = Data(command.utf8)
+        commandData.append(0x0D)
+        try write(commandData, toPane: paneID)
+    }
+
+    public func send(text: String, toPane paneID: PaneID) throws {
+        try write(Data(text.utf8), toPane: paneID)
+    }
+
+    public func resize(paneID: PaneID, columns: Int, rows: Int) throws {
         lock.lock()
-        sessionStateByPane[paneID]?.transcript += text
+        guard let state = sessionStateByPane[paneID] else {
+            lock.unlock()
+            throw TerminalBridgeError.missingSession(paneID)
+        }
+        state.size = TerminalSize(columns: columns, rows: rows)
+        lock.unlock()
+
+        try state.runtimeSession.resize(to: state.size)
+        publishSnapshot(for: paneID)
+    }
+
+    private func write(_ data: Data, toPane paneID: PaneID) throws {
+        lock.lock()
+        guard let state = sessionStateByPane[paneID] else {
+            lock.unlock()
+            throw TerminalBridgeError.missingSession(paneID)
+        }
+        lock.unlock()
+
+        try state.runtimeSession.write(data)
+    }
+
+    private func acceptRuntimeOutput(_ data: Data, for paneID: PaneID) {
+        lock.lock()
+        sessionStateByPane[paneID]?.screenBuffer.apply(data)
         lock.unlock()
         publishSnapshot(for: paneID)
     }
@@ -357,24 +354,84 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             paneID: paneID,
             sessionID: sessionID,
             runtimeSurfaceID: state.runtimeSurfaceID,
-            transcript: state.transcript,
-            currentInput: state.currentInput,
+            transcript: state.screenBuffer.renderedText,
+            currentInput: "",
             shell: state.descriptor.shell,
-            workingDirectory: state.descriptor.workingDirectory
+            workingDirectory: state.descriptor.workingDirectory,
+            columns: state.size.columns,
+            rows: state.size.rows
         )
     }
-}
 
-private extension Data {
-    static func + (lhs: Data, rhs: Data) -> Data {
-        var result = lhs
-        result.append(rhs)
-        return result
+    private func data(for event: NormalizedKeyEvent) -> Data {
+        if let controlData = controlData(for: event) {
+            return controlData
+        }
+
+        guard let text = event.text else {
+            return Data()
+        }
+
+        return Data(text.utf8)
     }
-}
 
-private extension TerminalSessionSnapshot {
-    var sessionEnvironment: [String: String] {
-        [:]
+    private func controlData(for event: NormalizedKeyEvent) -> Data? {
+        let keyCode = event.keyCode
+
+        if event.modifiers.intersection([.leftControl, .rightControl]).isEmpty == false,
+           let controlScalar = controlScalar(for: event.key) {
+            return Data([controlScalar])
+        }
+
+        switch keyCode {
+        case 36?:
+            return Data([0x0D])
+        case 48?:
+            return Data([0x09])
+        case 51?:
+            return Data([0x7F])
+        case 117?:
+            return Data("\u{1B}[3~".utf8)
+        case 123?:
+            return Data("\u{1B}[D".utf8)
+        case 124?:
+            return Data("\u{1B}[C".utf8)
+        case 125?:
+            return Data("\u{1B}[B".utf8)
+        case 126?:
+            return Data("\u{1B}[A".utf8)
+        case 115?:
+            return Data("\u{1B}[H".utf8)
+        case 119?:
+            return Data("\u{1B}[F".utf8)
+        default:
+            break
+        }
+
+        switch event.key {
+        case "\r", "\n":
+            return Data([0x0D])
+        case "\t":
+            return Data([0x09])
+        case "\u{7F}":
+            return Data([0x7F])
+        default:
+            return nil
+        }
+    }
+
+    private func controlScalar(for key: String) -> UInt8? {
+        guard let scalar = key.uppercased().unicodeScalars.first else {
+            return nil
+        }
+
+        switch scalar.value {
+        case 64...95:
+            return UInt8(scalar.value - 64)
+        case 63:
+            return 0x7F
+        default:
+            return nil
+        }
     }
 }

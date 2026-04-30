@@ -49,7 +49,13 @@ final class OmuxCLITests: XCTestCase {
 
         let server = LocalControlServer(socketPath: socketPath)
         try server.start { request in
-            JSONRPCResponse(id: request.id, result: .string(request.method))
+            let axis = request.params.flatMap {
+                if case .object(let object) = $0, case .string(let axis)? = object["axis"] {
+                    return axis
+                }
+                return nil
+            } ?? "none"
+            return JSONRPCResponse(id: request.id, result: .string("\(request.method):\(axis)"))
         }
         defer { server.stop() }
 
@@ -59,12 +65,14 @@ final class OmuxCLITests: XCTestCase {
 
         XCTAssertEqual(command.run(arguments: ["omux", "tab"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "split"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "split", "down"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
 
         XCTAssertEqual(output, [
-            ControlMethod.createTab.rawValue,
-            ControlMethod.splitPane.rawValue,
-            ControlMethod.runCommand.rawValue,
+            "\(ControlMethod.createTab.rawValue):none",
+            "\(ControlMethod.splitPane.rawValue):columns",
+            "\(ControlMethod.splitPane.rawValue):rows",
+            "\(ControlMethod.runCommand.rawValue):none",
         ])
     }
 }

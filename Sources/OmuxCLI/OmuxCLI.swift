@@ -1,5 +1,6 @@
 import Foundation
 import OmuxControlPlane
+import OmuxCore
 
 public struct OmuxCLICommand {
     private let client: OmuxControlClient
@@ -30,7 +31,11 @@ public struct OmuxCLICommand {
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
             case "split":
-                let response = try client.request(method: .splitPane)
+                let axis = splitAxis(from: commandArguments.dropFirst())
+                let response = try client.request(
+                    method: .splitPane,
+                    params: .object(["axis": .string(axis.rawValue)])
+                )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "open":
                 guard commandArguments.count >= 2 else {
@@ -118,10 +123,23 @@ public struct OmuxCLICommand {
       omux list
       omux open <path>
       omux tab
-      omux split
+      omux split [right|down]
       omux focus <session-id>
       omux run <session-id> <command>
       omux notify <title> [body]
       omux restore <workspace-id>
     """
+
+    private func splitAxis(from arguments: ArraySlice<String>) -> PaneSplitAxis {
+        guard let value = arguments.first?.lowercased() else {
+            return .columns
+        }
+
+        switch value {
+        case "down", "vertical":
+            return .rows
+        default:
+            return .columns
+        }
+    }
 }

@@ -120,8 +120,6 @@ public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
         let hasShortcutModifier = raw.modifiers.intersection([
             .leftCommand,
             .rightCommand,
-            .leftControl,
-            .rightControl,
         ]).isEmpty == false
 
         let route: NormalizedInputRoute

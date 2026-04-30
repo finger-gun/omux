@@ -1,6 +1,6 @@
-# OpenMUX Development Foundation
+# OpenMUX Development Notes
 
-OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation described by the `macos-foundation` OpenSpec change.
+OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation, workspace shell, and interactive-terminal slices described by the applied OpenSpec changes.
 
 ## Module boundaries
 
@@ -26,7 +26,7 @@ OpenMUX currently uses a Swift Package Manager workspace to establish the initia
 - Pinned ref marker: `Vendor/ghostty/PINNED_REF`
 - Build handoff script: `Scripts/build-ghostty.sh`
 
-The current bridge uses a foundation runtime placeholder until the vendored Ghostty snapshot is checked in. Future changes should wire the actual build through the bridge without leaking Ghostty internals into higher-level modules.
+The current bridge uses a bridge-owned PTY-backed interactive runtime as the fallback path until the vendored Ghostty snapshot is checked in and wired through `CGhostty`. Future changes should improve rendering fidelity through the bridge without leaking Ghostty internals into higher-level modules.
 
 ## Commands
 
@@ -35,6 +35,7 @@ swift build
 swift test
 swift run omux tab
 swift run omux split
+swift run omux split down
 swift run omux run <session-id> "pwd"
 swift run omux help
 swift run OpenMUXApp
@@ -42,11 +43,28 @@ swift run OpenMUXApp
 
 ## Workspace shell status
 
-The current `workspace-shell` slice adds:
+The current shell baseline adds:
 
 - real bridge-backed pane views
-- tabs and split panes in the native shell
+- direct typing into the focused pane
+- persistent pane-owned interactive shell sessions
+- tabs plus split-right and split-down panes in the native shell
 - shared workspace/session actions used by both the UI and `omux`
-- command execution routed to live pane sessions
+- command injection routed into ongoing live pane sessions
+- pane resize propagation into the live terminal runtime
 
-Persistence, richer notifications, and more advanced hook behavior remain follow-on work.
+## Current limitations
+
+The current interactive-terminal slice is usable, but it is still intentionally narrow:
+
+- pane rendering is still text-view-backed rather than full libghostty rendering
+- ANSI/control-sequence handling is lightweight and aimed at normal shell prompts, not full-screen TUIs
+- paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
+- the next UX layer should build on this live session model rather than reintroducing modal command entry
+
+## Guidance for future changes
+
+1. Keep terminal lifecycle, PTY ownership, input encoding, and future libghostty wiring inside `OmuxTerminalBridge`.
+2. Treat direct pane input as the primary interaction model; UI chrome should enhance it, not replace it.
+3. Preserve international keyboard correctness whenever input handling changes.
+4. Keep `omux`, JSON-RPC, and the native shell pointed at the same live session objects.

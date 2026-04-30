@@ -45,4 +45,18 @@ final class OmuxCoreTests: XCTestCase {
 
         XCTAssertEqual(event.route, .shortcut)
     }
+
+    func testControlChordRemainsTerminalInput() {
+        let raw = RawKeyInput(
+            keyCode: 8,
+            characters: "\u{03}",
+            charactersIgnoringModifiers: "c",
+            modifiers: [.leftControl]
+        )
+
+        let event = DefaultKeyEventNormalizer().normalize(raw)
+
+        XCTAssertEqual(event.route, .terminal)
+        XCTAssertTrue(event.modifiers.contains(.leftControl))
+    }
 }

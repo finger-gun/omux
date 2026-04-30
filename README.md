@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+
   <a href="https://github.com/finger-gun/omux/actions/workflows/ci.yml">
     <img src="https://github.com/finger-gun/omux/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" />
   </a>

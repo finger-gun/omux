@@ -49,7 +49,9 @@ final class OpenMUXControlPlaneService {
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active workspace"))
         case .splitPane:
-            if let workspace = try controller.splitFocusedPane() {
+            let axisRawValue = request.params?.objectValue?["axis"]?.stringValue
+            let axis = axisRawValue.flatMap(PaneSplitAxis.init(rawValue:)) ?? .columns
+            if let workspace = try controller.splitFocusedPane(axis: axis) {
                 return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane"))

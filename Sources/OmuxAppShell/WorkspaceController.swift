@@ -180,7 +180,7 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
-    public func splitFocusedPane() throws -> Workspace? {
+    public func splitFocusedPane(axis: PaneSplitAxis = .columns) throws -> Workspace? {
         lock.lock()
         guard let index = activeWorkspaceIndex,
               let focusedPane = workspaces[index].focusedPane
@@ -190,7 +190,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         let pane = makePane(title: focusedPane.title, workingDirectory: focusedPane.session.workingDirectory)
-        let success = workspaces[index].appendPaneToFocusedTab(pane)
+        let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
         let updatedWorkspace = success ? workspaces[index] : nil
         lock.unlock()
 
@@ -219,7 +219,9 @@ public final class WorkspaceController: @unchecked Sendable {
     public func focus(tabID: TabID) -> Workspace? {
         var updatedWorkspace: Workspace?
         lock.lock()
-        if let index = activeWorkspaceIndex, workspaces[index].focus(tabID: tabID) {
+        if let index = activeWorkspaceIndex,
+           workspaces[index].focusedTabID != tabID,
+           workspaces[index].focus(tabID: tabID) {
             updatedWorkspace = workspaces[index]
         }
         lock.unlock()
@@ -235,7 +237,9 @@ public final class WorkspaceController: @unchecked Sendable {
     public func focus(paneID: PaneID) -> Workspace? {
         var updatedWorkspace: Workspace?
         lock.lock()
-        if let index = activeWorkspaceIndex, workspaces[index].focus(paneID: paneID) {
+        if let index = activeWorkspaceIndex,
+           workspaces[index].focusedPane?.id != paneID,
+           workspaces[index].focus(paneID: paneID) {
             updatedWorkspace = workspaces[index]
         }
         lock.unlock()
@@ -270,6 +274,14 @@ public final class WorkspaceController: @unchecked Sendable {
 
     public func handleInput(_ event: NormalizedKeyEvent, in paneID: PaneID) throws {
         try bridge.handle(event, inPane: paneID)
+    }
+
+    public func paste(_ text: String, in paneID: PaneID) throws {
+        try bridge.send(text: text, toPane: paneID)
+    }
+
+    public func resize(paneID: PaneID, columns: Int, rows: Int) throws {
+        try bridge.resize(paneID: paneID, columns: columns, rows: rows)
     }
 
     public func focusedPaneID(in workspace: Workspace) -> PaneID? {

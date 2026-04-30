@@ -45,6 +45,9 @@ final class OmuxControlPlaneTests: XCTestCase {
         let client = OmuxControlClient(socketPath: socketPath)
         let createTab = try client.request(method: .createTab)
         let split = try client.request(method: .splitPane)
+        let splitDown = try client.request(method: .splitPane, params: .object([
+            "axis": .string("rows"),
+        ]))
         let run = try client.request(method: .runCommand, params: .object([
             "sessionID": .string("session-1"),
             "command": .string("pwd"),
@@ -52,6 +55,7 @@ final class OmuxControlPlaneTests: XCTestCase {
 
         XCTAssertEqual(createTab.result, .object(["method": .string(ControlMethod.createTab.rawValue)]))
         XCTAssertEqual(split.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
+        XCTAssertEqual(splitDown.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
         XCTAssertEqual(run.result, .object(["method": .string(ControlMethod.runCommand.rawValue)]))
     }
 }
