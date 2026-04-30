@@ -22,7 +22,6 @@ final class OmuxAppShellTests: XCTestCase {
         let withSplit = try XCTUnwrap(controller.splitFocusedPane())
         XCTAssertEqual(withSplit.focusedTab?.panes.count, 2)
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
-        XCTAssertEqual(withSplit.focusedTab?.splitAxis, .columns)
     }
 
     func testWorkspaceControllerCanSplitDown() throws {
@@ -35,7 +34,33 @@ final class OmuxAppShellTests: XCTestCase {
         let withVerticalSplit = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
 
         XCTAssertEqual(withVerticalSplit.focusedTab?.panes.count, 2)
-        XCTAssertEqual(withVerticalSplit.focusedTab?.splitAxis, .rows)
+    }
+
+    func testWorkspaceControllerSupportsNestedSplitLayouts() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let splitDown = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
+        let bottomPaneID = try XCTUnwrap(splitDown.focusedTab?.focusedPaneID)
+
+        _ = controller.focus(paneID: bottomPaneID)
+        let nestedLayout = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+
+        XCTAssertEqual(nestedLayout.focusedTab?.panes.count, 3)
+
+        guard case .split(axis: .rows, let rootChildren)? = nestedLayout.focusedTab?.rootLayout else {
+            return XCTFail("expected a row split at the root")
+        }
+
+        XCTAssertEqual(rootChildren.count, 2)
+        guard case .split(axis: .columns, let nestedChildren) = rootChildren[1] else {
+            return XCTFail("expected the lower pane to become a nested column split")
+        }
+
+        XCTAssertEqual(nestedChildren.count, 2)
     }
 
     func testRunCommandTargetsLiveSession() throws {
