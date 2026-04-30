@@ -43,4 +43,4 @@
 - [x] 6.1 Document the manual keyboard verification matrix for US, Swedish/Nordic ISO, at least one additional EU layout when available, and at least one IME workflow.
 - [x] 6.2 Document that OpenMUX honors Ghostty-compatible `macos-option-as-alt` semantics and does not hardcode layout-specific Option mappings.
 - [x] 6.3 Run the existing Swift test suite and the new focused input, clipboard, and pointer tests.
-- [ ] 6.4 Manually verify Swedish/Nordic ISO dead keys (`¨`, `^`, `~`), direct text (`å`, `ä`, `ö`), Option text input, and Right Option Alt/Meta behavior.
+- [x] 6.4 Manually verify Swedish/Nordic ISO dead keys (`¨`, `^`, `~`), direct text (`å`, `ä`, `ö`), Option text input, and Right Option Alt/Meta behavior.
