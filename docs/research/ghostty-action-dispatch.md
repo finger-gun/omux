@@ -98,6 +98,20 @@ A future change introducing action dispatch should preserve the bridge boundary 
 - Honored actions fan out through OpenMUX's existing surfaces: hooks for automation, JSON-RPC events on the control plane for external tools and AI workflows, and AppKit surfaces for user-visible behavior.
 - Action handling is orthogonal to config and theme. The bridge's `action_cb` and the bridge's config loader are independent seams; a config-and-theme change does not need to touch action dispatch and vice versa.
 
+## Config boundary note
+
+Future work on action dispatch should assume the current config model is:
+
+- users edit **`~/.omux/config.toml`**
+- user themes live under **`~/.omux/themes/`**
+- Ghostty config is a **generated internal artifact** under **`~/.omux/generated/ghostty/`**
+- `[ghostty]` is an advanced pass-through section, but OpenMUX-managed keys still win on conflict
+- v1 reload is **explicit** via `omux config reload`, not a background file-watcher
+
+That means Ghostty actions like `OPEN_CONFIG` and `RELOAD_CONFIG` should continue to route to OpenMUX-owned config UX and reload behavior, not to Ghostty's standalone-app config assumptions.
+
+See also: [`docs/configuration.md`](../configuration.md)
+
 ## Open questions
 
 These belong with the change proposal, not with this note:
