@@ -72,10 +72,14 @@ If you want one stable, native entrypoint for daily development, prefer the root
 The current shell baseline adds:
 
 - real bridge-backed pane views
+- a terminal-native shell composition with persistent sidebar navigation, sidebar-owned workspace/tab switching, a quieter top bar, and denser custom pane chrome
 - direct typing into the focused pane
-- persistent pane-owned interactive shell sessions
-- top-level workspace tabs plus split-right and split-down panes in the native shell
+- persistent pane-owned interactive shell sessions behind workspace and pane navigation instead of a separate Sessions sidebar section
+- split-right and split-down panes routed through native View menu commands instead of persistent shell buttons
 - pane stacks at each split leaf, with local pane tabs inside a region
+- built-in shell-and-terminal themes including OpenMUX Dark, Catppuccin, Gruvbox, and Sonokai
+- a second polish pass that tightens shell proportions, makes sidebar navigation visible/useful, and gives shell controls real intrinsic sizing
+- a follow-up navigation pass that moves workspace tabs into the left rail, adds a compact sidebar workspace-creation affordance, supports workspace renaming, and disables destructive workspace/pane commands when they would empty the shell
 - bridge-provided hosted terminal pane views embedded inside AppKit pane stacks
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions
@@ -97,7 +101,7 @@ This keeps shell structure in `OmuxCore` and `OmuxAppShell` while the terminal b
 The current pane-hosting split is:
 
 - `OmuxAppShell` owns workspace layout, pane-stack chrome, and focus state
-- `OmuxTerminalBridge` owns pane surfaces, attached sessions, resize propagation, and hosted terminal pane views
+- `OmuxTerminalBridge` owns pane surfaces, attached sessions, resize propagation, hosted terminal pane views, and terminal palette application
 - the bridge chooses between a vendored Ghostty runtime-owned native surface host and its internal fallback host
 
 This keeps the shell AppKit-first while preserving one narrow terminal-engine seam.

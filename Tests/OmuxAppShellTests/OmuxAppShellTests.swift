@@ -96,6 +96,83 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(closed.focusedTab?.focusedPaneID, originalPaneID)
     }
 
+    func testWorkspaceControllerRemovesActivePaneByClosingSinglePaneTab() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let workspaceWithSecondTab = try XCTUnwrap(controller.createTab())
+        XCTAssertEqual(workspaceWithSecondTab.tabs.count, 2)
+        XCTAssertTrue(controller.canRemoveActivePane())
+
+        let updatedWorkspace = try XCTUnwrap(controller.removeActivePane())
+        XCTAssertEqual(updatedWorkspace.tabs.count, 1)
+        XCTAssertEqual(updatedWorkspace.focusedTab?.title, "Main")
+        XCTAssertFalse(controller.canRemoveActivePane())
+    }
+
+    func testWorkspaceControllerRemovesActivePaneAndCollapsesSplit() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        XCTAssertEqual(splitWorkspace.focusedTab?.panes.count, 2)
+
+        let updatedWorkspace = try XCTUnwrap(controller.removeActivePane())
+        XCTAssertEqual(updatedWorkspace.focusedTab?.panes.count, 1)
+
+        guard case .paneStack? = updatedWorkspace.focusedTab?.rootLayout else {
+            return XCTFail("expected split layout to collapse back to a single pane stack")
+        }
+    }
+
+    func testWorkspaceControllerDeletesActiveWorkspaceWhenAnotherExists() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+        XCTAssertNotEqual(firstWorkspace.id, secondWorkspace.id)
+        XCTAssertTrue(controller.canDeleteActiveWorkspace())
+
+        let survivingWorkspace = try XCTUnwrap(controller.deleteActiveWorkspace())
+        XCTAssertEqual(survivingWorkspace.id, firstWorkspace.id)
+        XCTAssertFalse(controller.canDeleteActiveWorkspace())
+    }
+
+    func testWorkspaceControllerCreatesUniquelyNamedWorkspaces() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+
+        XCTAssertEqual(firstWorkspace.name, "tmp")
+        XCTAssertEqual(secondWorkspace.name, "tmp 2")
+    }
+
+    func testWorkspaceControllerCanRenameWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let renamedWorkspace = try XCTUnwrap(controller.renameWorkspace(workspace.id, to: "Project Alpha"))
+
+        XCTAssertEqual(renamedWorkspace.name, "Project Alpha")
+        XCTAssertEqual(controller.activeWorkspace()?.name, "Project Alpha")
+    }
+
     func testRunCommandTargetsLiveSession() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -149,6 +226,150 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowUsesTerminalNativeShellChrome() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        _ = try controller.createTab()
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        XCTAssertNotNil(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+        XCTAssertNotNil(findView(ofType: WorkspaceTopBarView.self, in: rootView))
+        XCTAssertNotNil(findView(ofType: WorkspaceCanvasView.self, in: rootView))
+    }
+
+    @MainActor
+    func testWorkspaceWindowMovesTabNavigationIntoSidebar() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let updatedWorkspace = try XCTUnwrap(controller.createTab())
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+        let topBar = try XCTUnwrap(findView(ofType: WorkspaceTopBarView.self, in: rootView))
+
+        XCTAssertTrue(findLabel(withString: "tmp", in: sidebar))
+        XCTAssertFalse(findLabel(withString: "New Tab", in: topBar))
+        XCTAssertFalse(findLabel(withString: "SESSIONS", in: sidebar))
+    }
+
+    @MainActor
+    func testWorkspaceWindowShowsVisibleSidebarNavigation() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let updatedWorkspace = try XCTUnwrap(controller.createTab())
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        rootView.layoutSubtreeIfNeeded()
+
+        let wsLabel = try XCTUnwrap(findLabelView(withString: "tmp", in: sidebar))
+        let wsButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: wsLabel))
+        XCTAssertNotNil(wsButton)
+        XCTAssertTrue(findLabel(withString: "+", in: sidebar))
+    }
+
+    @MainActor
+    func testWorkspaceWindowSidebarTracksMultipleWorkspaces() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+        let windowController = WorkspaceWindowController(workspace: secondWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        XCTAssertTrue(findLabel(withString: "WORKSPACES · 2", in: sidebar))
+        XCTAssertGreaterThanOrEqual(findViews(ofType: SidebarItemButton.self, in: sidebar).count, 2)
+    }
+
+    @MainActor
+    func testWorkspaceWindowTopBarShowsWorkspaceName() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let renamedWorkspace = try XCTUnwrap(controller.renameWorkspace(workspace.id, to: "Project Alpha"))
+        let windowController = WorkspaceWindowController(workspace: renamedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let topBar = try XCTUnwrap(findView(ofType: WorkspaceTopBarView.self, in: rootView))
+
+        XCTAssertTrue(findLabel(withString: "Project Alpha", in: topBar))
+        XCTAssertFalse(findLabel(withString: "Main", in: topBar))
+    }
+
+    @MainActor
+    func testWorkspaceWindowRendersHorizontalSplitForSplitRight() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let windowController = WorkspaceWindowController(workspace: splitWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        rootView.layoutSubtreeIfNeeded()
+
+        let paneCards = findViews(ofType: PaneCardView.self, in: rootView)
+        XCTAssertEqual(paneCards.count, 2)
+        let firstFrame = paneCards[0].convert(paneCards[0].bounds, to: rootView)
+        let secondFrame = paneCards[1].convert(paneCards[1].bounds, to: rootView)
+        XCTAssertEqual(firstFrame.minY, secondFrame.minY, accuracy: 1)
+        XCTAssertNotEqual(firstFrame.minX, secondFrame.minX)
+    }
+
+    @MainActor
+    func testWorkspaceWindowUsesDedicatedPaneHeaderChrome() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        XCTAssertNotNil(findView(ofType: PaneHeaderView.self, in: rootView))
+        XCTAssertNil(findView(ofType: NSSegmentedControl.self, in: rootView))
+    }
+
+    func testBuiltInThemesIncludeDefaultAndCuratedPresets() {
+        let identifiers = Set(WorkspaceShellTheme.builtInPresets.map(\.identifier))
+
+        XCTAssertTrue(identifiers.contains("openmux-dark"))
+        XCTAssertTrue(identifiers.contains("catppuccin"))
+        XCTAssertTrue(identifiers.contains("gruvbox"))
+        XCTAssertTrue(identifiers.contains("sonokai"))
+        XCTAssertEqual(WorkspaceShellTheme.builtInPresets.count, identifiers.count)
+        XCTAssertNotEqual(WorkspaceShellTheme.openMUXDark.terminalPalette, WorkspaceShellTheme.catppuccin.terminalPalette)
+    }
+
+    @MainActor
     private func findHostedTerminalPaneView(in view: NSView) -> HostedTerminalPaneView? {
         if let hosted = view as? HostedTerminalPaneView {
             return hosted
@@ -160,6 +381,69 @@ final class OmuxAppShellTests: XCTestCase {
             }
         }
 
+        return nil
+    }
+
+    @MainActor
+    private func findView<T: NSView>(ofType type: T.Type, in view: NSView) -> T? {
+        if let matched = view as? T {
+            return matched
+        }
+
+        for subview in view.subviews {
+            if let matched = findView(ofType: type, in: subview) {
+                return matched
+            }
+        }
+
+        return nil
+    }
+
+    @MainActor
+    private func findLabel(withString string: String, in view: NSView) -> Bool {
+        if let label = view as? NSTextField, label.stringValue == string {
+            return true
+        }
+
+        return view.subviews.contains { findLabel(withString: string, in: $0) }
+    }
+
+    @MainActor
+    private func findLabelView(withString string: String, in view: NSView) -> NSTextField? {
+        if let label = view as? NSTextField, label.stringValue == string {
+            return label
+        }
+
+        for subview in view.subviews {
+            if let label = findLabelView(withString: string, in: subview) {
+                return label
+            }
+        }
+
+        return nil
+    }
+
+    @MainActor
+    private func findViews<T: NSView>(ofType type: T.Type, in view: NSView) -> [T] {
+        var matches: [T] = []
+        if let matched = view as? T {
+            matches.append(matched)
+        }
+        for subview in view.subviews {
+            matches.append(contentsOf: findViews(ofType: type, in: subview))
+        }
+        return matches
+    }
+
+    @MainActor
+    private func findAncestor<T: NSView>(ofType type: T.Type, for view: NSView) -> T? {
+        var current = view.superview
+        while let candidate = current {
+            if let matched = candidate as? T {
+                return matched
+            }
+            current = candidate.superview
+        }
         return nil
     }
 }

@@ -89,6 +89,11 @@ public enum PaneSplitAxis: String, Codable, Sendable {
 }
 
 public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
+    private struct PaneDetachResult {
+        let pane: Pane
+        let collapseNode: Bool
+    }
+
     case paneStack(PaneStack)
     case split(axis: PaneSplitAxis, children: [TabLayoutNode])
 
@@ -235,6 +240,10 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
         }
     }
 
+    public mutating func detachPane(id paneID: PaneID) -> Pane? {
+        detachPaneResult(id: paneID)?.pane
+    }
+
     @discardableResult
     public mutating func split(
         stackID: PaneStackID,
@@ -258,6 +267,45 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
                 }
             }
             return false
+        }
+    }
+
+    private mutating func detachPaneResult(id paneID: PaneID) -> PaneDetachResult? {
+        switch self {
+        case .paneStack(var paneStack):
+            guard let index = paneStack.panes.firstIndex(where: { $0.id == paneID }) else {
+                return nil
+            }
+
+            let removedPane = paneStack.panes.remove(at: index)
+            if paneStack.panes.isEmpty {
+                return PaneDetachResult(pane: removedPane, collapseNode: true)
+            }
+
+            if paneStack.focusedPaneID == removedPane.id {
+                paneStack.focusedPaneID = paneStack.panes[min(index, paneStack.panes.count - 1)].id
+            }
+
+            self = .paneStack(paneStack)
+            return PaneDetachResult(pane: removedPane, collapseNode: false)
+
+        case .split(let axis, var children):
+            for index in children.indices {
+                if let result = children[index].detachPaneResult(id: paneID) {
+                    if result.collapseNode {
+                        children.remove(at: index)
+                    }
+
+                    if children.isEmpty {
+                        return PaneDetachResult(pane: result.pane, collapseNode: true)
+                    }
+
+                    self = children.count == 1 ? children[0] : .split(axis: axis, children: children)
+                    return PaneDetachResult(pane: result.pane, collapseNode: false)
+                }
+            }
+
+            return nil
         }
     }
 }
@@ -334,6 +382,17 @@ public struct Tab: Equatable, Codable, Sendable {
         if let updatedStack = rootLayout.paneStack(id: stackID) {
             focusedPaneID = updatedStack.focusedPaneID
         }
+        return removedPane
+    }
+
+    public mutating func removePane(_ paneID: PaneID) -> Pane? {
+        guard let removedPane = rootLayout.detachPane(id: paneID),
+              let nextFocusedPaneID = rootLayout.panes.first?.id
+        else {
+            return nil
+        }
+
+        focusedPaneID = nextFocusedPaneID
         return removedPane
     }
 
@@ -444,6 +503,20 @@ public struct Workspace: Equatable, Codable, Sendable {
         if focus {
             focusedTabID = tab.id
         }
+    }
+
+    public mutating func closeTab(_ tabID: TabID) -> Tab? {
+        guard tabs.count > 1,
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return nil
+        }
+
+        let removedTab = tabs.remove(at: index)
+        if focusedTabID == removedTab.id {
+            focusedTabID = tabs[min(index, tabs.count - 1)].id
+        }
+        return removedTab
     }
 
     @discardableResult

@@ -7,7 +7,45 @@ protocol TerminalSurfaceContentHosting: AnyObject {
     var rootView: NSView { get }
     var focusTarget: NSView { get }
     func setFocused(_ isFocused: Bool)
+    func apply(themePalette: TerminalThemePalette)
     func measuredTerminalSize(in size: CGSize) -> TerminalSize
+}
+
+public struct TerminalThemePalette: @unchecked Sendable {
+    public let backgroundColor: NSColor
+    public let foregroundColor: NSColor
+    public let cursorColor: NSColor
+    public let selectionColor: NSColor
+
+    public init(
+        backgroundColor: NSColor,
+        foregroundColor: NSColor,
+        cursorColor: NSColor,
+        selectionColor: NSColor
+    ) {
+        self.backgroundColor = backgroundColor
+        self.foregroundColor = foregroundColor
+        self.cursorColor = cursorColor
+        self.selectionColor = selectionColor
+    }
+}
+
+extension TerminalThemePalette: Equatable {
+    public static func == (lhs: TerminalThemePalette, rhs: TerminalThemePalette) -> Bool {
+        lhs.backgroundColor.isEqual(rhs.backgroundColor)
+            && lhs.foregroundColor.isEqual(rhs.foregroundColor)
+            && lhs.cursorColor.isEqual(rhs.cursorColor)
+            && lhs.selectionColor.isEqual(rhs.selectionColor)
+    }
+}
+
+public extension TerminalThemePalette {
+    static let defaultDark = TerminalThemePalette(
+        backgroundColor: NSColor(calibratedRed: 0.05, green: 0.07, blue: 0.1, alpha: 1.0),
+        foregroundColor: NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.96, alpha: 1.0),
+        cursorColor: .controlAccentColor,
+        selectionColor: NSColor(calibratedRed: 0.14, green: 0.2, blue: 0.3, alpha: 1.0)
+    )
 }
 
 @MainActor
@@ -20,19 +58,23 @@ public final class HostedTerminalPaneView: NSView {
     private let paneID: PaneID
     private let bridge: GhosttyTerminalBridge
     private let contentHost: any TerminalSurfaceContentHosting
+    private var themePalette: TerminalThemePalette
     private var lastMeasuredSize: MeasuredTerminalSize?
 
     init(
         pane: Pane,
         bridge: GhosttyTerminalBridge,
         isFocused: Bool,
+        themePalette: TerminalThemePalette = .defaultDark,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
         self.paneID = pane.id
         self.bridge = bridge
+        self.themePalette = themePalette
         self.contentHost = bridge.makeHostedSurfaceContentHost(
             for: pane,
             isFocused: isFocused,
+            themePalette: themePalette,
             onFocus: onFocus
         )
         super.init(frame: .zero)
@@ -40,7 +82,9 @@ public final class HostedTerminalPaneView: NSView {
 
         wantsLayer = true
         layer?.cornerRadius = 8
+        layer?.masksToBounds = true
         updateFocusState(isFocused)
+        contentHost.apply(themePalette: themePalette)
 
         let hostedView = contentHost.rootView
         hostedView.translatesAutoresizingMaskIntoConstraints = false
@@ -84,9 +128,14 @@ public final class HostedTerminalPaneView: NSView {
 
     public func updateFocusState(_ isFocused: Bool) {
         contentHost.setFocused(isFocused)
-        layer?.borderWidth = isFocused ? 2 : 1
-        layer?.borderColor = (isFocused ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        layer?.borderWidth = 0
+        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+    }
+
+    public func apply(themePalette: TerminalThemePalette) {
+        self.themePalette = themePalette
+        contentHost.apply(themePalette: themePalette)
+        layer?.backgroundColor = themePalette.backgroundColor.cgColor
     }
 }
 
@@ -102,6 +151,7 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         runtimeView: NSView,
         bridge: GhosttyTerminalBridge,
         isFocused: Bool,
+        themePalette: TerminalThemePalette,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
         self.paneID = pane.id
@@ -117,7 +167,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         inputProxy.insertionPointColor = .clear
         self.rootView = RuntimeTerminalSurfaceContainer(
             runtimeView: runtimeView,
-            inputProxy: inputProxy
+            inputProxy: inputProxy,
+            themePalette: themePalette
         )
         self.focusTarget = inputProxy
     }
@@ -133,13 +184,21 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
             rows: max(5, Int(size.height / 18))
         )
     }
+
+    func apply(themePalette: TerminalThemePalette) {
+        (rootView as? RuntimeTerminalSurfaceContainer)?.apply(themePalette: themePalette)
+        (focusTarget as? FallbackTerminalTextView)?.apply(themePalette: themePalette)
+    }
 }
 
 @MainActor
 private final class RuntimeTerminalSurfaceContainer: NSView {
-    init(runtimeView: NSView, inputProxy: FallbackTerminalTextView) {
+    init(runtimeView: NSView, inputProxy: FallbackTerminalTextView, themePalette: TerminalThemePalette) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = themePalette.backgroundColor.cgColor
 
         runtimeView.translatesAutoresizingMaskIntoConstraints = false
         inputProxy.translatesAutoresizingMaskIntoConstraints = false
@@ -162,6 +221,10 @@ private final class RuntimeTerminalSurfaceContainer: NSView {
     required init?(coder: NSCoder) {
         nil
     }
+
+    func apply(themePalette: TerminalThemePalette) {
+        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+    }
 }
 
 @MainActor
@@ -178,6 +241,7 @@ final class FallbackTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         pane: Pane,
         bridge: GhosttyTerminalBridge,
         isFocused: Bool,
+        themePalette: TerminalThemePalette,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
         self.bridge = bridge
@@ -190,6 +254,7 @@ final class FallbackTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         )
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
         self.rootView = container
 
         scrollView.hasVerticalScroller = true
@@ -209,6 +274,7 @@ final class FallbackTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         scrollView.documentView = textView
+        apply(themePalette: themePalette)
 
         container.addSubview(scrollView)
         NSLayoutConstraint.activate([
@@ -238,6 +304,14 @@ final class FallbackTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
 
     func setFocused(_ isFocused: Bool) {
         textView.isFocusedPane = isFocused
+    }
+
+    func apply(themePalette: TerminalThemePalette) {
+        scrollView.backgroundColor = themePalette.backgroundColor
+        textView.backgroundColor = themePalette.backgroundColor
+        textView.textColor = themePalette.foregroundColor
+        textView.insertionPointColor = themePalette.cursorColor
+        rootView.layer?.backgroundColor = themePalette.backgroundColor.cgColor
     }
 
     func measuredTerminalSize(in size: CGSize) -> TerminalSize {
@@ -278,6 +352,16 @@ private final class FallbackTerminalTextView: NSTextView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    func apply(themePalette: TerminalThemePalette) {
+        backgroundColor = themePalette.backgroundColor
+        textColor = themePalette.foregroundColor
+        insertionPointColor = themePalette.cursorColor
+        selectedTextAttributes = [
+            .backgroundColor: themePalette.selectionColor,
+            .foregroundColor: themePalette.foregroundColor,
+        ]
     }
 
     override var acceptsFirstResponder: Bool { true }

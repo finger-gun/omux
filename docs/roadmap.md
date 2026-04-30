@@ -19,8 +19,8 @@ It is intentionally directional rather than date-driven.
 | ✅ Done | Runtime fallback path | When the vendored runtime is unavailable, OpenMUX still falls back to the internal PTY-backed host. |
 | ✅ Done | Native developer workflow | `make setup`, `make dev`, `make build`, `make test`, `make verify`, and `make smoke` provide a stable native workflow. |
 | ✅ Done | CI baseline and app smoke coverage | CI now runs normal build/test checks and a dedicated runtime-enabled launch smoke test. |
-| ⏳ Next | Visual shell redesign | Redesign the shell so the app feels intentional and polished, with a stronger sidebar, pane chrome, spacing system, and overall hierarchy. |
-| ⏳ Next | Theme system and built-in presets | Add a first-class theming model for both terminal colors and shell chrome, with curated built-in themes such as Catppuccin, Sonokai, and Gruvbox. |
+| ✅ Done | Visual shell redesign | The shell now has a terminal-native sidebar, quiet top bar, custom pane chrome, and a stronger workspace hierarchy without drifting into IDE-like enclosure. |
+| ✅ Done | Theme system and built-in presets | OpenMUX now ships a cohesive shell-and-terminal theme model with an OpenMUX default plus Catppuccin, Gruvbox, and Sonokai presets. |
 | ⏳ Next | Runtime transcript and snapshot quality | Improve runtime-backed pane snapshots so they expose richer transcript state instead of the current minimal placeholder snapshot. |
 | ⏳ Next | Pane stack polish | Add reordering, drag/drop, and better local pane-tab ergonomics inside split regions. |
 | ⏳ Next | Layout persistence and restore | Save and restore workspaces, splits, pane stacks, and sessions in a predictable way. |
@@ -33,11 +33,9 @@ It is intentionally directional rather than date-driven.
 
 | Priority | Area | Planned work |
 | --- | --- | --- |
-| High | Visual shell redesign | Establish the overall look of OpenMUX with a stronger dark shell, improved spacing, clearer visual hierarchy, better pane chrome, and a more polished sidebar/workspace experience. |
-| High | Theme system | Build a theme token system that controls both terminal palette and app chrome so OpenMUX can ship cohesive built-in themes instead of only raw terminal colors. |
-| High | Built-in theme presets | Ship familiar, high-quality defaults such as Catppuccin, Gruvbox, Sonokai, and similar curated presets that make the app look good immediately. |
 | High | Runtime-hosted terminal experience | Improve transcript access, reduce remaining runtime rough edges, and keep the Ghostty-backed path stable under real use. |
 | High | Workspace usability | Refine pane-tab interactions, focus behavior, restore flows, and sidebar/session navigation so the shell feels more complete day to day. |
+| High | Layout persistence and restore | Save and restore workspaces, splits, pane stacks, sessions, and active theme selection in a predictable way. |
 | High | Automation platform | Keep growing the `omux` + JSON-RPC + hooks surface so external tools and AI workflows can build on OpenMUX cleanly. |
 | Medium | Theme customization | Add user overrides and eventually import/export support once the built-in theme model is stable. |
 | Medium | Plugin architecture | Define the next layer above hooks for longer-running extensions and richer tool integrations. |
@@ -47,12 +45,12 @@ It is intentionally directional rather than date-driven.
 
 Today, OpenMUX is best understood as:
 
-1. a native AppKit-first macOS shell
-2. a terminal workspace with tabs, splits, and pane-local tab stacks
+1. a native AppKit-first macOS shell with a terminal-native sidebar, top bar, and custom pane chrome
+2. a terminal workspace with tabs, splits, pane-local tab stacks, and built-in shell themes
 3. a narrow Ghostty-backed terminal bridge with a safe fallback path
 4. a local-first automation surface through `omux`, JSON-RPC, and hooks
 
-The next big shift is not just deeper terminal/runtime work, but turning that foundation into a shell that feels visually coherent, themeable, and pleasant to live in every day.
+The next big shift is not basic shell appearance anymore, but making the themed workspace more durable and capable: deeper runtime fidelity, persistence, pane ergonomics, and richer automation.
 
 ## Guiding rule for future steps
 
