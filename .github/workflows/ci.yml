@@ -33,6 +33,9 @@ jobs:
             sudo xcodebuild -downloadComponent MetalToolchain
           fi
 
+      - name: Install Zig 0.15
+        run: brew install zig@0.15
+
       - name: Build vendored Ghostty runtime
         run: make setup
 

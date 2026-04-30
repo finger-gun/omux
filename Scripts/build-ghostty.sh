@@ -20,18 +20,37 @@ if [ ! -f "$PINNED_REF_FILE" ]; then
 fi
 
 download_zig() {
-  archive="$TOOL_DIR/zig-macos-aarch64-$ZIG_VERSION.tar.xz"
-  url="https://ziglang.org/download/$ZIG_VERSION/zig-macos-aarch64-$ZIG_VERSION.tar.xz"
+  arch="$(uname -m)"
+  case "$arch" in
+    arm64)
+      zig_arch="aarch64"
+      ;;
+    x86_64)
+      zig_arch="x86_64"
+      ;;
+    *)
+      echo "Unsupported macOS architecture for Zig fallback: $arch" >&2
+      exit 1
+      ;;
+  esac
+
+  archive="$TOOL_DIR/zig-macos-$zig_arch-$ZIG_VERSION.tar.xz"
+  url="https://ziglang.org/download/$ZIG_VERSION/zig-macos-$zig_arch-$ZIG_VERSION.tar.xz"
 
   mkdir -p "$TOOL_DIR"
   if [ ! -f "$archive" ]; then
-    curl -L "$url" -o "$archive"
+    if ! curl -fL "$url" -o "$archive"; then
+      rm -f "$archive"
+      echo "Unable to download Zig $ZIG_VERSION from $url" >&2
+      echo "Install zig@0.15 with Homebrew or provide zig $ZIG_VERSION on PATH." >&2
+      exit 1
+    fi
   fi
 
   rm -rf "$ZIG_DIR"
   mkdir -p "$ZIG_DIR"
   tar -xJf "$archive" -C "$TOOL_DIR"
-  extracted="$TOOL_DIR/zig-macos-aarch64-$ZIG_VERSION"
+  extracted="$TOOL_DIR/zig-macos-$zig_arch-$ZIG_VERSION"
   rm -rf "$ZIG_DIR"
   mv "$extracted" "$ZIG_DIR"
 }
