@@ -36,6 +36,18 @@ public struct PaneID: RawRepresentable, Hashable, Codable, Sendable {
     }
 }
 
+public struct PaneStackID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init() {
+        self.rawValue = UUID().uuidString.lowercased()
+    }
+}
+
 public struct SessionID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
 

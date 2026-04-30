@@ -48,6 +48,13 @@ final class OmuxControlPlaneTests: XCTestCase {
         let splitDown = try client.request(method: .splitPane, params: .object([
             "axis": .string("rows"),
         ]))
+        let createPaneTab = try client.request(method: .createPaneTab)
+        let focusPaneTab = try client.request(method: .focusPaneTab, params: .object([
+            "paneID": .string("pane-1"),
+        ]))
+        let closePaneTab = try client.request(method: .closePaneTab, params: .object([
+            "paneID": .string("pane-1"),
+        ]))
         let run = try client.request(method: .runCommand, params: .object([
             "sessionID": .string("session-1"),
             "command": .string("pwd"),
@@ -56,6 +63,9 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(createTab.result, .object(["method": .string(ControlMethod.createTab.rawValue)]))
         XCTAssertEqual(split.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
         XCTAssertEqual(splitDown.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
+        XCTAssertEqual(createPaneTab.result, .object(["method": .string(ControlMethod.createPaneTab.rawValue)]))
+        XCTAssertEqual(focusPaneTab.result, .object(["method": .string(ControlMethod.focusPaneTab.rawValue)]))
+        XCTAssertEqual(closePaneTab.result, .object(["method": .string(ControlMethod.closePaneTab.rawValue)]))
         XCTAssertEqual(run.result, .object(["method": .string(ControlMethod.runCommand.rawValue)]))
     }
 }

@@ -182,12 +182,21 @@ final class WorkspaceViewController: NSViewController {
         focusedPaneID: PaneID
     ) -> (view: NSView, focusedPaneView: TerminalPaneView?) {
         switch node {
-        case .pane(let pane):
-            let paneView = TerminalPaneView(
-                pane: pane,
-                isFocused: pane.id == focusedPaneID,
+        case .paneStack(let paneStack):
+            let stackView = PaneStackView(
+                paneStack: paneStack,
+                focusedPaneID: focusedPaneID,
                 bridge: controller.terminalBridge,
                 normalizer: inputNormalizer,
+                onSelectPaneTab: { [weak self] paneID in
+                    _ = self?.controller.focusPaneTab(paneID: paneID)
+                },
+                onCreatePaneTab: { [weak self] in
+                    _ = try self?.controller.createPaneTab()
+                },
+                onClosePaneTab: { [weak self] paneID in
+                    _ = try self?.controller.closePaneTab(paneID: paneID)
+                },
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
                 },
@@ -201,7 +210,7 @@ final class WorkspaceViewController: NSViewController {
                     try self?.controller.resize(paneID: paneID, columns: columns, rows: rows)
                 }
             )
-            return (paneView, pane.id == focusedPaneID ? paneView : nil)
+            return (stackView, paneStack.focusedPaneID == focusedPaneID ? stackView.focusedPaneView : nil)
 
         case .split(let axis, let children):
             let splitView = NSSplitView()
@@ -220,6 +229,121 @@ final class WorkspaceViewController: NSViewController {
 
             return (splitView, focusedPaneView)
         }
+    }
+}
+
+@MainActor
+final class PaneStackView: NSView {
+    private let tabSelector = NSSegmentedControl(labels: [], trackingMode: .selectOne, target: nil, action: nil)
+    private let newPaneTabButton = NSButton(title: "+", target: nil, action: nil)
+    private let closePaneTabButton = NSButton(title: "Close", target: nil, action: nil)
+    private let terminalPaneView: TerminalPaneView
+    private let paneStack: PaneStack
+    private let onSelectPaneTab: (PaneID) -> Void
+    private let onCreatePaneTab: () throws -> Void
+    private let onClosePaneTab: (PaneID) throws -> Void
+
+    init(
+        paneStack: PaneStack,
+        focusedPaneID: PaneID,
+        bridge: GhosttyTerminalBridge,
+        normalizer: AppKitKeyEventNormalizer,
+        onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
+        onCreatePaneTab: @escaping @MainActor () throws -> Void,
+        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onInput: @escaping @MainActor (PaneID, NormalizedKeyEvent) throws -> Void,
+        onPaste: @escaping @MainActor (PaneID, String) throws -> Void,
+        onResize: @escaping @MainActor (PaneID, Int, Int) throws -> Void
+    ) {
+        self.paneStack = paneStack
+        self.onSelectPaneTab = onSelectPaneTab
+        self.onCreatePaneTab = onCreatePaneTab
+        self.onClosePaneTab = onClosePaneTab
+        let activePane = paneStack.focusedPane ?? paneStack.panes[0]
+        self.terminalPaneView = TerminalPaneView(
+            pane: activePane,
+            isFocused: activePane.id == focusedPaneID,
+            bridge: bridge,
+            normalizer: normalizer,
+            onFocus: onFocus,
+            onInput: onInput,
+            onPaste: onPaste,
+            onResize: onResize
+        )
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSStackView()
+        container.orientation = .vertical
+        container.spacing = 8
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.spacing = 8
+        header.alignment = .centerY
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        tabSelector.target = self
+        tabSelector.action = #selector(selectPaneTab(_:))
+        tabSelector.segmentStyle = .rounded
+        tabSelector.segmentCount = paneStack.panes.count
+        for (index, pane) in paneStack.panes.enumerated() {
+            tabSelector.setLabel(pane.title, forSegment: index)
+            if pane.id == paneStack.focusedPaneID {
+                tabSelector.selectedSegment = index
+            }
+        }
+
+        newPaneTabButton.target = self
+        newPaneTabButton.action = #selector(createPaneTab(_:))
+        closePaneTabButton.target = self
+        closePaneTabButton.action = #selector(closePaneTab(_:))
+        closePaneTabButton.isEnabled = paneStack.panes.count > 1
+
+        header.addArrangedSubview(tabSelector)
+        header.addArrangedSubview(newPaneTabButton)
+        header.addArrangedSubview(closePaneTabButton)
+        container.addArrangedSubview(header)
+        container.addArrangedSubview(terminalPaneView)
+        addSubview(container)
+
+        NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: topAnchor),
+            container.leadingAnchor.constraint(equalTo: leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    @objc private func selectPaneTab(_ sender: NSSegmentedControl) {
+        guard sender.selectedSegment >= 0,
+              sender.selectedSegment < paneStack.panes.count
+        else {
+            return
+        }
+
+        onSelectPaneTab(paneStack.panes[sender.selectedSegment].id)
+    }
+
+    @objc private func createPaneTab(_ sender: NSButton) {
+        _ = sender
+        try? onCreatePaneTab()
+    }
+
+    @objc private func closePaneTab(_ sender: NSButton) {
+        _ = sender
+        try? onClosePaneTab(paneStack.focusedPaneID)
+    }
+
+    var focusedPaneView: TerminalPaneView {
+        terminalPaneView
     }
 }
 

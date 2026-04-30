@@ -59,4 +59,51 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(event.route, .terminal)
         XCTAssertTrue(event.modifiers.contains(.leftControl))
     }
+
+    func testPaneStacksTrackFocusedLocalTabIndependently() {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let secondPane = Pane(
+            title: "two",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        var tab = Tab(title: "Main", panes: [firstPane], focusedPaneID: firstPane.id)
+
+        XCTAssertTrue(tab.createPaneInFocusedStack(secondPane))
+        XCTAssertEqual(tab.paneStacks.count, 1)
+        XCTAssertEqual(tab.focusedPane?.id, secondPane.id)
+        XCTAssertEqual(tab.focusedPaneStack?.focusedPaneID, secondPane.id)
+
+        XCTAssertTrue(tab.focusPane(firstPane.id))
+        XCTAssertEqual(tab.focusedPaneStack?.id, tab.paneStacks.first?.id)
+        XCTAssertEqual(tab.focusedPaneStack?.focusedPaneID, firstPane.id)
+    }
+
+    func testSplittingFocusedLocalTabCreatesSiblingPaneStack() {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let secondPane = Pane(
+            title: "two",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        var tab = Tab(title: "Main", panes: [firstPane], focusedPaneID: firstPane.id)
+
+        XCTAssertTrue(tab.splitFocusedPane(secondPane, axis: .rows))
+        XCTAssertEqual(tab.paneStacks.count, 2)
+        XCTAssertEqual(tab.focusedPane?.id, secondPane.id)
+    }
+
+    func testClosingLastPaneTabInStackIsRejected() {
+        let pane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        var tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+
+        XCTAssertNil(tab.closeFocusedPane())
+    }
 }

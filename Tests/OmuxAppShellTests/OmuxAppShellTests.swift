@@ -61,6 +61,38 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         XCTAssertEqual(nestedChildren.count, 2)
+        guard case .paneStack = rootChildren[0] else {
+            return XCTFail("expected the upper region to remain a pane stack")
+        }
+        guard case .paneStack = nestedChildren[0] else {
+            return XCTFail("expected nested children to be pane stacks")
+        }
+        guard case .paneStack = nestedChildren[1] else {
+            return XCTFail("expected nested children to be pane stacks")
+        }
+    }
+
+    func testWorkspaceControllerCreatesAndClosesPaneTabsInFocusedStack() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let originalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        let withPaneTab = try XCTUnwrap(controller.createPaneTab())
+        XCTAssertEqual(withPaneTab.focusedTab?.panes.count, 2)
+        XCTAssertEqual(withPaneTab.focusedTab?.paneStacks.count, 1)
+        XCTAssertNotEqual(withPaneTab.focusedTab?.focusedPaneID, originalPaneID)
+
+        let focusedPaneTabID = try XCTUnwrap(withPaneTab.focusedTab?.focusedPaneID)
+        let refocused = try XCTUnwrap(controller.focusPaneTab(paneID: originalPaneID))
+        XCTAssertEqual(refocused.focusedTab?.focusedPaneID, originalPaneID)
+
+        let closed = try XCTUnwrap(controller.closePaneTab(paneID: focusedPaneTabID))
+        XCTAssertEqual(closed.focusedTab?.panes.count, 1)
+        XCTAssertEqual(closed.focusedTab?.focusedPaneID, originalPaneID)
     }
 
     func testRunCommandTargetsLiveSession() throws {

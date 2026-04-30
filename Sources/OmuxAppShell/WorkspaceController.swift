@@ -216,6 +216,82 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
+    public func createPaneTab() throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex,
+              let focusedPane = workspaces[index].focusedPane,
+              let focusedStack = workspaces[index].focusedPaneStack
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        let pane = makePane(title: focusedPane.title, workingDirectory: focusedPane.session.workingDirectory)
+        let success = workspaces[index].createPaneInFocusedStack(pane)
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else {
+            return nil
+        }
+
+        _ = try bridge.createSurface(for: pane)
+        _ = try bridge.attach(session: pane.session, to: pane)
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: "pane-tab-created",
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                metadata: ["paneStackID": focusedStack.id.rawValue]
+            )
+        )
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func closePaneTab(paneID: PaneID? = nil) throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let targetPaneID = paneID ?? workspaces[index].focusedPane?.id
+        let targetStackID = targetPaneID.flatMap { paneStackID(for: $0, in: workspaces[index]) }
+        let removedPane = targetPaneID.flatMap { workspaces[index].closePane($0) }
+        let updatedWorkspace = removedPane == nil ? nil : workspaces[index]
+        lock.unlock()
+
+        guard let removedPane,
+              let updatedWorkspace
+        else {
+            return nil
+        }
+
+        try bridge.teardown(paneID: removedPane.id)
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: "pane-tab-closed",
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: removedPane.id,
+                sessionID: removedPane.session.id,
+                metadata: ["paneStackID": targetStackID?.rawValue ?? ""]
+            )
+        )
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
     public func focus(tabID: TabID) -> Workspace? {
         var updatedWorkspace: Workspace?
         lock.lock()
@@ -249,6 +325,11 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return updatedWorkspace
+    }
+
+    @discardableResult
+    public func focusPaneTab(paneID: PaneID) -> Workspace? {
+        focus(paneID: paneID)
     }
 
     @discardableResult
@@ -303,6 +384,12 @@ public final class WorkspaceController: @unchecked Sendable {
             .flatMap(\.tabs)
             .flatMap(\.panes)
             .first(where: { $0.session.id == sessionID })
+    }
+
+    private func paneStackID(for paneID: PaneID, in workspace: Workspace) -> PaneStackID? {
+        workspace.tabs
+            .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
+            .first
     }
 
     private func makePane(title: String, workingDirectory: String) -> Pane {

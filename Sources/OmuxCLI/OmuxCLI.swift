@@ -37,6 +37,30 @@ public struct OmuxCLICommand {
                     params: .object(["axis": .string(axis.rawValue)])
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-tab":
+                let response = try client.request(method: .createPaneTab)
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-tab-focus":
+                guard commandArguments.count >= 2 else {
+                    writeLine("usage: omux pane-tab-focus <pane-id>")
+                    return 1
+                }
+
+                let response = try client.request(
+                    method: .focusPaneTab,
+                    params: .object(["paneID": .string(commandArguments[1])])
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-tab-close":
+                let params: RPCValue?
+                if commandArguments.count >= 2 {
+                    params = .object(["paneID": .string(commandArguments[1])])
+                } else {
+                    params = nil
+                }
+
+                let response = try client.request(method: .closePaneTab, params: params)
+                writeLine(response.result?.prettyPrinted ?? "")
             case "open":
                 guard commandArguments.count >= 2 else {
                     writeLine("usage: omux open <path>")
@@ -124,6 +148,9 @@ public struct OmuxCLICommand {
       omux open <path>
       omux tab
       omux split [right|down]
+      omux pane-tab
+      omux pane-tab-focus <pane-id>
+      omux pane-tab-close [pane-id]
       omux focus <session-id>
       omux run <session-id> <command>
       omux notify <title> [body]

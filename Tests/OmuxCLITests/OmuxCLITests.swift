@@ -66,12 +66,18 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "tab"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "split"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "split", "down"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-tab"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-focus", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-close", "pane-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
 
         XCTAssertEqual(output, [
             "\(ControlMethod.createTab.rawValue):none",
             "\(ControlMethod.splitPane.rawValue):columns",
             "\(ControlMethod.splitPane.rawValue):rows",
+            "\(ControlMethod.createPaneTab.rawValue):none",
+            "\(ControlMethod.focusPaneTab.rawValue):none",
+            "\(ControlMethod.closePaneTab.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
         ])
     }

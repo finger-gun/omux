@@ -31,32 +31,121 @@ public struct Pane: Equatable, Codable, Sendable {
     }
 }
 
+public struct PaneStack: Equatable, Codable, Sendable {
+    public let id: PaneStackID
+    public var panes: [Pane]
+    public var focusedPaneID: PaneID
+
+    public init(
+        id: PaneStackID = PaneStackID(),
+        panes: [Pane],
+        focusedPaneID: PaneID
+    ) {
+        self.id = id
+        self.panes = panes
+        self.focusedPaneID = focusedPaneID
+    }
+
+    public var focusedPane: Pane? {
+        panes.first(where: { $0.id == focusedPaneID })
+    }
+
+    @discardableResult
+    public mutating func focusPane(_ paneID: PaneID) -> Bool {
+        guard panes.contains(where: { $0.id == paneID }) else {
+            return false
+        }
+
+        focusedPaneID = paneID
+        return true
+    }
+
+    public mutating func appendPane(_ pane: Pane, focus: Bool = true) {
+        panes.append(pane)
+        if focus {
+            focusedPaneID = pane.id
+        }
+    }
+
+    public mutating func closePane(id paneID: PaneID) -> Pane? {
+        guard panes.count > 1,
+              let index = panes.firstIndex(where: { $0.id == paneID })
+        else {
+            return nil
+        }
+
+        let removedPane = panes.remove(at: index)
+        if focusedPaneID == removedPane.id {
+            let nextIndex = min(index, panes.count - 1)
+            focusedPaneID = panes[nextIndex].id
+        }
+        return removedPane
+    }
+}
+
 public enum PaneSplitAxis: String, Codable, Sendable {
     case columns
     case rows
 }
 
 public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
-    case pane(Pane)
+    case paneStack(PaneStack)
     case split(axis: PaneSplitAxis, children: [TabLayoutNode])
 
     public var panes: [Pane] {
         switch self {
-        case .pane(let pane):
-            return [pane]
+        case .paneStack(let paneStack):
+            return paneStack.panes
         case .split(_, let children):
             return children.flatMap(\.panes)
         }
     }
 
+    public var paneStacks: [PaneStack] {
+        switch self {
+        case .paneStack(let paneStack):
+            return [paneStack]
+        case .split(_, let children):
+            return children.flatMap(\.paneStacks)
+        }
+    }
+
     public func pane(id: PaneID) -> Pane? {
         switch self {
-        case .pane(let pane):
-            return pane.id == id ? pane : nil
+        case .paneStack(let paneStack):
+            return paneStack.panes.first(where: { $0.id == id })
         case .split(_, let children):
             for child in children {
                 if let pane = child.pane(id: id) {
                     return pane
+                }
+            }
+            return nil
+        }
+    }
+
+    public func paneStack(id: PaneStackID) -> PaneStack? {
+        switch self {
+        case .paneStack(let paneStack):
+            return paneStack.id == id ? paneStack : nil
+        case .split(_, let children):
+            for child in children {
+                if let paneStack = child.paneStack(id: id) {
+                    return paneStack
+                }
+            }
+            return nil
+        }
+    }
+
+    public func paneStack(containingPaneID paneID: PaneID) -> PaneStack? {
+        switch self {
+        case .paneStack(let paneStack):
+            return paneStack.panes.contains(where: { $0.id == paneID }) ? paneStack : nil
+        case .split(_, let children):
+            for child in children {
+                if let paneStack = child.paneStack(containingPaneID: paneID) {
+                    return paneStack
                 }
             }
             return nil
@@ -72,23 +161,98 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
     }
 
     @discardableResult
-    public mutating func split(
-        paneID: PaneID,
-        axis: PaneSplitAxis,
-        adding pane: Pane
-    ) -> Bool {
+    public mutating func focusPane(_ paneID: PaneID) -> Bool {
         switch self {
-        case .pane(let existingPane):
-            guard existingPane.id == paneID else {
+        case .paneStack(var paneStack):
+            guard paneStack.focusPane(paneID) else {
                 return false
             }
 
-            self = .split(axis: axis, children: [.pane(existingPane), .pane(pane)])
+            self = .paneStack(paneStack)
+            return true
+
+        case .split(let axis, var children):
+            for index in children.indices {
+                if children[index].focusPane(paneID) {
+                    self = .split(axis: axis, children: children)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    @discardableResult
+    public mutating func createPane(
+        inStack stackID: PaneStackID,
+        pane: Pane,
+        focus: Bool = true
+    ) -> Bool {
+        switch self {
+        case .paneStack(var paneStack):
+            guard paneStack.id == stackID else {
+                return false
+            }
+
+            paneStack.appendPane(pane, focus: focus)
+            self = .paneStack(paneStack)
+            return true
+
+        case .split(let axis, var children):
+            for index in children.indices {
+                if children[index].createPane(inStack: stackID, pane: pane, focus: focus) {
+                    self = .split(axis: axis, children: children)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    public mutating func closePane(
+        inStack stackID: PaneStackID,
+        paneID: PaneID
+    ) -> Pane? {
+        switch self {
+        case .paneStack(var paneStack):
+            guard paneStack.id == stackID,
+                  let removedPane = paneStack.closePane(id: paneID)
+            else {
+                return nil
+            }
+
+            self = .paneStack(paneStack)
+            return removedPane
+
+        case .split(let axis, var children):
+            for index in children.indices {
+                if let removedPane = children[index].closePane(inStack: stackID, paneID: paneID) {
+                    self = .split(axis: axis, children: children)
+                    return removedPane
+                }
+            }
+            return nil
+        }
+    }
+
+    @discardableResult
+    public mutating func split(
+        stackID: PaneStackID,
+        axis: PaneSplitAxis,
+        adding paneStack: PaneStack
+    ) -> Bool {
+        switch self {
+        case .paneStack(let existingPaneStack):
+            guard existingPaneStack.id == stackID else {
+                return false
+            }
+
+            self = .split(axis: axis, children: [.paneStack(existingPaneStack), .paneStack(paneStack)])
             return true
 
         case .split(let existingAxis, var children):
             for index in children.indices {
-                if children[index].split(paneID: paneID, axis: axis, adding: pane) {
+                if children[index].split(stackID: stackID, axis: axis, adding: paneStack) {
                     self = .split(axis: existingAxis, children: children)
                     return true
                 }
@@ -116,25 +280,71 @@ public struct Tab: Equatable, Codable, Sendable {
         self.focusedPaneID = focusedPaneID
     }
 
-    public mutating func focusPane(_ paneID: PaneID) {
-        guard rootLayout.containsPane(id: paneID) else {
-            return
+    @discardableResult
+    public mutating func focusPane(_ paneID: PaneID) -> Bool {
+        guard rootLayout.focusPane(paneID) else {
+            return false
         }
 
         focusedPaneID = paneID
+        return true
     }
 
     public var panes: [Pane] {
         rootLayout.panes
     }
 
+    public var paneStacks: [PaneStack] {
+        rootLayout.paneStacks
+    }
+
     public var focusedPane: Pane? {
         rootLayout.pane(id: focusedPaneID)
     }
 
+    public var focusedPaneStack: PaneStack? {
+        rootLayout.paneStack(containingPaneID: focusedPaneID)
+    }
+
+    @discardableResult
+    public mutating func createPaneInFocusedStack(_ pane: Pane, focus: Bool = true) -> Bool {
+        guard let stackID = focusedPaneStack?.id,
+              rootLayout.createPane(inStack: stackID, pane: pane, focus: focus)
+        else {
+            return false
+        }
+
+        if focus {
+            focusedPaneID = pane.id
+        }
+        return true
+    }
+
+    public mutating func closeFocusedPane() -> Pane? {
+        closePane(focusedPaneID)
+    }
+
+    public mutating func closePane(_ paneID: PaneID) -> Pane? {
+        guard let stackID = rootLayout.paneStack(containingPaneID: paneID)?.id,
+              let removedPane = rootLayout.closePane(inStack: stackID, paneID: paneID)
+        else {
+            return nil
+        }
+
+        if let updatedStack = rootLayout.paneStack(id: stackID) {
+            focusedPaneID = updatedStack.focusedPaneID
+        }
+        return removedPane
+    }
+
     @discardableResult
     public mutating func splitFocusedPane(_ pane: Pane, axis: PaneSplitAxis, focus: Bool = true) -> Bool {
-        guard rootLayout.split(paneID: focusedPaneID, axis: axis, adding: pane) else {
+        guard let focusedStackID = focusedPaneStack?.id else {
+            return false
+        }
+
+        let newStack = PaneStack(panes: [pane], focusedPaneID: pane.id)
+        guard rootLayout.split(stackID: focusedStackID, axis: axis, adding: newStack) else {
             return false
         }
 
@@ -149,8 +359,15 @@ public struct Tab: Equatable, Codable, Sendable {
             return .split(axis: .columns, children: [])
         }
 
-        return panes.dropFirst().reduce(.pane(firstPane)) { partialResult, pane in
-            .split(axis: .columns, children: [partialResult, .pane(pane)])
+        return panes.dropFirst().reduce(.paneStack(PaneStack(panes: [firstPane], focusedPaneID: firstPane.id))) {
+            partialResult, pane in
+            .split(
+                axis: .columns,
+                children: [
+                    partialResult,
+                    .paneStack(PaneStack(panes: [pane], focusedPaneID: pane.id)),
+                ]
+            )
         }
     }
 }
@@ -184,13 +401,16 @@ public struct Workspace: Equatable, Codable, Sendable {
         focusedTab?.focusedPane
     }
 
+    public var focusedPaneStack: PaneStack? {
+        focusedTab?.focusedPaneStack
+    }
+
     @discardableResult
     public mutating func focus(sessionID: SessionID) -> Bool {
         for tabIndex in tabs.indices {
             if let pane = tabs[tabIndex].panes.first(where: { $0.session.id == sessionID }) {
                 focusedTabID = tabs[tabIndex].id
-                tabs[tabIndex].focusedPaneID = pane.id
-                return true
+                return tabs[tabIndex].focusPane(pane.id)
             }
         }
 
@@ -212,8 +432,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         for tabIndex in tabs.indices {
             if tabs[tabIndex].panes.contains(where: { $0.id == paneID }) {
                 focusedTabID = tabs[tabIndex].id
-                tabs[tabIndex].focusedPaneID = paneID
-                return true
+                return tabs[tabIndex].focusPane(paneID)
             }
         }
 
@@ -225,6 +444,34 @@ public struct Workspace: Equatable, Codable, Sendable {
         if focus {
             focusedTabID = tab.id
         }
+    }
+
+    @discardableResult
+    public mutating func createPaneInFocusedStack(_ pane: Pane) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        return tabs[tabIndex].createPaneInFocusedStack(pane)
+    }
+
+    public mutating func closeFocusedPane() -> Pane? {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return nil
+        }
+
+        return tabs[tabIndex].closeFocusedPane()
+    }
+
+    public mutating func closePane(_ paneID: PaneID) -> Pane? {
+        for tabIndex in tabs.indices {
+            if tabs[tabIndex].panes.contains(where: { $0.id == paneID }) {
+                focusedTabID = tabs[tabIndex].id
+                return tabs[tabIndex].closePane(paneID)
+            }
+        }
+
+        return nil
     }
 
     @discardableResult

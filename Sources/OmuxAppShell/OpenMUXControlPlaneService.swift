@@ -55,6 +55,23 @@ final class OpenMUXControlPlaneService {
                 return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane"))
+        case .createPaneTab:
+            if let workspace = try controller.createPaneTab() {
+                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane stack"))
+        case .focusPaneTab:
+            let paneID = request.params?.objectValue?["paneID"]?.stringValue ?? ""
+            if let workspace = controller.focusPaneTab(paneID: PaneID(rawValue: paneID)) {
+                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane tab not found"))
+        case .closePaneTab:
+            let paneID = request.params?.objectValue?["paneID"]?.stringValue.map(PaneID.init(rawValue:))
+            if let workspace = try controller.closePaneTab(paneID: paneID) {
+                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane tab cannot be closed"))
         case .focusSession:
             let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? ""
             let focused = try controller.focus(sessionID: SessionID(rawValue: sessionID))
@@ -105,6 +122,8 @@ private extension Workspace {
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabs.count),
             "paneCount": .integer(tabs.reduce(into: 0) { $0 += $1.panes.count }),
+            "focusedPaneID": focusedPane.map { .string($0.id.rawValue) } ?? .null,
+            "focusedPaneStackID": focusedPaneStack.map { .string($0.id.rawValue) } ?? .null,
             "focusedSessionID": focusedPane.map { .string($0.session.id.rawValue) } ?? .null,
         ]
     }
