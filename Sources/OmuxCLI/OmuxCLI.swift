@@ -1,5 +1,6 @@
 import Foundation
 import OmuxControlPlane
+import OmuxConfig
 import OmuxCore
 
 public struct OmuxCLICommand {
@@ -24,6 +25,8 @@ public struct OmuxCLICommand {
 
         do {
             switch command {
+            case "config":
+                return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "list":
                 let response = try client.request(method: .listWorkspaces)
                 writeLine(response.result?.prettyPrinted ?? "[]")
@@ -144,6 +147,9 @@ public struct OmuxCLICommand {
     OpenMUX CLI
 
     Commands:
+      omux config doctor
+      omux config reload
+      omux config init
       omux list
       omux open <path>
       omux tab
@@ -168,5 +174,132 @@ public struct OmuxCLICommand {
         default:
             return .columns
         }
+    }
+
+    private func runConfigCommand(arguments: [String]) -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux config <doctor|reload|init>")
+            return 1
+        }
+
+        do {
+            switch subcommand {
+            case "doctor":
+                let response = try client.request(method: .configDoctor)
+                guard response.error == nil else {
+                    writeLine("omux error: \(response.error!.message)")
+                    return 1
+                }
+                let diagnostics = response.result?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
+                return printDiagnosticsAndReturnCode(diagnostics)
+            case "reload":
+                let response = try client.request(method: .configReload)
+                guard response.error == nil else {
+                    writeLine("omux error: \(response.error!.message)")
+                    return 1
+                }
+                let object = response.result?.objectValue ?? [:]
+                let diagnostics = object["diagnostics"]?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
+                let exitCode = printDiagnosticsAndReturnCode(diagnostics)
+                if let applied = object["applied"]?.boolValue {
+                    writeLine(applied ? "OpenMUX config reloaded." : "OpenMUX config unchanged.")
+                }
+                return exitCode
+            case "init":
+                let configURL = OmuxConfigPaths.configFileURL
+                if FileManager.default.fileExists(atPath: configURL.path) {
+                    writeLine("omux error: \(configURL.path) already exists")
+                    return 1
+                }
+
+                try FileManager.default.createDirectory(
+                    at: OmuxConfigPaths.baseDirectoryURL,
+                    withIntermediateDirectories: true
+                )
+                try OmuxConfigTemplate.starter().write(to: configURL, atomically: true, encoding: .utf8)
+                writeLine("Wrote \(configURL.path)")
+                return 0
+            default:
+                writeLine("usage: omux config <doctor|reload|init>")
+                return 1
+            }
+        } catch {
+            writeLine("omux error: \(error)")
+            return 1
+        }
+    }
+
+    private func printDiagnosticsAndReturnCode(_ diagnostics: [OmuxConfigDiagnostic]) -> Int32 {
+        if diagnostics.isEmpty {
+            writeLine("No diagnostics.")
+            return 0
+        }
+
+        for diagnostic in diagnostics {
+            let location: String
+            if let filePath = diagnostic.filePath, let line = diagnostic.line {
+                location = " \(filePath):\(line)"
+            } else if let filePath = diagnostic.filePath {
+                location = " \(filePath)"
+            } else {
+                location = ""
+            }
+            writeLine("[\(diagnostic.severity.rawValue)]\(location) \(diagnostic.message)")
+        }
+
+        return diagnostics.contains(where: { $0.severity.isError }) ? 1 : 0
+    }
+}
+
+private extension RPCValue {
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var intValue: Int? {
+        if case .number(let value) = self {
+            return Int(exactly: value)
+        }
+        return nil
+    }
+
+    var objectValue: [String: RPCValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [RPCValue]? {
+        if case .array(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var boolValue: Bool? {
+        if case .bool(let value) = self {
+            return value
+        }
+        return nil
+    }
+}
+
+private extension OmuxConfigDiagnostic {
+    init?(rpcValue: RPCValue) {
+        guard case .object(let object) = rpcValue,
+              let severityRawValue = object["severity"]?.stringValue,
+              let severity = OmuxConfigDiagnosticSeverity(rawValue: severityRawValue),
+              let message = object["message"]?.stringValue
+        else {
+            return nil
+        }
+
+        let filePath = object["filePath"]?.stringValue
+        let line = object["line"]?.intValue
+        self.init(severity: severity, message: message, filePath: filePath, line: line)
     }
 }

@@ -16,8 +16,15 @@ private enum ShellLayoutMetrics {
 final class WorkspaceWindowController: NSWindowController {
     private let rootViewController: WorkspaceShellViewController
 
-    init(workspace: Workspace, controller: WorkspaceController) {
-        self.rootViewController = WorkspaceShellViewController(controller: controller)
+    init(
+        workspace: Workspace,
+        controller: WorkspaceController,
+        initialTheme: WorkspaceShellTheme = .defaultTheme
+    ) {
+        self.rootViewController = WorkspaceShellViewController(
+            controller: controller,
+            initialTheme: initialTheme
+        )
         let window = NSWindow(
             contentRect: NSRect(x: 120, y: 120, width: 1220, height: 780),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -39,6 +46,10 @@ final class WorkspaceWindowController: NSWindowController {
         window?.title = workspace.name
         rootViewController.update(workspace: workspace)
     }
+
+    func updateTheme(_ theme: WorkspaceShellTheme) {
+        rootViewController.updateTheme(theme)
+    }
 }
 
 @MainActor
@@ -48,10 +59,11 @@ final class WorkspaceShellViewController: NSViewController {
     private let topBarView = WorkspaceTopBarView()
     private let canvasView = WorkspaceCanvasView()
     private var currentWorkspace: Workspace?
-    private var currentTheme = WorkspaceShellTheme.openMUXDark
+    private var currentTheme: WorkspaceShellTheme
 
-    init(controller: WorkspaceController) {
+    init(controller: WorkspaceController, initialTheme: WorkspaceShellTheme) {
         self.controller = controller
+        self.currentTheme = initialTheme
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -97,10 +109,10 @@ final class WorkspaceShellViewController: NSViewController {
         topBarView.render(
             workspace: workspace,
             theme: currentTheme,
-            availableThemes: WorkspaceShellTheme.builtInPresets,
+            availableThemes: WorkspaceShellTheme.availableThemes,
             onSelectTheme: { [weak self] themeIdentifier in
                 guard let self,
-                      let theme = WorkspaceShellTheme.builtInPresets.first(where: { $0.identifier == themeIdentifier })
+                      let theme = WorkspaceShellTheme.availableThemes.first(where: { $0.identifier == themeIdentifier })
                 else {
                     return
                 }
@@ -143,6 +155,14 @@ final class WorkspaceShellViewController: NSViewController {
 
                 view.window?.makeFirstResponder(focusedPaneView.focusTarget)
             }
+        }
+    }
+
+    func updateTheme(_ theme: WorkspaceShellTheme) {
+        currentTheme = theme
+        apply(theme: theme)
+        if let currentWorkspace {
+            update(workspace: currentWorkspace)
         }
     }
 
@@ -877,10 +897,11 @@ final class SidebarItemButton: NSView {
 
         titleField.stringValue = item.title
         titleField.textColor = item.isActive ? theme.shell.textPrimary : theme.shell.textSecondary
-        // Flat list: no border, only a subtle background hint on active item
         layer?.backgroundColor = item.isActive
-            ? theme.shell.textPrimary.withAlphaComponent(0.08).cgColor
+            ? theme.shell.selection.cgColor
             : NSColor.clear.cgColor
+        layer?.borderWidth = item.isActive ? 1 : 0
+        layer?.borderColor = theme.shell.accent.withAlphaComponent(0.28).cgColor
         needsLayout = true
     }
 

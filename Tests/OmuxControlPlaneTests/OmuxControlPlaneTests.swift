@@ -68,4 +68,24 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(closePaneTab.result, .object(["method": .string(ControlMethod.closePaneTab.rawValue)]))
         XCTAssertEqual(run.result, .object(["method": .string(ControlMethod.runCommand.rawValue)]))
     }
+
+    func testConfigCommandsRoundTrip() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "config.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            JSONRPCResponse(id: request.id, result: .object(["method": .string(request.method)]))
+        }
+        defer { server.stop() }
+
+        let client = OmuxControlClient(socketPath: socketPath)
+        let doctor = try client.request(method: .configDoctor)
+        let reload = try client.request(method: .configReload)
+
+        XCTAssertEqual(doctor.result, .object(["method": .string(ControlMethod.configDoctor.rawValue)]))
+        XCTAssertEqual(reload.result, .object(["method": .string(ControlMethod.configReload.rawValue)]))
+    }
 }

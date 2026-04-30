@@ -1,4 +1,6 @@
 import AppKit
+import OmuxConfig
+import OmuxTheme
 import Foundation
 import XCTest
 @testable import OmuxCore
@@ -161,6 +163,96 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
             let contents = try String(contentsOf: fileURL)
             XCTAssertFalse(contents.contains("CGhostty"), "CGhostty leaked outside OmuxTerminalBridge in \(fileURL.path)")
+        }
+    }
+
+    func testTerminalBridgeDoesNotLoadUserGhosttyDefaults() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bridgeSourcesURL = repositoryRoot.appending(path: "Sources/OmuxTerminalBridge")
+        let enumerator = FileManager.default.enumerator(
+            at: bridgeSourcesURL,
+            includingPropertiesForKeys: nil
+        )
+
+        while let fileURL = enumerator?.nextObject() as? URL {
+            guard fileURL.pathExtension == "swift" else {
+                continue
+            }
+
+            let contents = try String(contentsOf: fileURL)
+            XCTAssertFalse(
+                contents.contains("ghostty_config_load_default_files"),
+                "Bridge must not read user Ghostty defaults in \(fileURL.path)"
+            )
+        }
+    }
+
+    func testApplyCompiledConfigUsesGeneratedThemeValues() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let directory = try temporaryDirectory()
+        defer { cleanup(directory) }
+
+        let theme = makeTheme(name: "bridge")
+        let compiler = OmuxThemeCompiler(
+            buildVersion: "test-build",
+            generatedGhosttyDirectoryURL: directory
+        )
+        let output = compiler.compile(theme: theme, config: OmuxConfig.defaults)
+        let fileURL = try compiler.write(output: output)
+
+        _ = try bridge.applyCompiledConfig(path: fileURL)
+
+        XCTAssertEqual(runtime.visibleBackground, theme.tokens[.backgroundCanvas]?.hexString)
+        XCTAssertEqual(runtime.visibleForeground, theme.tokens[.foregroundPrimary]?.hexString)
+        XCTAssertEqual(runtime.visiblePalette[0], theme.tokens[.ansiBlack]?.hexString)
+        XCTAssertEqual(runtime.visiblePalette[15], theme.tokens[.ansiBrightWhite]?.hexString)
+    }
+
+    func testRefreshCompiledConfigKeepsRunningSessionAlive() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+        let directory = try temporaryDirectory()
+        defer { cleanup(directory) }
+
+        _ = try bridge.attach(session: session, to: pane)
+        let compiler = OmuxThemeCompiler(
+            buildVersion: "test-build",
+            generatedGhosttyDirectoryURL: directory
+        )
+        let output = compiler.compile(theme: makeTheme(name: "refresh"), config: OmuxConfig.defaults)
+        let fileURL = try compiler.write(output: output)
+
+        _ = try bridge.refreshCompiledConfig(path: fileURL)
+
+        XCTAssertTrue(runtime.ownsSession(for: "inspect:\(pane.id.rawValue)"))
+        XCTAssertEqual(bridge.attachedSession(for: pane.id), session.id)
+        XCTAssertNotNil(bridge.snapshot(for: pane.id))
+    }
+
+    func testBuiltInThemesDriveRuntimeBackgrounds() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let directory = try temporaryDirectory()
+        defer { cleanup(directory) }
+
+        let compiler = OmuxThemeCompiler(
+            buildVersion: "test-build",
+            generatedGhosttyDirectoryURL: directory
+        )
+        let (themes, diagnostics) = OmuxThemeRegistry().loadBuiltInThemes()
+        XCTAssertFalse(diagnostics.contains(where: { $0.severity.isError }))
+
+        for theme in themes {
+            let output = compiler.compile(theme: theme, config: OmuxConfig.defaults)
+            let fileURL = try compiler.write(output: output)
+            _ = try bridge.applyCompiledConfig(path: fileURL)
+            XCTAssertEqual(runtime.visibleBackground, theme.tokens[.backgroundCanvas]?.hexString, "theme \(theme.name)")
         }
     }
 
@@ -393,4 +485,135 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         waitForExpectations(timeout: 3)
         bridge.removeObserver(for: pane.id, token: token)
     }
+}
+
+private final class InspectableGhosttyRuntime: GhosttyRuntime {
+    private var sessions: [String: SessionDescriptor] = [:]
+    private(set) var visibleBackground: String?
+    private(set) var visibleForeground: String?
+    private(set) var visiblePalette: [Int: String] = [:]
+
+    func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try loadVisibleState(from: path)
+        return []
+    }
+
+    func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try loadVisibleState(from: path)
+        return []
+    }
+
+    func createSurface(for paneID: PaneID) throws -> String {
+        "inspect:\(paneID.rawValue)"
+    }
+
+    func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
+        sessions[runtimeSurfaceID] = session
+    }
+
+    func destroySurface(runtimeSurfaceID: String) throws {
+        sessions.removeValue(forKey: runtimeSurfaceID)
+    }
+
+    @MainActor
+    func makeHostedSurfaceView(for paneID: PaneID, runtimeSurfaceID: String) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return NSView(frame: .zero)
+    }
+
+    func ownsSession(for runtimeSurfaceID: String) -> Bool {
+        sessions[runtimeSurfaceID] != nil
+    }
+
+    func send(text: String, to runtimeSurfaceID: String) throws {
+        _ = text
+        _ = runtimeSurfaceID
+    }
+
+    func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
+        _ = event
+        _ = runtimeSurfaceID
+    }
+
+    func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {
+        _ = runtimeSurfaceID
+        _ = columns
+        _ = rows
+    }
+
+    func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
+        _ = runtimeSurfaceID
+        _ = focused
+    }
+
+    func snapshot(
+        paneID: PaneID,
+        sessionID: SessionID,
+        descriptor: SessionDescriptor,
+        runtimeSurfaceID: String,
+        fallbackSize: TerminalSize
+    ) -> TerminalSessionSnapshot? {
+        guard sessions[runtimeSurfaceID] != nil else {
+            return nil
+        }
+
+        return TerminalSessionSnapshot(
+            paneID: paneID,
+            sessionID: sessionID,
+            runtimeSurfaceID: runtimeSurfaceID,
+            transcript: "runtime session",
+            currentInput: "",
+            shell: descriptor.shell,
+            workingDirectory: descriptor.workingDirectory,
+            columns: fallbackSize.columns,
+            rows: fallbackSize.rows
+        )
+    }
+
+    private func loadVisibleState(from path: URL) throws {
+        let contents = try String(contentsOf: path, encoding: .utf8)
+        visiblePalette = [:]
+        for line in contents.split(separator: "\n") {
+            if line.hasPrefix("background = ") {
+                visibleBackground = String(line.replacingOccurrences(of: "background = ", with: ""))
+            } else if line.hasPrefix("foreground = ") {
+                visibleForeground = String(line.replacingOccurrences(of: "foreground = ", with: ""))
+            } else if line.hasPrefix("palette = ") {
+                let value = line.replacingOccurrences(of: "palette = ", with: "")
+                let parts = value.split(separator: "=", maxSplits: 1).map(String.init)
+                if parts.count == 2, let index = Int(parts[0]) {
+                    visiblePalette[index] = parts[1]
+                }
+            }
+        }
+    }
+}
+
+private func makeTheme(name: String) -> OmuxTheme {
+    let seed = UInt8(abs(name.hashValue) % 160 + 40)
+    let tokens = Dictionary(
+        uniqueKeysWithValues: ThemeToken.allCases.map { token in
+            let offset = UInt8(ThemeToken.allCases.firstIndex(of: token) ?? 0)
+            return (
+                token,
+                ThemeColor(
+                    red: seed &+ offset,
+                    green: seed &+ 1 &+ offset,
+                    blue: seed &+ 2 &+ offset
+                )
+            )
+        }
+    )
+    return OmuxTheme(schema: 1, name: name, displayName: name.capitalized, tokens: tokens)
+}
+
+private func temporaryDirectory() throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+private func cleanup(_ url: URL) {
+    try? FileManager.default.removeItem(at: url)
 }

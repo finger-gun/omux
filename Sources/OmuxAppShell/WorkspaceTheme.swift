@@ -1,130 +1,119 @@
 import AppKit
 import OmuxTerminalBridge
+import OmuxTheme
 
 struct WorkspaceShellTheme {
     let identifier: String
     let displayName: String
     let shell: WorkspaceShellColors
     let terminalPalette: TerminalThemePalette
+    let resolvedTokens: ResolvedThemeTokens
 
-    static let openMUXDark = WorkspaceShellTheme(
-        identifier: "openmux-dark",
-        displayName: "OpenMUX Dark",
-        shell: WorkspaceShellColors(
-            windowBackground: NSColor(hex: 0x10141B),
-            sidebarBackground: NSColor(hex: 0x141A23),
-            topBarBackground: NSColor(hex: 0x121821),
-            canvasBackground: NSColor(hex: 0x0D1218),
-            paneCardBackground: NSColor(hex: 0x121923),
-            paneHeaderBackground: NSColor(hex: 0x192230),
-            chromeButtonBackground: NSColor(hex: 0x202B3A),
-            chromeButtonActiveBackground: NSColor(hex: 0x2A3950),
-            border: NSColor(hex: 0x2A3648),
-            subduedBorder: NSColor(hex: 0x212C3B),
-            accent: NSColor(hex: 0x71B7FF),
-            selection: NSColor(hex: 0x20314A),
-            textPrimary: NSColor(hex: 0xE8EDF5),
-            textSecondary: NSColor(hex: 0x98A7BD),
-            textMuted: NSColor(hex: 0x72829A)
-        ),
-        terminalPalette: TerminalThemePalette(
-            backgroundColor: NSColor(hex: 0x0D1218),
-            foregroundColor: NSColor(hex: 0xE8EDF5),
-            cursorColor: NSColor(hex: 0x71B7FF),
-            selectionColor: NSColor(hex: 0x20314A)
+    init(theme: OmuxTheme) {
+        let resolvedTokens = ResolvedThemeTokens(theme: theme)
+        self.identifier = theme.name
+        self.displayName = theme.displayName
+        self.resolvedTokens = resolvedTokens
+
+        let canvas = NSColor(themeColor: resolvedTokens[.backgroundCanvas])
+        let surface = NSColor(themeColor: resolvedTokens[.backgroundSurface])
+        let elevated = NSColor(themeColor: resolvedTokens[.backgroundElevated])
+        let accent = NSColor(themeColor: resolvedTokens[.accent])
+        let selection = NSColor(themeColor: resolvedTokens[.selectionBackground])
+        let sidebarSelection = selection.blended(withFraction: 0.2, of: accent) ?? selection
+        let chromeIdle = elevated.blended(withFraction: 0.35, of: canvas) ?? elevated
+        let chromeActive = sidebarSelection.blended(withFraction: 0.2, of: accent) ?? accent
+        let paneHeader = elevated.blended(withFraction: 0.08, of: accent) ?? elevated
+
+        self.shell = WorkspaceShellColors(
+            windowBackground: canvas,
+            sidebarBackground: surface,
+            topBarBackground: surface,
+            canvasBackground: canvas,
+            paneCardBackground: surface,
+            paneHeaderBackground: paneHeader,
+            chromeButtonBackground: chromeIdle,
+            chromeButtonActiveBackground: chromeActive,
+            border: NSColor(themeColor: resolvedTokens[.borderStrong]),
+            subduedBorder: NSColor(themeColor: resolvedTokens[.borderSubtle]),
+            accent: accent,
+            selection: sidebarSelection,
+            textPrimary: NSColor(themeColor: resolvedTokens[.foregroundPrimary]),
+            textSecondary: NSColor(themeColor: resolvedTokens[.foregroundSecondary]),
+            textMuted: NSColor(themeColor: resolvedTokens[.foregroundMuted])
+        )
+        self.terminalPalette = TerminalThemePalette(
+            backgroundColor: canvas,
+            foregroundColor: NSColor(themeColor: resolvedTokens[.foregroundPrimary]),
+            cursorColor: NSColor(themeColor: resolvedTokens[.cursor]),
+            selectionColor: NSColor(themeColor: resolvedTokens[.selectionBackground])
+        )
+    }
+
+    static let builtInPresets: [WorkspaceShellTheme] = {
+        let registry = OmuxThemeRegistry()
+        let (themes, _) = registry.loadBuiltInThemes()
+        let presets = themes.map(WorkspaceShellTheme.init(theme:))
+        if presets.isEmpty == false {
+            return presets
+        }
+
+        return [WorkspaceShellTheme.fallback]
+    }()
+
+    static let defaultTheme: WorkspaceShellTheme = {
+        builtInPresets.first(where: { $0.identifier == "monokai-soda" }) ?? builtInPresets[0]
+    }()
+
+    static var availableThemes: [WorkspaceShellTheme] {
+        let registry = OmuxThemeRegistry()
+        let (themes, _) = registry.loadThemes()
+        let presets = themes.map(WorkspaceShellTheme.init(theme:))
+        return presets.isEmpty ? builtInPresets : presets
+    }
+
+    static func named(_ identifier: String) -> WorkspaceShellTheme? {
+        OmuxThemeRegistry().loadTheme(named: identifier).theme.map(WorkspaceShellTheme.init(theme:))
+    }
+
+    private static let fallback = WorkspaceShellTheme(
+        theme: OmuxTheme(
+            schema: 1,
+            name: "monokai-soda",
+            displayName: "Monokai Soda",
+            tokens: [
+                .backgroundCanvas: ThemeColor(red: 0x1A, green: 0x1A, blue: 0x1A),
+                .backgroundSurface: ThemeColor(red: 0x23, green: 0x25, blue: 0x26),
+                .backgroundElevated: ThemeColor(red: 0x2D, green: 0x2F, blue: 0x30),
+                .foregroundPrimary: ThemeColor(red: 0xC4, green: 0xC5, blue: 0xB5),
+                .foregroundSecondary: ThemeColor(red: 0xA0, green: 0xA0, blue: 0x8B),
+                .foregroundMuted: ThemeColor(red: 0x75, green: 0x71, blue: 0x5E),
+                .borderSubtle: ThemeColor(red: 0x3B, green: 0x3D, blue: 0x3E),
+                .borderStrong: ThemeColor(red: 0x5A, green: 0x5D, blue: 0x5E),
+                .accent: ThemeColor(red: 0x66, green: 0xD9, blue: 0xEF),
+                .cursor: ThemeColor(red: 0xF6, green: 0xF6, blue: 0xEF),
+                .cursorText: ThemeColor(red: 0x1A, green: 0x1A, blue: 0x1A),
+                .selectionBackground: ThemeColor(red: 0x49, green: 0x48, blue: 0x3E),
+                .selectionForeground: ThemeColor(red: 0xF8, green: 0xF8, blue: 0xF2),
+                .ansiBlack: ThemeColor(red: 0x1A, green: 0x1A, blue: 0x1A),
+                .ansiRed: ThemeColor(red: 0xF4, green: 0x00, blue: 0x5F),
+                .ansiGreen: ThemeColor(red: 0x98, green: 0xE0, blue: 0x24),
+                .ansiYellow: ThemeColor(red: 0xFA, green: 0x84, blue: 0x19),
+                .ansiBlue: ThemeColor(red: 0x9D, green: 0x65, blue: 0xFF),
+                .ansiMagenta: ThemeColor(red: 0xF4, green: 0x00, blue: 0x5F),
+                .ansiCyan: ThemeColor(red: 0x58, green: 0xD1, blue: 0xEB),
+                .ansiWhite: ThemeColor(red: 0xC4, green: 0xC5, blue: 0xB5),
+                .ansiBrightBlack: ThemeColor(red: 0x62, green: 0x5E, blue: 0x4C),
+                .ansiBrightRed: ThemeColor(red: 0xFF, green: 0x1F, blue: 0x79),
+                .ansiBrightGreen: ThemeColor(red: 0xB1, green: 0xEF, blue: 0x43),
+                .ansiBrightYellow: ThemeColor(red: 0xFB, green: 0xC7, blue: 0x4D),
+                .ansiBrightBlue: ThemeColor(red: 0xB4, green: 0x8A, blue: 0xFF),
+                .ansiBrightMagenta: ThemeColor(red: 0xFF, green: 0x4F, blue: 0x98),
+                .ansiBrightCyan: ThemeColor(red: 0x88, green: 0xE8, blue: 0xF7),
+                .ansiBrightWhite: ThemeColor(red: 0xF6, green: 0xF6, blue: 0xEF),
+            ]
         )
     )
-
-    static let catppuccin = WorkspaceShellTheme(
-        identifier: "catppuccin",
-        displayName: "Catppuccin",
-        shell: WorkspaceShellColors(
-            windowBackground: NSColor(hex: 0x1E1E2E),
-            sidebarBackground: NSColor(hex: 0x181825),
-            topBarBackground: NSColor(hex: 0x181825),
-            canvasBackground: NSColor(hex: 0x11111B),
-            paneCardBackground: NSColor(hex: 0x1E1E2E),
-            paneHeaderBackground: NSColor(hex: 0x313244),
-            chromeButtonBackground: NSColor(hex: 0x313244),
-            chromeButtonActiveBackground: NSColor(hex: 0x45475A),
-            border: NSColor(hex: 0x45475A),
-            subduedBorder: NSColor(hex: 0x313244),
-            accent: NSColor(hex: 0x89B4FA),
-            selection: NSColor(hex: 0x45475A),
-            textPrimary: NSColor(hex: 0xCDD6F4),
-            textSecondary: NSColor(hex: 0xA6ADC8),
-            textMuted: NSColor(hex: 0x7F849C)
-        ),
-        terminalPalette: TerminalThemePalette(
-            backgroundColor: NSColor(hex: 0x11111B),
-            foregroundColor: NSColor(hex: 0xCDD6F4),
-            cursorColor: NSColor(hex: 0xF5E0DC),
-            selectionColor: NSColor(hex: 0x45475A)
-        )
-    )
-
-    static let gruvbox = WorkspaceShellTheme(
-        identifier: "gruvbox",
-        displayName: "Gruvbox",
-        shell: WorkspaceShellColors(
-            windowBackground: NSColor(hex: 0x282828),
-            sidebarBackground: NSColor(hex: 0x1D2021),
-            topBarBackground: NSColor(hex: 0x1D2021),
-            canvasBackground: NSColor(hex: 0x202020),
-            paneCardBackground: NSColor(hex: 0x282828),
-            paneHeaderBackground: NSColor(hex: 0x32302F),
-            chromeButtonBackground: NSColor(hex: 0x3C3836),
-            chromeButtonActiveBackground: NSColor(hex: 0x504945),
-            border: NSColor(hex: 0x504945),
-            subduedBorder: NSColor(hex: 0x3C3836),
-            accent: NSColor(hex: 0x83A598),
-            selection: NSColor(hex: 0x504945),
-            textPrimary: NSColor(hex: 0xEBDBB2),
-            textSecondary: NSColor(hex: 0xD5C4A1),
-            textMuted: NSColor(hex: 0xA89984)
-        ),
-        terminalPalette: TerminalThemePalette(
-            backgroundColor: NSColor(hex: 0x1D2021),
-            foregroundColor: NSColor(hex: 0xEBDBB2),
-            cursorColor: NSColor(hex: 0xFABD2F),
-            selectionColor: NSColor(hex: 0x504945)
-        )
-    )
-
-    static let sonokai = WorkspaceShellTheme(
-        identifier: "sonokai",
-        displayName: "Sonokai",
-        shell: WorkspaceShellColors(
-            windowBackground: NSColor(hex: 0x2C2E34),
-            sidebarBackground: NSColor(hex: 0x25272D),
-            topBarBackground: NSColor(hex: 0x25272D),
-            canvasBackground: NSColor(hex: 0x1F2126),
-            paneCardBackground: NSColor(hex: 0x2C2E34),
-            paneHeaderBackground: NSColor(hex: 0x3B3E48),
-            chromeButtonBackground: NSColor(hex: 0x3B3E48),
-            chromeButtonActiveBackground: NSColor(hex: 0x4C505C),
-            border: NSColor(hex: 0x4C505C),
-            subduedBorder: NSColor(hex: 0x3B3E48),
-            accent: NSColor(hex: 0x9ED072),
-            selection: NSColor(hex: 0x4C505C),
-            textPrimary: NSColor(hex: 0xE2E2E3),
-            textSecondary: NSColor(hex: 0xB6B7B9),
-            textMuted: NSColor(hex: 0x7F8490)
-        ),
-        terminalPalette: TerminalThemePalette(
-            backgroundColor: NSColor(hex: 0x2A2C32),
-            foregroundColor: NSColor(hex: 0xE2E2E3),
-            cursorColor: NSColor(hex: 0xFC5D7C),
-            selectionColor: NSColor(hex: 0x4C505C)
-        )
-    )
-
-    static let builtInPresets: [WorkspaceShellTheme] = [
-        .openMUXDark,
-        .catppuccin,
-        .gruvbox,
-        .sonokai,
-    ]
 }
 
 struct WorkspaceShellColors {
@@ -146,12 +135,12 @@ struct WorkspaceShellColors {
 }
 
 private extension NSColor {
-    convenience init(hex: UInt32, alpha: CGFloat = 1.0) {
+    convenience init(themeColor: ThemeColor) {
         self.init(
-            calibratedRed: CGFloat((hex >> 16) & 0xFF) / 255.0,
-            green: CGFloat((hex >> 8) & 0xFF) / 255.0,
-            blue: CGFloat(hex & 0xFF) / 255.0,
-            alpha: alpha
+            calibratedRed: CGFloat(themeColor.red) / 255.0,
+            green: CGFloat(themeColor.green) / 255.0,
+            blue: CGFloat(themeColor.blue) / 255.0,
+            alpha: CGFloat(themeColor.alpha) / 255.0
         )
     }
 }

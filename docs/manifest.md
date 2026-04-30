@@ -198,6 +198,8 @@ AI agents should integrate through the same open system as every other tool:
 No agent should be privileged in the core.
 Claude, Codex, Aider, local models, shell scripts, and future tools should all be peers.
 
+The same rule applies to configuration and appearance: users configure **OpenMUX**, and OpenMUX configures the terminal engine. Themes, font choices, terminal defaults, and future UX-facing settings should live in OpenMUX-native config and be compiled to Ghostty internally instead of exposing Ghostty config as the product surface.
+
 The right architecture is not:
 
 > A terminal with one AI baked in.

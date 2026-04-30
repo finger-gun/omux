@@ -5,16 +5,28 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/.build/smoke"
 LOG_FILE="$LOG_DIR/openmux-app.log"
 SAMPLE_FILE="$LOG_DIR/openmux-app.sample.txt"
+OMUX_HOME_DIR="$LOG_DIR/omux-home"
 WAIT_SECONDS="${SMOKE_WAIT_SECONDS:-10}"
 
 mkdir -p "$LOG_DIR"
-rm -f "$LOG_FILE" "$SAMPLE_FILE"
+rm -rf "$LOG_FILE" "$SAMPLE_FILE" "$OMUX_HOME_DIR"
+mkdir -p "$OMUX_HOME_DIR"
+
+cat > "$OMUX_HOME_DIR/config.toml" <<'EOF'
+schema = 1
+
+[theme]
+name = "dracula"
+
+[ghostty]
+"copy-on-select" = false
+EOF
 
 cd "$ROOT_DIR"
 swift build --product OpenMUXApp >/dev/null
 BIN_PATH="$(swift build --show-bin-path)/OpenMUXApp"
 
-"$BIN_PATH" >"$LOG_FILE" 2>&1 &
+OMUX_HOME="$OMUX_HOME_DIR" "$BIN_PATH" >"$LOG_FILE" 2>&1 &
 APP_PID=$!
 
 cleanup() {

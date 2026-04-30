@@ -1,14 +1,17 @@
 import AppKit
 import Foundation
 import OmuxControlPlane
+import OmuxConfig
 import OmuxCore
 import OmuxHooks
 import OmuxTerminalBridge
+import OmuxTheme
 
 @MainActor
 public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
+    private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private var windowController: WorkspaceWindowController?
     private weak var newWorkspaceMenuItem: NSMenuItem?
     private weak var renameWorkspaceMenuItem: NSMenuItem?
@@ -18,13 +21,29 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
     private weak var removePaneMenuItem: NSMenuItem?
 
     public override init() {
-        let bridge = GhosttyTerminalBridge()
+        let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
+        preparedConfiguration.diagnostics.forEach { diagnostic in
+            let prefix = diagnostic.severity == .warning ? "warning" : "error"
+            fputs("\(prefix): \(diagnostic.message)\n", stderr)
+        }
+
+        let bridge = GhosttyTerminalBridge(compiledConfigPath: preparedConfiguration.compiledConfigURL)
         let hookRunner = ExternalHookRunner()
         let workspaceController = WorkspaceController(bridge: bridge, hookRunner: hookRunner)
         self.workspaceController = workspaceController
-        self.controlPlaneService = OpenMUXControlPlaneService(controller: workspaceController)
+        self.configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: preparedConfiguration
+        )
+        self.controlPlaneService = OpenMUXControlPlaneService(
+            controller: workspaceController,
+            configurationCoordinator: configurationCoordinator
+        )
+        self.initialTheme = preparedConfiguration.theme
         super.init()
     }
+
+    private let initialTheme: WorkspaceShellTheme
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
@@ -38,9 +57,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
-            let windowController = WorkspaceWindowController(workspace: workspace, controller: workspaceController)
+            let windowController = WorkspaceWindowController(
+                workspace: workspace,
+                controller: workspaceController,
+                initialTheme: initialTheme
+            )
             self.windowController = windowController
             windowController.showWindow(nil)
+            configurationCoordinator.onThemeChange = { [weak self] theme in
+                self?.windowController?.updateTheme(theme)
+            }
+            configurationCoordinator.onDiagnosticsChange = { diagnostics in
+                diagnostics.forEach { diagnostic in
+                    let prefix = diagnostic.severity == .warning ? "warning" : "error"
+                    fputs("\(prefix): \(diagnostic.message)\n", stderr)
+                }
+            }
             refreshMenuValidation()
             try controlPlaneService.start()
         } catch {

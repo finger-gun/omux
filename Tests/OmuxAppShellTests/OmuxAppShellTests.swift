@@ -1,4 +1,7 @@
 import AppKit
+import OmuxConfig
+import OmuxTheme
+import Foundation
 import XCTest
 @testable import OmuxAppShell
 @testable import OmuxCore
@@ -285,6 +288,54 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testConfigurationCoordinatorReloadPublishesThemeChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        let expectation = expectation(description: "theme changed")
+        coordinator.onThemeChange = { theme in
+            if theme.identifier == "nord" {
+                expectation.fulfill()
+            }
+        }
+
+        try """
+        schema = 1
+
+        [theme]
+        name = "nord"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let result = coordinator.reload()
+
+        XCTAssertTrue(result.applied)
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
     func testWorkspaceWindowSidebarTracksMultipleWorkspaces() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -361,12 +412,17 @@ final class OmuxAppShellTests: XCTestCase {
     func testBuiltInThemesIncludeDefaultAndCuratedPresets() {
         let identifiers = Set(WorkspaceShellTheme.builtInPresets.map(\.identifier))
 
-        XCTAssertTrue(identifiers.contains("openmux-dark"))
+        XCTAssertTrue(identifiers.contains("monokai-soda"))
         XCTAssertTrue(identifiers.contains("catppuccin"))
+        XCTAssertTrue(identifiers.contains("dracula"))
+        XCTAssertTrue(identifiers.contains("nord"))
         XCTAssertTrue(identifiers.contains("gruvbox"))
-        XCTAssertTrue(identifiers.contains("sonokai"))
+        XCTAssertTrue(identifiers.contains("one-dark"))
+        XCTAssertTrue(identifiers.contains("solarized-dark"))
+        XCTAssertTrue(identifiers.contains("solarized-light"))
         XCTAssertEqual(WorkspaceShellTheme.builtInPresets.count, identifiers.count)
-        XCTAssertNotEqual(WorkspaceShellTheme.openMUXDark.terminalPalette, WorkspaceShellTheme.catppuccin.terminalPalette)
+        XCTAssertEqual(WorkspaceShellTheme.defaultTheme.identifier, "monokai-soda")
+        XCTAssertNotEqual(WorkspaceShellTheme.defaultTheme.terminalPalette, WorkspaceShellTheme.builtInPresets.first(where: { $0.identifier == "catppuccin" })?.terminalPalette)
     }
 
     @MainActor

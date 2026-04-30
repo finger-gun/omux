@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OmuxConfig
 import OmuxCore
 
 #if canImport(CGhostty)
@@ -29,6 +30,8 @@ public struct TerminalSessionAttachment: Equatable, Sendable {
 }
 
 public protocol GhosttyRuntime {
+    func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic]
+    func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic]
     func createSurface(for paneID: PaneID) throws -> String
     func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws
     func destroySurface(runtimeSurfaceID: String) throws
@@ -51,6 +54,16 @@ public protocol GhosttyRuntime {
 }
 
 public extension GhosttyRuntime {
+    func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        _ = path
+        return []
+    }
+
+    func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        _ = path
+        return []
+    }
+
     func ownsSession(for runtimeSurfaceID: String) -> Bool {
         _ = runtimeSurfaceID
         return false
@@ -199,14 +212,25 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     public init(
         dependency: GhosttyPinnedDependency = .foundationDefault(),
-        runtime: (any GhosttyRuntime)? = nil
+        runtime: (any GhosttyRuntime)? = nil,
+        compiledConfigPath: URL? = nil
     ) {
         self.dependency = dependency
-        self.runtime = runtime ?? defaultGhosttyRuntime()
+        self.runtime = runtime ?? defaultGhosttyRuntime(compiledConfigPath: compiledConfigPath)
     }
 
     public var pinnedDependency: GhosttyPinnedDependency {
         dependency
+    }
+
+    @discardableResult
+    public func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try runtime.applyCompiledConfig(path: path)
+    }
+
+    @discardableResult
+    public func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try runtime.refreshCompiledConfig(path: path)
     }
 
     @MainActor
@@ -610,7 +634,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 }
 
-private func defaultGhosttyRuntime() -> any GhosttyRuntime {
+private func defaultGhosttyRuntime(compiledConfigPath: URL?) -> any GhosttyRuntime {
     if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         || NSClassFromString("XCTestCase") != nil
     {
@@ -618,7 +642,7 @@ private func defaultGhosttyRuntime() -> any GhosttyRuntime {
     }
 
 #if canImport(CGhostty)
-    return CGhosttyRuntime()
+    return CGhosttyRuntime(compiledConfigPath: compiledConfigPath)
 #else
     return UnavailableGhosttyRuntime()
 #endif

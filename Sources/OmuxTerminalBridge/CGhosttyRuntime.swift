@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OmuxConfig
 import OmuxCore
 
 #if canImport(CGhostty)
@@ -10,6 +11,7 @@ enum CGhosttyRuntimeError: Error {
     case appInitializationFailed
     case globalInitializationFailed(Int32)
     case surfaceInitializationFailed(String)
+    case compiledConfigNotFound(String)
 }
 
 @MainActor
@@ -69,14 +71,19 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     }
 
     private final class AppState: @unchecked Sendable {
-        let config: ghostty_config_t?
+        var config: ghostty_config_t?
         let app: ghostty_app_t?
         private weak var owner: CGhosttyRuntime?
 
-        init(owner: CGhosttyRuntime) {
+        init(owner: CGhosttyRuntime, configFileURL: URL?) throws {
             self.owner = owner
 
             let config = ghostty_config_new()
+            if let configFileURL {
+                configFileURL.path.withCString { path in
+                    ghostty_config_load_file(config, path)
+                }
+            }
             ghostty_config_finalize(config)
 
             var runtimeConfig = ghostty_runtime_config_s(
@@ -113,8 +120,19 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private var appState: AppState?
     private var surfaces: [String: SurfaceState] = [:]
     private var tickScheduled = false
+    private var compiledConfigPath: URL?
 
-    public init() {}
+    public init(compiledConfigPath: URL? = nil) {
+        self.compiledConfigPath = compiledConfigPath
+    }
+
+    public func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try replaceCompiledConfig(path: path, updateRunningApp: true)
+    }
+
+    public func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
+        try replaceCompiledConfig(path: path, updateRunningApp: true)
+    }
 
     public func createSurface(for paneID: PaneID) throws -> String {
         let runtimeSurfaceID = "cghostty:\(paneID.rawValue)"
@@ -362,7 +380,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
 
         try ensureGhosttyInitialized()
 
-        let newState = AppState(owner: self)
+        let newState = try AppState(owner: self, configFileURL: compiledConfigPath)
         appState = newState
         return newState
     }
@@ -431,6 +449,78 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         lock.lock()
         defer { lock.unlock() }
         return appState?.app
+    }
+
+    private func replaceCompiledConfig(path: URL, updateRunningApp: Bool) throws -> [OmuxConfigDiagnostic] {
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            throw CGhosttyRuntimeError.compiledConfigNotFound(path.path)
+        }
+
+        let loadResult = loadConfig(path: path)
+        compiledConfigPath = path
+
+        guard updateRunningApp else {
+            if let config = loadResult.config {
+                ghostty_config_free(config)
+            }
+            return loadResult.diagnostics
+        }
+
+        lock.lock()
+        let appState = self.appState
+        lock.unlock()
+
+        guard let appState, let newConfig = loadResult.config, let app = appState.app else {
+            if let config = loadResult.config {
+                ghostty_config_free(config)
+            }
+            return loadResult.diagnostics
+        }
+
+        runOnMain {
+            ghostty_app_update_config(app, newConfig)
+        }
+
+        let previousConfig = appState.config
+        appState.config = newConfig
+        if let previousConfig {
+            ghostty_config_free(previousConfig)
+        }
+
+        return loadResult.diagnostics
+    }
+
+    private func loadConfig(path: URL) -> (config: ghostty_config_t?, diagnostics: [OmuxConfigDiagnostic]) {
+        let config = ghostty_config_new()
+        path.path.withCString { value in
+            ghostty_config_load_file(config, value)
+        }
+        ghostty_config_finalize(config)
+        return (config, diagnostics(for: config, filePath: path.path))
+    }
+
+    private func diagnostics(for config: ghostty_config_t?, filePath: String?) -> [OmuxConfigDiagnostic] {
+        guard let config else {
+            return []
+        }
+
+        let count = ghostty_config_diagnostics_count(config)
+        guard count > 0 else {
+            return []
+        }
+
+        return (0..<Int(count)).compactMap { index in
+            let diagnostic = ghostty_config_get_diagnostic(config, UInt32(index))
+            guard let message = diagnostic.message else {
+                return nil
+            }
+
+            return OmuxConfigDiagnostic(
+                severity: .warning,
+                message: String(cString: message),
+                filePath: filePath
+            )
+        }
     }
 }
 

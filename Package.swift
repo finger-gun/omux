@@ -5,7 +5,7 @@ import PackageDescription
 let ghosttyXCFrameworkPath = "Vendor/ghostty/macos/GhosttyKit.xcframework"
 let hasGhosttyXCFramework = FileManager.default.fileExists(atPath: ghosttyXCFrameworkPath)
 
-var terminalBridgeDependencies: [Target.Dependency] = ["OmuxCore"]
+var terminalBridgeDependencies: [Target.Dependency] = ["OmuxCore", "OmuxConfig"]
 var terminalBridgeLinkerSettings: [LinkerSetting] = []
 if hasGhosttyXCFramework {
     terminalBridgeDependencies.append("CGhostty")
@@ -16,6 +16,14 @@ if hasGhosttyXCFramework {
 
 var targets: [Target] = [
     .target(name: "OmuxCore"),
+    .target(name: "OmuxConfig"),
+    .target(
+        name: "OmuxTheme",
+        dependencies: ["OmuxConfig"],
+        resources: [
+            .process("Resources"),
+        ]
+    ),
 ]
 
 if hasGhosttyXCFramework {
@@ -53,13 +61,15 @@ targets.append(
         ),
         .target(
             name: "OmuxCLI",
-            dependencies: ["OmuxControlPlane", "OmuxCore"],
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig"],
             path: "Sources/OmuxCLI"
         ),
         .target(
             name: "OmuxAppShell",
             dependencies: [
                 "OmuxCore",
+                "OmuxConfig",
+                "OmuxTheme",
                 "OmuxTerminalBridge",
                 "OmuxControlPlane",
                 "OmuxHooks",
@@ -74,12 +84,20 @@ targets.append(
             dependencies: ["OmuxCLI"]
         ),
         .testTarget(
+            name: "OmuxConfigTests",
+            dependencies: ["OmuxConfig"]
+        ),
+        .testTarget(
+            name: "OmuxThemeTests",
+            dependencies: ["OmuxTheme", "OmuxConfig"]
+        ),
+        .testTarget(
             name: "OmuxCoreTests",
             dependencies: ["OmuxCore"]
         ),
         .testTarget(
             name: "OmuxTerminalBridgeTests",
-            dependencies: ["OmuxTerminalBridge", "OmuxCore"]
+            dependencies: ["OmuxTerminalBridge", "OmuxCore", "OmuxConfig", "OmuxTheme"]
         ),
         .testTarget(
             name: "OmuxControlPlaneTests",
@@ -95,7 +113,7 @@ targets.append(
         ),
         .testTarget(
             name: "OmuxAppShellTests",
-            dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks"]
+            dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks", "OmuxConfig", "OmuxTheme"]
         ),
     ]
 )
@@ -107,6 +125,8 @@ let package = Package(
     ],
     products: [
         .library(name: "OmuxCore", targets: ["OmuxCore"]),
+        .library(name: "OmuxConfig", targets: ["OmuxConfig"]),
+        .library(name: "OmuxTheme", targets: ["OmuxTheme"]),
         .library(name: "OmuxTerminalBridge", targets: ["OmuxTerminalBridge"]),
         .library(name: "OmuxControlPlane", targets: ["OmuxControlPlane"]),
         .library(name: "OmuxHooks", targets: ["OmuxHooks"]),

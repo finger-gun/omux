@@ -50,4 +50,6 @@ public enum ControlMethod: String, Sendable {
     case runCommand = "session.runCommand"
     case sendNotification = "notification.send"
     case restoreLayout = "workspace.restore"
+    case configDoctor = "config.doctor"
+    case configReload = "config.reload"
 }

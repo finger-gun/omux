@@ -1,23 +1,33 @@
 import Foundation
 import OmuxControlPlane
+import OmuxConfig
 import OmuxCore
 
-final class OpenMUXControlPlaneService {
+final class OpenMUXControlPlaneService: @unchecked Sendable {
     private let controller: WorkspaceController
+    private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let server: LocalControlServer
 
     init(
         controller: WorkspaceController,
+        configurationCoordinator: OpenMUXConfigurationCoordinator,
         socketPath: String = ControlPlaneSocket.defaultPath()
     ) {
         self.controller = controller
+        self.configurationCoordinator = configurationCoordinator
         self.server = LocalControlServer(socketPath: socketPath)
     }
 
     func start() throws {
-        try server.start { [controller] request in
+        try server.start { [weak self] request in
+            guard let self else {
+                return JSONRPCResponse(
+                    id: request.id,
+                    error: JSONRPCError(code: -32001, message: "control plane unavailable")
+                )
+            }
             do {
-                return try Self.handle(request: request, controller: controller)
+                return try self.handle(request: request)
             } catch {
                 return JSONRPCResponse(
                     id: request.id,
@@ -31,7 +41,7 @@ final class OpenMUXControlPlaneService {
         server.stop()
     }
 
-    private static func handle(request: JSONRPCRequest, controller: WorkspaceController) throws -> JSONRPCResponse {
+    private func handle(request: JSONRPCRequest) throws -> JSONRPCResponse {
         switch ControlMethod(rawValue: request.method) {
         case .openWorkspace:
             let path = request.params?.objectValue?["path"]?.stringValue ?? FileManager.default.currentDirectoryPath
@@ -92,9 +102,33 @@ final class OpenMUXControlPlaneService {
                 return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "workspace not found"))
+        case .configDoctor:
+            return JSONRPCResponse(
+                id: request.id,
+                result: .array(mainActorSync { configurationCoordinator.diagnostics() }.map(\.rpcValue))
+            )
+        case .configReload:
+            let result = mainActorSync { configurationCoordinator.reload() }
+            return JSONRPCResponse(
+                id: request.id,
+                result: .object([
+                    "applied": .bool(result.applied),
+                    "diagnostics": .array(result.diagnostics.map(\.rpcValue)),
+                ])
+            )
         case .none:
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: -32601, message: "method not found"))
         }
+    }
+}
+
+private func mainActorSync<T: Sendable>(_ body: @MainActor () -> T) -> T {
+    if Thread.isMainThread {
+        return MainActor.assumeIsolated(body)
+    }
+
+    return DispatchQueue.main.sync {
+        MainActor.assumeIsolated(body)
     }
 }
 
@@ -111,6 +145,17 @@ private extension RPCValue {
             return value
         }
         return nil
+    }
+}
+
+private extension OmuxConfigDiagnostic {
+    var rpcValue: RPCValue {
+        .object([
+            "severity": .string(severity.rawValue),
+            "message": .string(message),
+            "filePath": filePath.map(RPCValue.string) ?? .null,
+            "line": line.map(RPCValue.integer) ?? .null,
+        ])
     }
 }
 

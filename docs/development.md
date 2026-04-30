@@ -2,11 +2,15 @@
 
 OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation, workspace shell, interactive-terminal, pane-tab-stacks, and bridge-owned surface-hosting slices described by the applied OpenSpec changes.
 
+The config/theme foundation now lives on top of **`~/.omux/config.toml`**, **`~/.omux/themes/`**, and generated Ghostty artifacts under **`~/.omux/generated/ghostty/`**. See [`docs/configuration.md`](./configuration.md) for the user-facing model.
+
 ## Module boundaries
 
 | Module | Responsibility |
 | --- | --- |
 | `OmuxCore` | OpenMUX-native domain types for workspaces, panes, sessions, notifications, and normalized key events |
+| `OmuxConfig` | OpenMUX config parsing, diagnostics, paths, and starter-config scaffolding |
+| `OmuxTheme` | Theme registry, token vocabulary, theme compilation, and generated Ghostty config emission |
 | `OmuxTerminalBridge` | The only layer allowed to depend directly on `libghostty` / `CGhostty` |
 | `OmuxControlPlane` | Local JSON-RPC control plane over a Unix domain socket |
 | `OmuxHooks` | Hook contracts and external process execution |
@@ -54,6 +58,9 @@ make verify
 make smoke
 swift build
 swift test
+swift run omux config doctor
+swift run omux config reload
+swift run omux config init
 swift run omux tab
 swift run omux split
 swift run omux split down
@@ -77,7 +84,8 @@ The current shell baseline adds:
 - persistent pane-owned interactive shell sessions behind workspace and pane navigation instead of a separate Sessions sidebar section
 - split-right and split-down panes routed through native View menu commands instead of persistent shell buttons
 - pane stacks at each split leaf, with local pane tabs inside a region
-- built-in shell-and-terminal themes including OpenMUX Dark, Catppuccin, Gruvbox, and Sonokai
+- token-owned shell-and-terminal theming sourced from `~/.omux/config.toml`, user theme overrides in `~/.omux/themes/`, and eight bundled presets (Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, Solarized Dark, Solarized Light)
+- explicit config diagnostics and `omux config doctor` / `omux config reload` support through the same local control plane
 - a second polish pass that tightens shell proportions, makes sidebar navigation visible/useful, and gives shell controls real intrinsic sizing
 - a follow-up navigation pass that moves workspace tabs into the left rail, adds a compact sidebar workspace-creation affordance, supports workspace renaming, and disables destructive workspace/pane commands when they would empty the shell
 - bridge-provided hosted terminal pane views embedded inside AppKit pane stacks
