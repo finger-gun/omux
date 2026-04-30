@@ -92,6 +92,8 @@ public final class HostedTerminalPaneView: NSView {
 
 @MainActor
 final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
+    private let paneID: PaneID
+    private let bridge: GhosttyTerminalBridge
     let rootView: NSView
     let focusTarget: NSView
 
@@ -102,6 +104,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         isFocused: Bool,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
+        self.paneID = pane.id
+        self.bridge = bridge
         let inputProxy = FallbackTerminalTextView(
             paneID: pane.id,
             bridge: bridge,
@@ -120,6 +124,7 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
 
     func setFocused(_ isFocused: Bool) {
         (focusTarget as? FallbackTerminalTextView)?.isFocusedPane = isFocused
+        bridge.setHostedSurfaceFocused(paneID: paneID, isFocused: isFocused)
     }
 
     func measuredTerminalSize(in size: CGSize) -> TerminalSize {

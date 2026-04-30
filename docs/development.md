@@ -25,8 +25,23 @@ OpenMUX currently uses a Swift Package Manager workspace to establish the initia
 - Vendored path: `Vendor/ghostty/`
 - Pinned ref marker: `Vendor/ghostty/PINNED_REF`
 - Build handoff script: `Scripts/build-ghostty.sh`
+- Built runtime artifact: `Vendor/ghostty/macos/GhosttyKit.xcframework`
 
-The current bridge now owns both pane/session lifecycle and the hosted terminal pane view abstraction. When a real libghostty-hosted native surface is unavailable, the bridge falls back to its PTY-backed interactive runtime and text-rendering host internally, so the AppKit shell still embeds a bridge-provided pane view instead of rendering terminal content itself.
+OpenMUX now vendors a pinned Ghostty snapshot and builds the internal `GhosttyKit` xcframework locally. `OmuxTerminalBridge` is still the only package target allowed to import `CGhostty`; the rest of the app continues to consume bridge-owned pane views and session snapshots.
+
+To rebuild the runtime artifact locally:
+
+```bash
+Scripts/build-ghostty.sh
+```
+
+The script expects:
+
+- `Vendor/ghostty/` to contain the pinned upstream snapshot
+- Zig 0.15.2, with Homebrew `zig@0.15` preferred when available
+- Xcode's Metal Toolchain component installed for the macOS xcframework build
+
+When `GhosttyKit.xcframework` is present, hosted panes use runtime-owned native Ghostty surfaces by default. When it is absent or runtime attach fails, the bridge falls back to the internal PTY-backed text host so the shell can still render a working pane.
 
 ## Commands
 
@@ -75,7 +90,7 @@ The current pane-hosting split is:
 
 - `OmuxAppShell` owns workspace layout, pane-stack chrome, and focus state
 - `OmuxTerminalBridge` owns pane surfaces, attached sessions, resize propagation, and hosted terminal pane views
-- the bridge chooses between a native libghostty-backed surface host and its internal fallback host
+- the bridge chooses between a vendored Ghostty runtime-owned native surface host and its internal fallback host
 
 This keeps the shell AppKit-first while preserving one narrow terminal-engine seam.
 
@@ -83,7 +98,8 @@ This keeps the shell AppKit-first while preserving one narrow terminal-engine se
 
 The current shell is usable, but it is still intentionally narrow:
 
-- the bridge-owned fallback host is still text-rendered when a real libghostty surface host is unavailable
+- the runtime-backed path currently keeps transcript snapshots minimal, so the fallback host remains the richer text transcript source
+- the bridge-owned fallback host is still text-rendered when the vendored Ghostty runtime is unavailable or cannot attach
 - ANSI/control-sequence handling is lightweight and aimed at normal shell prompts, not full-screen TUIs
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
 - close-last-local-tab is intentionally rejected for now instead of collapsing a split region

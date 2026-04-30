@@ -13,3 +13,4 @@ xcuserdata/
 # Vendored Ghostty build output
 Vendor/ghostty/.zig-cache/
 Vendor/ghostty/zig-out/
+Vendor/ghostty/macos/GhosttyKit.xcframework/

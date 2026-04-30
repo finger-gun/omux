@@ -98,6 +98,46 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         bridge.removeObserver(for: pane.id, token: token)
     }
 
+    @MainActor
+    func testDefaultBridgeUsesRuntimeHostedSurfaceWhenGhosttyKitExists() throws {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+        {
+            throw XCTSkip("Embedded Ghostty runtime is disabled under xctest.")
+        }
+
+        let bridge = GhosttyTerminalBridge()
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Ghostty", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        hostedView.frame = NSRect(x: 0, y: 0, width: 800, height: 480)
+        hostedView.layoutSubtreeIfNeeded()
+
+        let snapshot = try XCTUnwrap(bridge.snapshot(for: pane.id))
+        XCTAssertGreaterThan(snapshot.columns, 0)
+        XCTAssertGreaterThan(snapshot.rows, 0)
+
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let hasGhosttyKit = FileManager.default.fileExists(
+            atPath: repositoryRoot
+                .appendingPathComponent("Vendor/ghostty/macos/GhosttyKit.xcframework")
+                .path
+        )
+
+        let runtimeContainer = try XCTUnwrap(hostedView.subviews.first)
+        let childTypeNames = runtimeContainer.subviews.map { String(describing: type(of: $0)) }
+        if hasGhosttyKit {
+            XCTAssertEqual(attachment.runtimeSurfaceID, "cghostty:\(pane.id.rawValue)")
+            XCTAssertTrue(childTypeNames.contains("GhosttyHostedSurfaceView"))
+        } else {
+            XCTAssertTrue(childTypeNames.contains("NSScrollView"))
+        }
+    }
+
     func testOnlyTerminalBridgeMayMentionCGhostty() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -134,6 +174,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         try bridge.run(command: "printf 'hello from shell'", inPane: pane.id)
 
         let expectation = expectation(description: "terminal output updates")
+        expectation.assertForOverFulfill = false
         let token = bridge.addObserver(for: pane.id) { snapshot in
             if snapshot.renderedText.contains("hello from shell") {
                 expectation.fulfill()

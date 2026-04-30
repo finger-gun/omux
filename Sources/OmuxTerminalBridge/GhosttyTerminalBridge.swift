@@ -36,6 +36,61 @@ public protocol GhosttyRuntime {
         for paneID: PaneID,
         runtimeSurfaceID: String
     ) -> NSView?
+    func ownsSession(for runtimeSurfaceID: String) -> Bool
+    func send(text: String, to runtimeSurfaceID: String) throws
+    func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws
+    func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
+    func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
+    func snapshot(
+        paneID: PaneID,
+        sessionID: SessionID,
+        descriptor: SessionDescriptor,
+        runtimeSurfaceID: String,
+        fallbackSize: TerminalSize
+    ) -> TerminalSessionSnapshot?
+}
+
+public extension GhosttyRuntime {
+    func ownsSession(for runtimeSurfaceID: String) -> Bool {
+        _ = runtimeSurfaceID
+        return false
+    }
+
+    func send(text: String, to runtimeSurfaceID: String) throws {
+        _ = text
+        _ = runtimeSurfaceID
+    }
+
+    func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
+        _ = event
+        _ = runtimeSurfaceID
+    }
+
+    func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {
+        _ = runtimeSurfaceID
+        _ = columns
+        _ = rows
+    }
+
+    func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
+        _ = runtimeSurfaceID
+        _ = focused
+    }
+
+    func snapshot(
+        paneID: PaneID,
+        sessionID: SessionID,
+        descriptor: SessionDescriptor,
+        runtimeSurfaceID: String,
+        fallbackSize: TerminalSize
+    ) -> TerminalSessionSnapshot? {
+        _ = paneID
+        _ = sessionID
+        _ = descriptor
+        _ = runtimeSurfaceID
+        _ = fallbackSize
+        return nil
+    }
 }
 
 public final class UnavailableGhosttyRuntime: GhosttyRuntime {
@@ -64,35 +119,6 @@ public final class UnavailableGhosttyRuntime: GhosttyRuntime {
         return nil
     }
 }
-
-#if canImport(CGhostty)
-public final class CGhosttyRuntime: GhosttyRuntime {
-    public init() {}
-
-    public func createSurface(for paneID: PaneID) throws -> String {
-        "cghostty:\(paneID.rawValue)"
-    }
-
-    public func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
-        _ = session
-        _ = runtimeSurfaceID
-    }
-
-    public func destroySurface(runtimeSurfaceID: String) throws {
-        _ = runtimeSurfaceID
-    }
-
-    @MainActor
-    public func makeHostedSurfaceView(
-        for paneID: PaneID,
-        runtimeSurfaceID: String
-    ) -> NSView? {
-        _ = paneID
-        _ = runtimeSurfaceID
-        return nil
-    }
-}
-#endif
 
 public enum TerminalBridgeError: Error {
     case missingSurface(PaneID)
@@ -141,21 +167,24 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     private final class SessionState {
         let descriptor: SessionDescriptor
         let runtimeSurfaceID: String
-        let runtimeSession: InteractiveTerminalRuntimeSession
-        let screenBuffer: TerminalScreenBuffer
+        let runtimeSession: InteractiveTerminalRuntimeSession?
+        let screenBuffer: TerminalScreenBuffer?
+        let runtimeOwned: Bool
         var size: TerminalSize
 
         init(
             descriptor: SessionDescriptor,
             runtimeSurfaceID: String,
-            runtimeSession: InteractiveTerminalRuntimeSession,
-            screenBuffer: TerminalScreenBuffer = TerminalScreenBuffer(),
+            runtimeSession: InteractiveTerminalRuntimeSession?,
+            screenBuffer: TerminalScreenBuffer?,
+            runtimeOwned: Bool,
             size: TerminalSize = .default
         ) {
             self.descriptor = descriptor
             self.runtimeSurfaceID = runtimeSurfaceID
             self.runtimeSession = runtimeSession
             self.screenBuffer = screenBuffer
+            self.runtimeOwned = runtimeOwned
             self.size = size
         }
     }
@@ -214,22 +243,39 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     public func attach(session: SessionDescriptor, to pane: Pane) throws -> TerminalSessionAttachment {
         let surface = try createSurface(for: pane)
-        try runtime.attach(session: session, to: surface.runtimeSurfaceID)
+        let runtimeOwned: Bool
+        do {
+            try runtime.attach(session: session, to: surface.runtimeSurfaceID)
+            runtimeOwned = runtime.ownsSession(for: surface.runtimeSurfaceID)
+        } catch {
+            fputs("warning: failed to attach Ghostty runtime surface \(surface.runtimeSurfaceID): \(error)\n", stderr)
+            runtimeOwned = false
+        }
 
-        let runtimeSession = try InteractiveTerminalRuntimeSession(
-            descriptor: session,
-            initialSize: .default,
-            onOutput: { [weak self] data in
-                self?.acceptRuntimeOutput(data, for: pane.id)
-            }
-        )
+        let runtimeSession: InteractiveTerminalRuntimeSession?
+        let screenBuffer: TerminalScreenBuffer?
+        if runtimeOwned {
+            runtimeSession = nil
+            screenBuffer = nil
+        } else {
+            runtimeSession = try InteractiveTerminalRuntimeSession(
+                descriptor: session,
+                initialSize: .default,
+                onOutput: { [weak self] data in
+                    self?.acceptRuntimeOutput(data, for: pane.id)
+                }
+            )
+            screenBuffer = TerminalScreenBuffer()
+        }
 
         lock.lock()
         sessionsByPane[pane.id] = session.id
         sessionStateByPane[pane.id] = SessionState(
             descriptor: session,
             runtimeSurfaceID: surface.runtimeSurfaceID,
-            runtimeSession: runtimeSession
+            runtimeSession: runtimeSession,
+            screenBuffer: screenBuffer,
+            runtimeOwned: runtimeOwned
         )
         lock.unlock()
 
@@ -254,7 +300,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             throw TerminalBridgeError.missingSurface(paneID)
         }
 
-        sessionState?.runtimeSession.stop()
+        sessionState?.runtimeSession?.stop()
         try runtime.destroySurface(runtimeSurfaceID: surface.runtimeSurfaceID)
     }
 
@@ -312,6 +358,16 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             return
         }
 
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+
+        if let state, state.runtimeOwned {
+            try runtime.handle(event, on: state.runtimeSurfaceID)
+            publishSnapshot(for: paneID)
+            return
+        }
+
         let data = data(for: event)
         guard data.isEmpty == false else {
             return
@@ -331,6 +387,16 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 
     public func send(text: String, toPane paneID: PaneID) throws {
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+
+        if let state, state.runtimeOwned {
+            try runtime.send(text: text, to: state.runtimeSurfaceID)
+            publishSnapshot(for: paneID)
+            return
+        }
+
         try write(Data(text.utf8), toPane: paneID)
     }
 
@@ -343,7 +409,15 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         state.size = TerminalSize(columns: columns, rows: rows)
         lock.unlock()
 
-        try state.runtimeSession.resize(to: state.size)
+        if state.runtimeOwned {
+            try runtime.resizeSurface(
+                runtimeSurfaceID: state.runtimeSurfaceID,
+                columns: state.size.columns,
+                rows: state.size.rows
+            )
+        } else {
+            try state.runtimeSession?.resize(to: state.size)
+        }
         publishSnapshot(for: paneID)
     }
 
@@ -355,12 +429,22 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         }
         lock.unlock()
 
-        try state.runtimeSession.write(data)
+        guard let runtimeSession = state.runtimeSession else {
+            if let text = String(data: data, encoding: .utf8) {
+                try runtime.send(text: text, to: state.runtimeSurfaceID)
+                publishSnapshot(for: paneID)
+                return
+            }
+
+            throw TerminalBridgeError.missingSession(paneID)
+        }
+
+        try runtimeSession.write(data)
     }
 
     private func acceptRuntimeOutput(_ data: Data, for paneID: PaneID) {
         lock.lock()
-        sessionStateByPane[paneID]?.screenBuffer.apply(data)
+        sessionStateByPane[paneID]?.screenBuffer?.apply(data)
         lock.unlock()
         publishSnapshot(for: paneID)
     }
@@ -389,11 +473,21 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             return nil
         }
 
+        if state.runtimeOwned {
+            return runtime.snapshot(
+                paneID: paneID,
+                sessionID: sessionID,
+                descriptor: state.descriptor,
+                runtimeSurfaceID: state.runtimeSurfaceID,
+                fallbackSize: state.size
+            )
+        }
+
         return TerminalSessionSnapshot(
             paneID: paneID,
             sessionID: sessionID,
             runtimeSurfaceID: state.runtimeSurfaceID,
-            transcript: state.screenBuffer.renderedText,
+            transcript: state.screenBuffer?.renderedText ?? "",
             currentInput: "",
             shell: state.descriptor.shell,
             workingDirectory: state.descriptor.workingDirectory,
@@ -481,7 +575,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) -> any TerminalSurfaceContentHosting {
         if let surface = surface(for: pane.id),
-           let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
+            let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
             return RuntimeTerminalSurfaceContentHost(
                 pane: pane,
                 runtimeView: runtimeView,
@@ -498,9 +592,26 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             onFocus: onFocus
         )
     }
+
+    func setHostedSurfaceFocused(paneID: PaneID, isFocused: Bool) {
+        lock.lock()
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let runtimeSurfaceID else {
+            return
+        }
+
+        runtime.setSurfaceFocused(runtimeSurfaceID: runtimeSurfaceID, focused: isFocused)
+    }
 }
 
 private func defaultGhosttyRuntime() -> any GhosttyRuntime {
+    if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || NSClassFromString("XCTestCase") != nil
+    {
+        return UnavailableGhosttyRuntime()
+    }
+
 #if canImport(CGhostty)
     return CGhosttyRuntime()
 #else
