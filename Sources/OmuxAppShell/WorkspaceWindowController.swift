@@ -34,7 +34,6 @@ final class WorkspaceWindowController: NSWindowController {
 @MainActor
 final class WorkspaceViewController: NSViewController {
     private let controller: WorkspaceController
-    private let inputNormalizer = AppKitKeyEventNormalizer()
     private let titleLabel = NSTextField(labelWithString: "OpenMUX")
     private let detailLabel = NSTextField(labelWithString: "")
     private let tabSelector = NSSegmentedControl(labels: [], trackingMode: .selectOne, target: nil, action: nil)
@@ -110,7 +109,7 @@ final class WorkspaceViewController: NSViewController {
         currentWorkspace = workspace
         titleLabel.stringValue = workspace.name
         detailLabel.stringValue = "Root: \(workspace.rootPath)"
-        var focusedPaneView: TerminalPaneView?
+        var focusedPaneView: HostedTerminalPaneView?
 
         tabSelector.segmentCount = workspace.tabs.count
         for (index, tab) in workspace.tabs.enumerated() {
@@ -135,7 +134,7 @@ final class WorkspaceViewController: NSViewController {
                 layoutView.trailingAnchor.constraint(equalTo: paneContainerView.trailingAnchor),
                 layoutView.bottomAnchor.constraint(equalTo: paneContainerView.bottomAnchor),
             ])
-            if let singlePaneView = layoutView as? TerminalPaneView {
+            if let singlePaneView = layoutView as? HostedTerminalPaneView {
                 focusedPaneView = singlePaneView
             }
         }
@@ -180,14 +179,13 @@ final class WorkspaceViewController: NSViewController {
     private func makeLayoutView(
         for node: TabLayoutNode,
         focusedPaneID: PaneID
-    ) -> (view: NSView, focusedPaneView: TerminalPaneView?) {
+    ) -> (view: NSView, focusedPaneView: HostedTerminalPaneView?) {
         switch node {
         case .paneStack(let paneStack):
             let stackView = PaneStackView(
                 paneStack: paneStack,
                 focusedPaneID: focusedPaneID,
                 bridge: controller.terminalBridge,
-                normalizer: inputNormalizer,
                 onSelectPaneTab: { [weak self] paneID in
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
@@ -199,15 +197,6 @@ final class WorkspaceViewController: NSViewController {
                 },
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
-                },
-                onInput: { [weak self] paneID, event in
-                    try self?.controller.handleInput(event, in: paneID)
-                },
-                onPaste: { [weak self] paneID, text in
-                    try self?.controller.paste(text, in: paneID)
-                },
-                onResize: { [weak self] paneID, columns, rows in
-                    try self?.controller.resize(paneID: paneID, columns: columns, rows: rows)
                 }
             )
             return (stackView, paneStack.focusedPaneID == focusedPaneID ? stackView.focusedPaneView : nil)
@@ -218,7 +207,7 @@ final class WorkspaceViewController: NSViewController {
             splitView.dividerStyle = .thin
             splitView.translatesAutoresizingMaskIntoConstraints = false
 
-            var focusedPaneView: TerminalPaneView?
+            var focusedPaneView: HostedTerminalPaneView?
             for child in children {
                 let childLayout = makeLayoutView(for: child, focusedPaneID: focusedPaneID)
                 if focusedPaneView == nil {
@@ -237,7 +226,7 @@ final class PaneStackView: NSView {
     private let tabSelector = NSSegmentedControl(labels: [], trackingMode: .selectOne, target: nil, action: nil)
     private let newPaneTabButton = NSButton(title: "+", target: nil, action: nil)
     private let closePaneTabButton = NSButton(title: "Close", target: nil, action: nil)
-    private let terminalPaneView: TerminalPaneView
+    private let terminalPaneView: HostedTerminalPaneView
     private let paneStack: PaneStack
     private let onSelectPaneTab: (PaneID) -> Void
     private let onCreatePaneTab: () throws -> Void
@@ -247,29 +236,20 @@ final class PaneStackView: NSView {
         paneStack: PaneStack,
         focusedPaneID: PaneID,
         bridge: GhosttyTerminalBridge,
-        normalizer: AppKitKeyEventNormalizer,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
-        onFocus: @escaping @MainActor (PaneID) -> Void,
-        onInput: @escaping @MainActor (PaneID, NormalizedKeyEvent) throws -> Void,
-        onPaste: @escaping @MainActor (PaneID, String) throws -> Void,
-        onResize: @escaping @MainActor (PaneID, Int, Int) throws -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
         self.paneStack = paneStack
         self.onSelectPaneTab = onSelectPaneTab
         self.onCreatePaneTab = onCreatePaneTab
         self.onClosePaneTab = onClosePaneTab
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
-        self.terminalPaneView = TerminalPaneView(
-            pane: activePane,
+        self.terminalPaneView = bridge.makeHostedPaneView(
+            for: activePane,
             isFocused: activePane.id == focusedPaneID,
-            bridge: bridge,
-            normalizer: normalizer,
-            onFocus: onFocus,
-            onInput: onInput,
-            onPaste: onPaste,
-            onResize: onResize
+            onFocus: onFocus
         )
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -342,187 +322,7 @@ final class PaneStackView: NSView {
         try? onClosePaneTab(paneStack.focusedPaneID)
     }
 
-    var focusedPaneView: TerminalPaneView {
+    var focusedPaneView: HostedTerminalPaneView {
         terminalPaneView
-    }
-}
-
-@MainActor
-final class TerminalPaneView: NSView {
-    private struct MeasuredTerminalSize: Equatable {
-        let columns: Int
-        let rows: Int
-    }
-
-    private let textView = TerminalTextView()
-    private let scrollView = NSScrollView()
-    private let paneID: PaneID
-    private var observerToken: UUID?
-    private let bridge: GhosttyTerminalBridge
-    private let isFocusedPane: Bool
-    private var lastMeasuredSize: MeasuredTerminalSize?
-    private var onResize: ((PaneID, Int, Int) throws -> Void)?
-
-    init(
-        pane: Pane,
-        isFocused: Bool,
-        bridge: GhosttyTerminalBridge,
-        normalizer: AppKitKeyEventNormalizer,
-        onFocus: @escaping @MainActor (PaneID) -> Void,
-        onInput: @escaping @MainActor (PaneID, NormalizedKeyEvent) throws -> Void,
-        onPaste: @escaping @MainActor (PaneID, String) throws -> Void,
-        onResize: @escaping @MainActor (PaneID, Int, Int) throws -> Void
-    ) {
-        self.paneID = pane.id
-        self.bridge = bridge
-        self.isFocusedPane = isFocused
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = isFocused ? 2 : 1
-        layer?.borderColor = (isFocused ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .noBorder
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.drawsBackground = false
-
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        textView.backgroundColor = .clear
-        textView.normalizer = normalizer
-        textView.paneID = pane.id
-        textView.onFocus = onFocus
-        textView.onInput = onInput
-        textView.onPaste = onPaste
-        textView.isFocusedPane = isFocused
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        scrollView.documentView = textView
-
-        addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
-        ])
-
-        observerToken = bridge.addObserver(for: pane.id) { [weak textView] snapshot in
-            DispatchQueue.main.async {
-                textView?.string = snapshot.renderedText
-                textView?.scrollToEndOfDocument(nil)
-            }
-        }
-
-        self.onResize = onResize
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    deinit {
-        if let observerToken {
-            bridge.removeObserver(for: paneID, token: observerToken)
-        }
-    }
-
-    override func layout() {
-        super.layout()
-
-        textView.frame = scrollView.contentView.bounds
-
-        let terminalSize = measuredTerminalSize()
-        guard terminalSize != lastMeasuredSize else {
-            return
-        }
-
-        lastMeasuredSize = terminalSize
-        try? onResize?(paneID, terminalSize.columns, terminalSize.rows)
-    }
-
-    private func measuredTerminalSize() -> MeasuredTerminalSize {
-        let font = textView.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
-        let glyphSize = ("W" as NSString).size(withAttributes: [.font: font])
-        let contentSize = scrollView.contentView.bounds.size
-        let columns = max(20, Int(contentSize.width / max(glyphSize.width, 1)))
-        let rows = max(5, Int(contentSize.height / max(glyphSize.height, 1)))
-        return MeasuredTerminalSize(columns: columns, rows: rows)
-    }
-
-    var focusTarget: NSView {
-        textView
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(textView)
-        if isFocusedPane == false {
-            textView.onFocus?(paneID)
-        }
-        super.mouseDown(with: event)
-    }
-}
-
-@MainActor
-final class TerminalTextView: NSTextView {
-    var normalizer = AppKitKeyEventNormalizer()
-    var paneID = PaneID(rawValue: "unbound")
-    var onFocus: (@MainActor (PaneID) -> Void)?
-    var onInput: (@MainActor (PaneID, NormalizedKeyEvent) throws -> Void)?
-    var onPaste: (@MainActor (PaneID, String) throws -> Void)?
-    var isFocusedPane = false
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func becomeFirstResponder() -> Bool {
-        return super.becomeFirstResponder()
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        if isFocusedPane == false {
-            onFocus?(paneID)
-        }
-        super.mouseDown(with: event)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let normalizedEvent = normalizer.normalize(event)
-        if normalizedEvent.route == .shortcut {
-            super.keyDown(with: event)
-            return
-        }
-
-        do {
-            try onInput?(paneID, normalizedEvent)
-        } catch {
-            NSSound.beep()
-        }
-    }
-
-    override func paste(_ sender: Any?) {
-        guard let text = NSPasteboard.general.string(forType: .string) else {
-            super.paste(sender)
-            return
-        }
-
-        do {
-            try onPaste?(paneID, text)
-        } catch {
-            NSSound.beep()
-        }
     }
 }

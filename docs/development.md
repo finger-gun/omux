@@ -1,6 +1,6 @@
 # OpenMUX Development Notes
 
-OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation, workspace shell, interactive-terminal, and pane-tab-stacks slices described by the applied OpenSpec changes.
+OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation, workspace shell, interactive-terminal, pane-tab-stacks, and bridge-owned surface-hosting slices described by the applied OpenSpec changes.
 
 ## Module boundaries
 
@@ -26,7 +26,7 @@ OpenMUX currently uses a Swift Package Manager workspace to establish the initia
 - Pinned ref marker: `Vendor/ghostty/PINNED_REF`
 - Build handoff script: `Scripts/build-ghostty.sh`
 
-The current bridge uses a bridge-owned PTY-backed interactive runtime as the fallback path until the vendored Ghostty snapshot is checked in and wired through `CGhostty`. Future changes should improve rendering fidelity through the bridge without leaking Ghostty internals into higher-level modules.
+The current bridge now owns both pane/session lifecycle and the hosted terminal pane view abstraction. When a real libghostty-hosted native surface is unavailable, the bridge falls back to its PTY-backed interactive runtime and text-rendering host internally, so the AppKit shell still embeds a bridge-provided pane view instead of rendering terminal content itself.
 
 ## Commands
 
@@ -53,6 +53,7 @@ The current shell baseline adds:
 - persistent pane-owned interactive shell sessions
 - top-level workspace tabs plus split-right and split-down panes in the native shell
 - pane stacks at each split leaf, with local pane tabs inside a region
+- bridge-provided hosted terminal pane views embedded inside AppKit pane stacks
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions
 - pane resize propagation into the live terminal runtime
@@ -68,11 +69,21 @@ The current layout tree is now:
 
 This keeps shell structure in `OmuxCore` and `OmuxAppShell` while the terminal bridge still only owns pane/session surfaces. Splitting acts on the active local pane tab in the focused pane stack; creating a pane-local tab stays inside the current split region.
 
+## Hosted pane path
+
+The current pane-hosting split is:
+
+- `OmuxAppShell` owns workspace layout, pane-stack chrome, and focus state
+- `OmuxTerminalBridge` owns pane surfaces, attached sessions, resize propagation, and hosted terminal pane views
+- the bridge chooses between a native libghostty-backed surface host and its internal fallback host
+
+This keeps the shell AppKit-first while preserving one narrow terminal-engine seam.
+
 ## Current limitations
 
 The current shell is usable, but it is still intentionally narrow:
 
-- pane rendering is still text-view-backed rather than full libghostty rendering
+- the bridge-owned fallback host is still text-rendered when a real libghostty surface host is unavailable
 - ANSI/control-sequence handling is lightweight and aimed at normal shell prompts, not full-screen TUIs
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
 - close-last-local-tab is intentionally rejected for now instead of collapsing a split region
@@ -80,7 +91,7 @@ The current shell is usable, but it is still intentionally narrow:
 
 ## Guidance for future changes
 
-1. Keep terminal lifecycle, PTY ownership, input encoding, and future libghostty wiring inside `OmuxTerminalBridge`.
+1. Keep terminal lifecycle, hosted pane views, PTY ownership, input encoding, and future libghostty wiring inside `OmuxTerminalBridge`.
 2. Treat direct pane input as the primary interaction model; UI chrome should enhance it, not replace it.
 3. Keep pane-stack behavior in shared workspace actions so the AppKit shell, JSON-RPC, and `omux` stay aligned.
 4. Preserve international keyboard correctness whenever input handling changes.

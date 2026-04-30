@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import OmuxCore
@@ -18,6 +19,83 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         try bridge.teardown(paneID: pane.id)
         XCTAssertNil(bridge.surface(for: pane.id))
+    }
+
+    @MainActor
+    func testBridgeCreatesHostedPaneViewForAttachedPane() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        hostedView.frame = NSRect(x: 0, y: 0, width: 800, height: 480)
+        hostedView.layoutSubtreeIfNeeded()
+
+        let snapshot = try XCTUnwrap(bridge.snapshot(for: pane.id))
+        XCTAssertGreaterThan(snapshot.columns, 20)
+        XCTAssertGreaterThan(snapshot.rows, 5)
+    }
+
+    @MainActor
+    func testHostedPaneViewRoutesKeyboardAndPasteToLiveSession() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let focusTarget = try XCTUnwrap(hostedView.focusTarget as? NSTextView)
+
+        let expectation = expectation(description: "hosted pane input reaches live session")
+        expectation.assertForOverFulfill = false
+        let token = bridge.addObserver(for: pane.id) { snapshot in
+            if snapshot.renderedText.contains("hosted\n") {
+                expectation.fulfill()
+            }
+        }
+
+        for (text, keyCode) in [("e", UInt16(14)), ("c", UInt16(8)), ("h", UInt16(4)), ("o", UInt16(31)), (" ", UInt16(49)), ("h", UInt16(4)), ("o", UInt16(31)), ("s", UInt16(1)), ("t", UInt16(17)), ("e", UInt16(14)), ("d", UInt16(2))] {
+            let event = try XCTUnwrap(
+                NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: text,
+                    charactersIgnoringModifiers: text,
+                    isARepeat: false,
+                    keyCode: keyCode
+                )
+            )
+            focusTarget.keyDown(with: event)
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(" && printf '\\n'", forType: .string)
+        focusTarget.paste(nil)
+
+        let returnEvent = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\r",
+                charactersIgnoringModifiers: "\r",
+                isARepeat: false,
+                keyCode: 36
+            )
+        )
+        focusTarget.keyDown(with: returnEvent)
+
+        waitForExpectations(timeout: 3)
+        bridge.removeObserver(for: pane.id, token: token)
     }
 
     func testOnlyTerminalBridgeMayMentionCGhostty() throws {

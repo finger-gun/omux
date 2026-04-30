@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OmuxCore
 
@@ -31,6 +32,10 @@ public protocol GhosttyRuntime {
     func createSurface(for paneID: PaneID) throws -> String
     func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws
     func destroySurface(runtimeSurfaceID: String) throws
+    @MainActor func makeHostedSurfaceView(
+        for paneID: PaneID,
+        runtimeSurfaceID: String
+    ) -> NSView?
 }
 
 public final class UnavailableGhosttyRuntime: GhosttyRuntime {
@@ -47,6 +52,16 @@ public final class UnavailableGhosttyRuntime: GhosttyRuntime {
 
     public func destroySurface(runtimeSurfaceID: String) throws {
         _ = runtimeSurfaceID
+    }
+
+    @MainActor
+    public func makeHostedSurfaceView(
+        for paneID: PaneID,
+        runtimeSurfaceID: String
+    ) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return nil
     }
 }
 
@@ -65,6 +80,16 @@ public final class CGhosttyRuntime: GhosttyRuntime {
 
     public func destroySurface(runtimeSurfaceID: String) throws {
         _ = runtimeSurfaceID
+    }
+
+    @MainActor
+    public func makeHostedSurfaceView(
+        for paneID: PaneID,
+        runtimeSurfaceID: String
+    ) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return nil
     }
 }
 #endif
@@ -145,14 +170,28 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     public init(
         dependency: GhosttyPinnedDependency = .foundationDefault(),
-        runtime: any GhosttyRuntime = UnavailableGhosttyRuntime()
+        runtime: (any GhosttyRuntime)? = nil
     ) {
         self.dependency = dependency
-        self.runtime = runtime
+        self.runtime = runtime ?? defaultGhosttyRuntime()
     }
 
     public var pinnedDependency: GhosttyPinnedDependency {
         dependency
+    }
+
+    @MainActor
+    public func makeHostedPaneView(
+        for pane: Pane,
+        isFocused: Bool,
+        onFocus: @escaping @MainActor (PaneID) -> Void
+    ) -> HostedTerminalPaneView {
+        HostedTerminalPaneView(
+            pane: pane,
+            bridge: self,
+            isFocused: isFocused,
+            onFocus: onFocus
+        )
     }
 
     @discardableResult
@@ -434,4 +473,37 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             return nil
         }
     }
+
+    @MainActor
+    func makeHostedSurfaceContentHost(
+        for pane: Pane,
+        isFocused: Bool,
+        onFocus: @escaping @MainActor (PaneID) -> Void
+    ) -> any TerminalSurfaceContentHosting {
+        if let surface = surface(for: pane.id),
+           let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
+            return RuntimeTerminalSurfaceContentHost(
+                pane: pane,
+                runtimeView: runtimeView,
+                bridge: self,
+                isFocused: isFocused,
+                onFocus: onFocus
+            )
+        }
+
+        return FallbackTerminalSurfaceContentHost(
+            pane: pane,
+            bridge: self,
+            isFocused: isFocused,
+            onFocus: onFocus
+        )
+    }
+}
+
+private func defaultGhosttyRuntime() -> any GhosttyRuntime {
+#if canImport(CGhostty)
+    return CGhosttyRuntime()
+#else
+    return UnavailableGhosttyRuntime()
+#endif
 }

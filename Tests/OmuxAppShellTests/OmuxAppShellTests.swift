@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import OmuxAppShell
 @testable import OmuxCore
@@ -130,5 +131,34 @@ final class OmuxAppShellTests: XCTestCase {
 
         waitForExpectations(timeout: 3)
         bridge.removeObserver(for: paneID, token: token)
+    }
+
+    @MainActor
+    func testWorkspaceWindowHostsBridgeProvidedTerminalPaneView() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        XCTAssertNotNil(findHostedTerminalPaneView(in: rootView))
+    }
+
+    @MainActor
+    private func findHostedTerminalPaneView(in view: NSView) -> HostedTerminalPaneView? {
+        if let hosted = view as? HostedTerminalPaneView {
+            return hosted
+        }
+
+        for subview in view.subviews {
+            if let hosted = findHostedTerminalPaneView(in: subview) {
+                return hosted
+            }
+        }
+
+        return nil
     }
 }
