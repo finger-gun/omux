@@ -24,7 +24,7 @@ OpenMUX should be:
 Read these first before making architectural decisions:
 
 - [`docs/manifest.md`](./docs/manifest.md)
-- [`docs/open-mux-foundation-reserach.md`](./docs/open-mux-foundation-reserach.md)
+- [`docs/research/**`](./docs/research/)
 
 ## Current intended architecture
 
