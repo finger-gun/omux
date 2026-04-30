@@ -27,6 +27,7 @@ It is intentionally directional rather than date-driven.
 | ⏳ Next | Notifications and workflow automation | Build on the control plane and hooks with more useful notifications, triggers, and event-driven workflows. |
 | ⏳ Next | Plugin model expansion | Move from hook-only seams toward a stronger external plugin/process model built on the same control surface. |
 | ⏳ Next | Terminal fidelity and TUI robustness | Improve ANSI/control-sequence handling and runtime behavior for heavier full-screen terminal applications. |
+| ⏳ Next | Ghostty action dispatch | Honor selected libghostty actions (PWD, COMMAND_FINISHED, SET_TITLE, OPEN_URL, RING_BELL, DESKTOP_NOTIFICATION, PROGRESS_REPORT, child-exit, renderer-health) and route them through hooks, JSON-RPC events, and pane chrome. Today the bridge rejects every action. See [`docs/research/ghostty-action-dispatch.md`](./research/ghostty-action-dispatch.md). |
 | ⏳ Later | Release and packaging flow | Add a more complete distribution story for shipping OpenMUX as a polished macOS app. |
 
 ## Near-term focus
