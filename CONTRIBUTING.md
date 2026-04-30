@@ -61,6 +61,23 @@ If a proposed change moves the project away from those principles, open an issue
 
 ---
 
+## Keyboard-sensitive changes
+
+Keyboard correctness is a blocker-level product concern in OpenMUX.
+
+When a change touches terminal input, keybindings, clipboard routing, pointer selection, terminal encoding, or IME/composition behavior:
+
+* Preserve Ghostty-compatible `macos-option-as-alt` semantics for `false`, `true`, `left`, `right`, and unset/default if OpenMUX owns the user-facing setting.
+* Do not hardcode layout-specific Option mappings; layout text must come from AppKit for the active keyboard layout.
+* Add or update automated tests for sided modifiers, composition/preedit behavior, and command routing when behavior changes.
+* Use this manual verification matrix when practical:
+  * US layout
+  * Swedish/Nordic ISO
+  * At least one additional EU layout when available
+  * At least one IME workflow covering preedit, candidate placement, commit, and cancellation
+
+---
+
 ## Questions
 
 If you are unsure about an approach, open an issue or a draft pull request early.

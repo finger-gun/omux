@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import OmuxCore
 
@@ -58,6 +59,51 @@ final class OmuxCoreTests: XCTestCase {
 
         XCTAssertEqual(event.route, .terminal)
         XCTAssertTrue(event.modifiers.contains(.leftControl))
+    }
+
+    func testAppKitEventPreservesRightOptionIdentity() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option, NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERALTKEYMASK))],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "@",
+                charactersIgnoringModifiers: "2",
+                isARepeat: false,
+                keyCode: 19
+            )
+        )
+
+        let modifiers = KeyModifiers(appKitEvent: event)
+
+        XCTAssertTrue(modifiers.contains(.rightOption))
+        XCTAssertFalse(modifiers.contains(.leftOption))
+        XCTAssertEqual(KeyEventPhase.appKitPhase(for: event), .keyDown)
+    }
+
+    func testAppKitFlagsChangedPreservesReleasedRightOptionIdentity() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .flagsChanged,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: 0x3D
+            )
+        )
+
+        let modifiers = KeyModifiers(appKitEvent: event)
+
+        XCTAssertTrue(modifiers.contains(.rightOption))
+        XCTAssertEqual(KeyEventPhase.appKitPhase(for: event), .keyUp)
     }
 
     func testPaneStacksTrackFocusedLocalTabIndependently() {

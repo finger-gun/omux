@@ -16,6 +16,7 @@ name = "monokai-soda"
 # font_family = "Berkeley Mono"
 # font_size = 13
 # scrollback_lines = 100000
+# option_as_alt = "right"
 
 [ghostty]
 # "copy-on-select" = false
@@ -69,6 +70,42 @@ OpenMUX currently ships:
 - `one-dark`
 - `solarized-dark`
 - `solarized-light`
+
+## `[terminal]` settings
+
+OpenMUX currently models these terminal settings directly:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `font_family` | string | Preferred terminal font family. |
+| `font_size` | integer | Terminal font size in points. |
+| `scrollback_lines` | integer | Maximum scrollback preserved by the terminal. |
+| `option_as_alt` | `false` \| `true` \| `"left"` \| `"right"` | OpenMUX-owned macOS Option-key behavior, compiled to Ghostty-compatible `macos-option-as-alt` semantics. |
+
+### `terminal.option_as_alt`
+
+`option_as_alt` controls which macOS Option key should behave like terminal Alt/Meta input.
+
+Accepted values:
+
+- `false` - keep Option text-producing unless the key chord produces no printable text
+- `true` - treat both Option keys as Alt/Meta
+- `"left"` - treat Left Option as Alt/Meta and keep Right Option text-producing
+- `"right"` - treat Right Option as Alt/Meta and keep Left Option text-producing
+- unset - use the default behavior
+
+Example:
+
+```toml
+[terminal]
+option_as_alt = "right"
+```
+
+Notes:
+
+1. OpenMUX owns the user-facing setting, but the behavior is intentionally Ghostty-compatible.
+2. OpenMUX does not hardcode Swedish, German, US, or other layout-specific Option character maps; text comes from AppKit for the active keyboard layout.
+3. For manual verification of international layouts and IME workflows, see the contributor guidance in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## `[ghostty]` pass-through
 

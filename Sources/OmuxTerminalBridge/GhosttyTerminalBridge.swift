@@ -376,10 +376,6 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 
     public func handle(_ event: NormalizedKeyEvent, inPane paneID: PaneID) throws {
-        guard event.phase == .keyDown else {
-            return
-        }
-
         guard event.route != .shortcut else {
             return
         }
@@ -391,6 +387,10 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         if let state, state.runtimeOwned {
             try runtime.handle(event, on: state.runtimeSurfaceID)
             publishSnapshot(for: paneID)
+            return
+        }
+
+        guard event.phase == .keyDown else {
             return
         }
 

@@ -11,6 +11,16 @@ protocol TerminalSurfaceContentHosting: AnyObject {
     func measuredTerminalSize(in size: CGSize) -> TerminalSize
 }
 
+@MainActor
+protocol RuntimeTerminalInteractionConfiguring: AnyObject {
+    func configureHostedPane(
+        paneID: PaneID,
+        isFocused: Bool,
+        onFocus: @escaping @MainActor (PaneID) -> Void
+    )
+    func updateHostedPaneFocus(_ isFocused: Bool)
+}
+
 public struct TerminalThemePalette: @unchecked Sendable {
     public let backgroundColor: NSColor
     public let foregroundColor: NSColor
@@ -143,6 +153,7 @@ public final class HostedTerminalPaneView: NSView {
 final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
     private let paneID: PaneID
     private let bridge: GhosttyTerminalBridge
+    private let runtimeView: NSView
     let rootView: NSView
     let focusTarget: NSView
 
@@ -156,25 +167,21 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
     ) {
         self.paneID = pane.id
         self.bridge = bridge
-        let inputProxy = FallbackTerminalTextView(
+        self.runtimeView = runtimeView
+        self.rootView = RuntimeTerminalSurfaceContainer(
+            runtimeView: runtimeView,
+            themePalette: themePalette
+        )
+        self.focusTarget = runtimeView
+        (runtimeView as? any RuntimeTerminalInteractionConfiguring)?.configureHostedPane(
             paneID: pane.id,
-            bridge: bridge,
             isFocused: isFocused,
             onFocus: onFocus
         )
-        inputProxy.drawsBackground = false
-        inputProxy.alphaValue = 0.01
-        inputProxy.insertionPointColor = .clear
-        self.rootView = RuntimeTerminalSurfaceContainer(
-            runtimeView: runtimeView,
-            inputProxy: inputProxy,
-            themePalette: themePalette
-        )
-        self.focusTarget = inputProxy
     }
 
     func setFocused(_ isFocused: Bool) {
-        (focusTarget as? FallbackTerminalTextView)?.isFocusedPane = isFocused
+        (runtimeView as? any RuntimeTerminalInteractionConfiguring)?.updateHostedPaneFocus(isFocused)
         bridge.setHostedSurfaceFocused(paneID: paneID, isFocused: isFocused)
     }
 
@@ -187,13 +194,12 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
 
     func apply(themePalette: TerminalThemePalette) {
         (rootView as? RuntimeTerminalSurfaceContainer)?.apply(themePalette: themePalette)
-        (focusTarget as? FallbackTerminalTextView)?.apply(themePalette: themePalette)
     }
 }
 
 @MainActor
 private final class RuntimeTerminalSurfaceContainer: NSView {
-    init(runtimeView: NSView, inputProxy: FallbackTerminalTextView, themePalette: TerminalThemePalette) {
+    init(runtimeView: NSView, themePalette: TerminalThemePalette) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -201,19 +207,13 @@ private final class RuntimeTerminalSurfaceContainer: NSView {
         layer?.backgroundColor = themePalette.backgroundColor.cgColor
 
         runtimeView.translatesAutoresizingMaskIntoConstraints = false
-        inputProxy.translatesAutoresizingMaskIntoConstraints = false
         addSubview(runtimeView)
-        addSubview(inputProxy)
 
         NSLayoutConstraint.activate([
             runtimeView.topAnchor.constraint(equalTo: topAnchor),
             runtimeView.leadingAnchor.constraint(equalTo: leadingAnchor),
             runtimeView.trailingAnchor.constraint(equalTo: trailingAnchor),
             runtimeView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            inputProxy.topAnchor.constraint(equalTo: topAnchor),
-            inputProxy.leadingAnchor.constraint(equalTo: leadingAnchor),
-            inputProxy.trailingAnchor.constraint(equalTo: trailingAnchor),
-            inputProxy.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -402,7 +402,7 @@ private final class FallbackTerminalTextView: NSTextView {
     }
 }
 
-private struct BridgeAppKitKeyEventNormalizer {
+struct BridgeAppKitKeyEventNormalizer {
     private let normalizer: any KeyEventNormalizing
 
     init(normalizer: any KeyEventNormalizing = DefaultKeyEventNormalizer()) {
@@ -415,24 +415,11 @@ private struct BridgeAppKitKeyEventNormalizer {
                 keyCode: event.keyCode,
                 characters: event.characters ?? "",
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-                modifiers: KeyModifiers(event.modifierFlags),
-                phase: event.type == .keyUp ? .keyUp : .keyDown,
+                modifiers: KeyModifiers(appKitEvent: event),
+                phase: .appKitPhase(for: event),
                 isRepeat: event.isARepeat,
-                isComposing: event.characters?.isEmpty ?? true
+                isComposing: event.type == .keyDown && (event.characters?.isEmpty ?? true)
             )
         )
-    }
-}
-
-private extension KeyModifiers {
-    init(_ flags: NSEvent.ModifierFlags) {
-        var result: KeyModifiers = []
-        if flags.contains(.shift) { result.insert(.leftShift) }
-        if flags.contains(.control) { result.insert(.leftControl) }
-        if flags.contains(.option) { result.insert(.leftOption) }
-        if flags.contains(.command) { result.insert(.leftCommand) }
-        if flags.contains(.function) { result.insert(.function) }
-        if flags.contains(.capsLock) { result.insert(.capsLock) }
-        self = result
     }
 }

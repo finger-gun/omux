@@ -149,18 +149,41 @@ public struct OmuxConfigTheme: Equatable, Sendable {
 }
 
 public struct OmuxConfigTerminal: Equatable, Sendable {
+    public enum OptionAsAlt: Equatable, Sendable {
+        case disabled
+        case both
+        case left
+        case right
+
+        public var ghosttyValue: String {
+            switch self {
+            case .disabled:
+                return "false"
+            case .both:
+                return "true"
+            case .left:
+                return "left"
+            case .right:
+                return "right"
+            }
+        }
+    }
+
     public let fontFamily: String?
     public let fontSize: Int?
     public let scrollbackLines: Int?
+    public let optionAsAlt: OptionAsAlt?
 
     public init(
         fontFamily: String? = nil,
         fontSize: Int? = nil,
-        scrollbackLines: Int? = nil
+        scrollbackLines: Int? = nil,
+        optionAsAlt: OptionAsAlt? = nil
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.scrollbackLines = scrollbackLines
+        self.optionAsAlt = optionAsAlt
     }
 }
 
@@ -260,6 +283,7 @@ public enum OmuxConfigTemplate {
         # font_family = "Berkeley Mono"
         # font_size = 13
         # scrollback_lines = 100000
+        # option_as_alt = "right"
 
         [ghostty]
         # "copy-on-select" = false
@@ -704,10 +728,11 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let terminalAllowedKeys: Set<String> = ["font_family", "font_size", "scrollback_lines"]
+        let terminalAllowedKeys: Set<String> = ["font_family", "font_size", "scrollback_lines", "option_as_alt"]
         var fontFamily = config.terminal.fontFamily
         var fontSize = config.terminal.fontSize
         var scrollbackLines = config.terminal.scrollbackLines
+        var optionAsAlt = config.terminal.optionAsAlt
 
         for entry in document.entries(in: "terminal") {
             guard terminalAllowedKeys.contains(entry.key) else {
@@ -762,6 +787,27 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 scrollbackLines = value
+            case "option_as_alt":
+                switch entry.value {
+                case .bool(false):
+                    optionAsAlt = .disabled
+                case .bool(true):
+                    optionAsAlt = .both
+                case .string("left"):
+                    optionAsAlt = .left
+                case .string("right"):
+                    optionAsAlt = .right
+                default:
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.option_as_alt must be true, false, \"left\", or \"right\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
             default:
                 break
             }
@@ -777,7 +823,8 @@ public struct OmuxConfigLoader {
             terminal: OmuxConfigTerminal(
                 fontFamily: fontFamily,
                 fontSize: fontSize,
-                scrollbackLines: scrollbackLines
+                scrollbackLines: scrollbackLines,
+                optionAsAlt: optionAsAlt
             ),
             ghostty: ghosttyEntries,
             sourceURL: sourceURL

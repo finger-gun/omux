@@ -134,6 +134,12 @@ Automated tests should validate the adapter contract without depending on the ma
 
 Manual verification should supplement automated tests with a small physical-keyboard matrix. Swedish/Nordic ISO is a mandatory regression fixture because it motivated the change, but it is not the only supported layout. US and at least one additional EU layout should be included where contributors or CI hardware can provide them.
 
+Recommended manual release matrix:
+- US layout: direct punctuation, Command-C/V/A routing, and Option text when `macos-option-as-alt = false`.
+- Swedish/Nordic ISO: dead keys `¨`, `^`, `~`; direct text `å`, `ä`, `ö`; Left Option text such as `@`, `[`, `]`; and Right Option Alt/Meta behavior when `macos-option-as-alt = right`.
+- One additional EU layout when available: confirm OpenMUX preserves AppKit-reported Option text instead of hardcoded layout mappings.
+- One IME workflow: preedit start/update, candidate-window placement, single commit, and cancellation without stray terminal text.
+
 ## Open Questions
 
 - Should macOS selection clipboard remain unsupported for v1, or should it be mapped to a private pasteboard for compatibility with Ghostty's selection namespace?

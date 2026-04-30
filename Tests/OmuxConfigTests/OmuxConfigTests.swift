@@ -81,6 +81,53 @@ struct OmuxConfigTests {
         #expect(result.hasErrors)
         #expect(result.diagnostics.contains(where: { $0.message.contains("Unknown [terminal] key") }))
     }
+
+    @Test
+    func loadsOptionAsAltTerminalSetting() throws {
+        let cases: [(String, OmuxConfigTerminal.OptionAsAlt)] = [
+            ("false", .disabled),
+            ("true", .both),
+            ("\"left\"", .left),
+            ("\"right\"", .right),
+        ]
+
+        for (literal, expected) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [terminal]
+                option_as_alt = \(literal)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors == false)
+            #expect(result.config.terminal.optionAsAlt == expected)
+        }
+    }
+
+    @Test
+    func rejectsInvalidOptionAsAltTerminalSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [terminal]
+            option_as_alt = "upside-down"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains(where: { $0.message.contains("terminal.option_as_alt") }))
+    }
 }
 
 private func temporaryHome() throws -> URL {

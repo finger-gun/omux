@@ -86,6 +86,10 @@ OpenMUX SHALL include automated regression coverage for side-specific Option pre
 - **WHEN** release verification is performed for this behavior
 - **THEN** the verification matrix SHALL include Swedish/Nordic ISO, US, and at least one additional EU layout when available
 
+#### Scenario: IME workflow is part of release verification
+- **WHEN** release verification is performed for this behavior
+- **THEN** the verification matrix SHALL include at least one IME workflow covering preedit, candidate placement, commit, and cancellation
+
 ### Requirement: Command routing preserves terminal semantics
 Runtime-backed terminal panes SHALL route terminal-focused command shortcuts through AppKit responder commands and terminal runtime binding semantics rather than through generic text-view editing behavior.
 

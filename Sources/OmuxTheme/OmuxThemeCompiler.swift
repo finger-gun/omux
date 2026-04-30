@@ -187,6 +187,10 @@ public struct OmuxThemeCompiler {
             entries.append(("scrollback-limit", String(scrollbackLines)))
         }
 
+        if let optionAsAlt = config.terminal.optionAsAlt {
+            entries.append(("macos-option-as-alt", optionAsAlt.ghosttyValue))
+        }
+
         return entries
     }
 

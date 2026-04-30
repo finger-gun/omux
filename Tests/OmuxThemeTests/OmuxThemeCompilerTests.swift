@@ -48,6 +48,35 @@ struct OmuxThemeCompilerTests {
     }
 
     @Test
+    func compilerEmitsOwnedOptionAsAltSetting() {
+        let theme = makeTheme(name: "test")
+        let cases: [(OmuxConfigTerminal.OptionAsAlt?, String?)] = [
+            (nil, nil),
+            (.disabled, "false"),
+            (.both, "true"),
+            (.left, "left"),
+            (.right, "right"),
+        ]
+
+        for (value, expectedLiteral) in cases {
+            let config = OmuxConfig(
+                schema: 1,
+                theme: OmuxConfigTheme(name: "test"),
+                terminal: OmuxConfigTerminal(optionAsAlt: value),
+                ghostty: []
+            )
+
+            let output = OmuxThemeCompiler(buildVersion: "test-build").compile(theme: theme, config: config)
+
+            if let expectedLiteral {
+                #expect(output.contents.contains("macos-option-as-alt = \(expectedLiteral)"))
+            } else {
+                #expect(output.contents.contains("macos-option-as-alt") == false)
+            }
+        }
+    }
+
+    @Test
     func writeCreatesGeneratedFileWithHeader() throws {
         let directory = try temporaryDirectory()
         defer { cleanup(directory) }

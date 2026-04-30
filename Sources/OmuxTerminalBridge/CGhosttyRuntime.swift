@@ -15,7 +15,7 @@ enum CGhosttyRuntimeError: Error {
 }
 
 @MainActor
-private final class GhosttyHostedSurfaceView: NSView {
+private final class GhosttyHostedSurfaceView: RuntimeTerminalHostView {
     private weak var runtime: CGhosttyRuntime?
     private let runtimeSurfaceID: String
 
@@ -25,13 +25,99 @@ private final class GhosttyHostedSurfaceView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        normalizedKeyHandler = { [weak self] event in
+            guard let self else { return }
+            self.runtime?.handleHostedSurfaceKeyEvent(event, runtimeSurfaceID: self.runtimeSurfaceID)
+        }
+        committedTextHandler = { [weak self] text in
+            guard let self else { return }
+            self.runtime?.handleHostedSurfaceCommittedText(text, runtimeSurfaceID: self.runtimeSurfaceID)
+        }
+        accumulatedTextHandler = { [weak self] event, text in
+            guard let self else { return }
+            self.runtime?.handleHostedSurfaceAccumulatedText(
+                event,
+                text: text,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        preeditHandler = { [weak self] text in
+            guard let self else { return }
+            self.runtime?.setHostedSurfacePreedit(text, runtimeSurfaceID: self.runtimeSurfaceID)
+        }
+        imeRectProvider = { [weak self] in
+            guard let self else { return .zero }
+            return self.runtime?.hostedSurfaceIMERect(runtimeSurfaceID: self.runtimeSurfaceID) ?? .zero
+        }
+        translatedKeyEventProvider = { [weak self] event in
+            guard let self else { return event }
+            return self.runtime?.translatedHostedSurfaceKeyEvent(
+                for: event,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            ) ?? event
+        }
+        copyHandler = { [weak self] in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceBindingAction(
+                "copy_to_clipboard",
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        pasteHandler = { [weak self] in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceBindingAction(
+                "paste_from_clipboard",
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        selectAllHandler = { [weak self] in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceBindingAction(
+                "select_all",
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        mouseButtonHandler = { [weak self] state, buttonNumber, modifiers in
+            guard let self else { return false }
+            return self.runtime?.performHostedSurfaceMouseButton(
+                state,
+                buttonNumber: buttonNumber,
+                modifiers: modifiers,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            ) ?? false
+        }
+        mousePositionHandler = { [weak self] point, modifiers in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceMousePosition(
+                point,
+                modifiers: modifiers,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        mouseScrollHandler = { [weak self] deltaX, deltaY, precise, momentum in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceMouseScroll(
+                deltaX: deltaX,
+                deltaY: deltaY,
+                precise: precise,
+                momentum: momentum,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
+        mousePressureHandler = { [weak self] stage, pressure in
+            guard let self else { return }
+            self.runtime?.performHostedSurfaceMousePressure(
+                stage: stage,
+                pressure: pressure,
+                runtimeSurfaceID: self.runtimeSurfaceID
+            )
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
     }
-
     override func layout() {
         super.layout()
         runtime?.syncHostedSurfaceMetrics(runtimeSurfaceID: runtimeSurfaceID, view: self)
@@ -95,9 +181,22 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                     owner.scheduleTick()
                 },
                 action_cb: { _, _, _ in false },
-                read_clipboard_cb: { _, _, _ in false },
+                read_clipboard_cb: { userdata, location, state in
+                    guard let userdata else { return false }
+                    let owner = Unmanaged<CGhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
+                    return owner.readClipboard(for: location, state: state)
+                },
                 confirm_read_clipboard_cb: { _, _, _, _ in },
-                write_clipboard_cb: { _, _, _, _, _ in },
+                write_clipboard_cb: { userdata, location, content, len, confirm in
+                    guard let userdata else { return }
+                    let owner = Unmanaged<CGhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
+                    owner.writeClipboard(
+                        for: location,
+                        content: content,
+                        len: len,
+                        confirm: confirm
+                    )
+                },
                 close_surface_cb: nil
             )
 
@@ -119,6 +218,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private let tickLock = NSLock()
     private var appState: AppState?
     private var surfaces: [String: SurfaceState] = [:]
+    private var focusedRuntimeSurfaceID: String?
     private var tickScheduled = false
     private var compiledConfigPath: URL?
 
@@ -172,7 +272,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         var config = ghostty_surface_config_new()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(state.hostView).toOpaque()
-        config.userdata = nil
+        config.userdata = Unmanaged.passUnretained(state.hostView).toOpaque()
         config.scale_factor = scale
         config.font_size = 12
         config.working_directory = UnsafePointer(state.retainCString(session.workingDirectory))
@@ -252,31 +352,273 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
         }
 
+        let action: ghostty_input_action_e
+        switch event.phase {
+        case .keyDown:
+            action = event.isRepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
+        case .keyUp:
+            action = GHOSTTY_ACTION_RELEASE
+        }
+
         var keyEvent = ghostty_input_key_s(
-            action: event.isRepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
+            action: action,
             mods: ghosttyModifiers(from: event.modifiers),
-            consumed_mods: ghosttyModifiers(from: event.modifiers),
+            consumed_mods: ghosttyConsumedModifiers(
+                surface: surface,
+                originalModifiers: event.modifiers
+            ),
             keycode: UInt32(event.keyCode ?? 0),
             text: nil,
             unshifted_codepoint: event.key.unicodeScalars.first?.value ?? 0,
             composing: event.route == .composition
         )
 
-        let consumed: Bool
-        if let text = event.text, text.isEmpty == false {
-            consumed = text.withCString { ptr in
+        if let text = sanitizedKeyEventText(event.text) {
+            _ = text.withCString { ptr in
                 keyEvent.text = ptr
                 return ghostty_surface_key(surface, keyEvent)
             }
         } else {
-            consumed = ghostty_surface_key(surface, keyEvent)
+            _ = ghostty_surface_key(surface, keyEvent)
         }
 
-        if consumed == false, let text = event.text, text.isEmpty == false {
+        scheduleTick()
+    }
+
+    @MainActor
+    fileprivate func handleHostedSurfaceKeyEvent(
+        _ event: NormalizedKeyEvent,
+        runtimeSurfaceID: String
+    ) {
+        do {
+            try handle(event, on: runtimeSurfaceID)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    @MainActor
+    fileprivate func handleHostedSurfaceCommittedText(
+        _ text: String,
+        runtimeSurfaceID: String
+    ) {
+        do {
             try send(text: text, to: runtimeSurfaceID)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    @MainActor
+    fileprivate func handleHostedSurfaceAccumulatedText(
+        _ event: NormalizedKeyEvent,
+        text: String,
+        runtimeSurfaceID: String
+    ) {
+        var accumulatedEvent = event
+        accumulatedEvent.text = text
+        accumulatedEvent.route = .terminal
+        do {
+            try handle(accumulatedEvent, on: runtimeSurfaceID)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    @MainActor
+    fileprivate func setHostedSurfacePreedit(
+        _ text: String?,
+        runtimeSurfaceID: String
+    ) {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
             return
         }
 
+        if let text, text.isEmpty == false {
+            text.withCString { ptr in
+                ghostty_surface_preedit(surface, ptr, UInt(text.utf8.count))
+            }
+        } else {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
+        scheduleTick()
+    }
+
+    @MainActor
+    fileprivate func hostedSurfaceIMERect(runtimeSurfaceID: String) -> NSRect {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return .zero
+        }
+
+        var x: Double = 0
+        var y: Double = 0
+        var width: Double = 0
+        var height: Double = 0
+        ghostty_surface_ime_point(surface, &x, &y, &width, &height)
+
+        let view = state.hostView
+        let viewRect = NSRect(
+            x: x,
+            y: view.frame.size.height - y,
+            width: width,
+            height: max(height, 0)
+        )
+        let windowRect = view.convert(viewRect, to: nil)
+        guard let window = view.window else {
+            return windowRect
+        }
+        return window.convertToScreen(windowRect)
+    }
+
+    @MainActor
+    fileprivate func translatedHostedSurfaceKeyEvent(
+        for event: NSEvent,
+        runtimeSurfaceID: String
+    ) -> NSEvent {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return event
+        }
+
+        let translatedGhosttyMods = appKitModifierFlags(
+            from: ghostty_surface_key_translation_mods(
+                surface,
+                ghosttyModifiers(from: KeyModifiers(appKitEvent: event))
+            )
+        )
+
+        var translationMods = event.modifierFlags
+        for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
+            if translatedGhosttyMods.contains(flag) {
+                translationMods.insert(flag)
+            } else {
+                translationMods.remove(flag)
+            }
+        }
+
+        guard translationMods != event.modifierFlags else {
+            return event
+        }
+
+        return NSEvent.keyEvent(
+            with: event.type,
+            location: event.locationInWindow,
+            modifierFlags: translationMods,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: event.characters(byApplyingModifiers: translationMods) ?? "",
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        ) ?? event
+    }
+
+    @MainActor
+    fileprivate func performHostedSurfaceBindingAction(
+        _ action: String,
+        runtimeSurfaceID: String
+    ) {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            NSSound.beep()
+            return
+        }
+
+        let handled = action.withCString { ptr in
+            ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+        }
+        if handled == false {
+            NSSound.beep()
+            return
+        }
+        scheduleTick()
+    }
+
+    @MainActor
+    fileprivate func performHostedSurfaceMouseButton(
+        _ state: ghostty_input_mouse_state_e,
+        buttonNumber: Int,
+        modifiers: KeyModifiers,
+        runtimeSurfaceID: String
+    ) -> Bool {
+        guard let stateRef = try? surfaceState(for: runtimeSurfaceID),
+              let surface = stateRef.surface
+        else {
+            NSSound.beep()
+            return false
+        }
+
+        let handled = ghostty_surface_mouse_button(
+            surface,
+            state,
+            ghosttyMouseButton(for: buttonNumber),
+            ghosttyModifiers(from: modifiers)
+        )
+        scheduleTick()
+        return handled
+    }
+
+    @MainActor
+    fileprivate func performHostedSurfaceMousePosition(
+        _ point: CGPoint?,
+        modifiers: KeyModifiers,
+        runtimeSurfaceID: String
+    ) {
+        guard let stateRef = try? surfaceState(for: runtimeSurfaceID),
+              let surface = stateRef.surface
+        else {
+            return
+        }
+
+        let runtimePoint = runtimeMousePoint(for: point, in: stateRef.hostView)
+        ghostty_surface_mouse_pos(
+            surface,
+            runtimePoint.x,
+            runtimePoint.y,
+            ghosttyModifiers(from: modifiers)
+        )
+        scheduleTick()
+    }
+
+    @MainActor
+    fileprivate func performHostedSurfaceMouseScroll(
+        deltaX: Double,
+        deltaY: Double,
+        precise: Bool,
+        momentum: NSEvent.Phase,
+        runtimeSurfaceID: String
+    ) {
+        guard let stateRef = try? surfaceState(for: runtimeSurfaceID),
+              let surface = stateRef.surface
+        else {
+            return
+        }
+
+        let mods = scrollMods(precise: precise, momentum: momentum)
+        ghostty_surface_mouse_scroll(surface, deltaX, deltaY, mods)
+        scheduleTick()
+    }
+
+    @MainActor
+    fileprivate func performHostedSurfaceMousePressure(
+        stage: Int,
+        pressure: Double,
+        runtimeSurfaceID: String
+    ) {
+        guard let stateRef = try? surfaceState(for: runtimeSurfaceID),
+              let surface = stateRef.surface
+        else {
+            return
+        }
+
+        ghostty_surface_mouse_pressure(surface, UInt32(max(stage, 0)), pressure)
         scheduleTick()
     }
 
@@ -314,6 +656,13 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 ghostty_app_set_focus(app, focused)
             }
         }
+        lock.lock()
+        if focused {
+            focusedRuntimeSurfaceID = runtimeSurfaceID
+        } else if focusedRuntimeSurfaceID == runtimeSurfaceID {
+            focusedRuntimeSurfaceID = nil
+        }
+        lock.unlock()
         scheduleTick()
     }
 
@@ -432,23 +781,203 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private func ghosttyModifiers(from modifiers: KeyModifiers) -> ghostty_input_mods_e {
         var rawValue = UInt32(GHOSTTY_MODS_NONE.rawValue)
 
-        if modifiers.contains(.leftShift) { rawValue |= UInt32(GHOSTTY_MODS_SHIFT.rawValue) }
+        if modifiers.contains(.leftShift) || modifiers.contains(.rightShift) {
+            rawValue |= UInt32(GHOSTTY_MODS_SHIFT.rawValue)
+        }
         if modifiers.contains(.rightShift) { rawValue |= UInt32(GHOSTTY_MODS_SHIFT_RIGHT.rawValue) }
-        if modifiers.contains(.leftControl) { rawValue |= UInt32(GHOSTTY_MODS_CTRL.rawValue) }
+
+        if modifiers.contains(.leftControl) || modifiers.contains(.rightControl) {
+            rawValue |= UInt32(GHOSTTY_MODS_CTRL.rawValue)
+        }
         if modifiers.contains(.rightControl) { rawValue |= UInt32(GHOSTTY_MODS_CTRL_RIGHT.rawValue) }
-        if modifiers.contains(.leftOption) { rawValue |= UInt32(GHOSTTY_MODS_ALT.rawValue) }
+
+        if modifiers.contains(.leftOption) || modifiers.contains(.rightOption) {
+            rawValue |= UInt32(GHOSTTY_MODS_ALT.rawValue)
+        }
         if modifiers.contains(.rightOption) { rawValue |= UInt32(GHOSTTY_MODS_ALT_RIGHT.rawValue) }
-        if modifiers.contains(.leftCommand) { rawValue |= UInt32(GHOSTTY_MODS_SUPER.rawValue) }
+
+        if modifiers.contains(.leftCommand) || modifiers.contains(.rightCommand) {
+            rawValue |= UInt32(GHOSTTY_MODS_SUPER.rawValue)
+        }
         if modifiers.contains(.rightCommand) { rawValue |= UInt32(GHOSTTY_MODS_SUPER_RIGHT.rawValue) }
+
         if modifiers.contains(.capsLock) { rawValue |= UInt32(GHOSTTY_MODS_CAPS.rawValue) }
 
         return ghostty_input_mods_e(rawValue)
+    }
+
+    private func ghosttyMouseButton(for buttonNumber: Int) -> ghostty_input_mouse_button_e {
+        switch buttonNumber {
+        case 0:
+            return GHOSTTY_MOUSE_LEFT
+        case 1:
+            return GHOSTTY_MOUSE_RIGHT
+        case 2:
+            return GHOSTTY_MOUSE_MIDDLE
+        case 3:
+            return GHOSTTY_MOUSE_FOUR
+        case 4:
+            return GHOSTTY_MOUSE_FIVE
+        case 5:
+            return GHOSTTY_MOUSE_SIX
+        case 6:
+            return GHOSTTY_MOUSE_SEVEN
+        case 7:
+            return GHOSTTY_MOUSE_EIGHT
+        case 8:
+            return GHOSTTY_MOUSE_NINE
+        case 9:
+            return GHOSTTY_MOUSE_TEN
+        case 10:
+            return GHOSTTY_MOUSE_ELEVEN
+        default:
+            return GHOSTTY_MOUSE_UNKNOWN
+        }
+    }
+
+    @MainActor
+    private func runtimeMousePoint(for point: CGPoint?, in hostView: NSView) -> (x: Double, y: Double) {
+        guard let point else {
+            return (-1, -1)
+        }
+        return (
+            Double(point.x),
+            Double(max(hostView.bounds.height - point.y, 0))
+        )
+    }
+
+    private func scrollMods(precise: Bool, momentum: NSEvent.Phase) -> ghostty_input_scroll_mods_t {
+        var rawValue: Int32 = precise ? 0b0000_0001 : 0
+        rawValue |= Int32(ghosttyMomentum(from: momentum).rawValue) << 1
+        return rawValue
+    }
+
+    private func ghosttyMomentum(from phase: NSEvent.Phase) -> ghostty_input_mouse_momentum_e {
+        switch phase {
+        case .began:
+            return GHOSTTY_MOUSE_MOMENTUM_BEGAN
+        case .stationary:
+            return GHOSTTY_MOUSE_MOMENTUM_STATIONARY
+        case .changed:
+            return GHOSTTY_MOUSE_MOMENTUM_CHANGED
+        case .ended:
+            return GHOSTTY_MOUSE_MOMENTUM_ENDED
+        case .cancelled:
+            return GHOSTTY_MOUSE_MOMENTUM_CANCELLED
+        case .mayBegin:
+            return GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
+        default:
+            return GHOSTTY_MOUSE_MOMENTUM_NONE
+        }
+    }
+
+    private func appKitModifierFlags(from mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
+        var flags = NSEvent.ModifierFlags(rawValue: 0)
+        if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
+        if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 { flags.insert(.control) }
+        if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 { flags.insert(.option) }
+        if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { flags.insert(.command) }
+        if mods.rawValue & GHOSTTY_MODS_CAPS.rawValue != 0 { flags.insert(.capsLock) }
+        return flags
+    }
+
+    private func ghosttyModifiers(from flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+        var rawValue = UInt32(GHOSTTY_MODS_NONE.rawValue)
+        if flags.contains(.shift) { rawValue |= UInt32(GHOSTTY_MODS_SHIFT.rawValue) }
+        if flags.contains(.control) { rawValue |= UInt32(GHOSTTY_MODS_CTRL.rawValue) }
+        if flags.contains(.option) { rawValue |= UInt32(GHOSTTY_MODS_ALT.rawValue) }
+        if flags.contains(.command) { rawValue |= UInt32(GHOSTTY_MODS_SUPER.rawValue) }
+        if flags.contains(.capsLock) { rawValue |= UInt32(GHOSTTY_MODS_CAPS.rawValue) }
+        return ghostty_input_mods_e(rawValue)
+    }
+
+    private func ghosttyConsumedModifiers(
+        surface: ghostty_surface_t,
+        originalModifiers: KeyModifiers
+    ) -> ghostty_input_mods_e {
+        var translatedModifiers = ghostty_surface_key_translation_mods(
+            surface,
+            ghosttyModifiers(from: originalModifiers)
+        )
+        translatedModifiers = ghostty_input_mods_e(
+            translatedModifiers.rawValue
+                & ~GHOSTTY_MODS_CTRL.rawValue
+                & ~GHOSTTY_MODS_CTRL_RIGHT.rawValue
+                & ~GHOSTTY_MODS_SUPER.rawValue
+                & ~GHOSTTY_MODS_SUPER_RIGHT.rawValue
+        )
+        return translatedModifiers
     }
 
     private func currentApp() -> ghostty_app_t? {
         lock.lock()
         defer { lock.unlock() }
         return appState?.app
+    }
+
+    private func sanitizedKeyEventText(_ text: String?) -> String? {
+        guard let text, text.isEmpty == false else {
+            return nil
+        }
+
+        if text.count == 1, let scalar = text.unicodeScalars.first {
+            if scalar.value < 0x20 {
+                return nil
+            }
+            if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
+                return nil
+            }
+        }
+
+        return text
+    }
+
+    private func readClipboard(
+        for location: ghostty_clipboard_e,
+        state: UnsafeMutableRawPointer?
+    ) -> Bool {
+        guard location == GHOSTTY_CLIPBOARD_STANDARD,
+              let surface = firstSurface(for: location)
+        else {
+            return false
+        }
+        guard let string = HostedRuntimeClipboard.readString(for: location) else {
+            return false
+        }
+        string.withCString { ptr in
+            ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
+        }
+        return true
+    }
+
+    private func writeClipboard(
+        for location: ghostty_clipboard_e,
+        content: UnsafePointer<ghostty_clipboard_content_s>?,
+        len: Int,
+        confirm: Bool
+    ) {
+        _ = confirm
+        guard location == GHOSTTY_CLIPBOARD_STANDARD,
+              let content,
+              len > 0
+        else {
+            return
+        }
+
+        let items = UnsafeBufferPointer(start: content, count: len)
+        HostedRuntimeClipboard.write(items, for: location)
+    }
+
+    private func firstSurface(for location: ghostty_clipboard_e) -> ghostty_surface_t? {
+        guard location == GHOSTTY_CLIPBOARD_STANDARD else {
+            return nil
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        if let focusedRuntimeSurfaceID {
+            return surfaces[focusedRuntimeSurfaceID]?.surface
+        }
+        return surfaces.values.compactMap(\.surface).first
     }
 
     private func replaceCompiledConfig(path: URL, updateRunningApp: Bool) throws -> [OmuxConfigDiagnostic] {
@@ -521,6 +1050,56 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 filePath: filePath
             )
         }
+    }
+}
+
+enum HostedRuntimeClipboard {
+    static func readString(
+        for location: ghostty_clipboard_e,
+        pasteboardProvider: (ghostty_clipboard_e) -> NSPasteboard? = defaultPasteboard(for:)
+    ) -> String? {
+        guard location == GHOSTTY_CLIPBOARD_STANDARD else {
+            return nil
+        }
+        guard let pasteboard = pasteboardProvider(location) else {
+            return nil
+        }
+        return pasteboard.string(forType: .string)
+    }
+
+    static func write(
+        _ content: UnsafeBufferPointer<ghostty_clipboard_content_s>,
+        for location: ghostty_clipboard_e,
+        pasteboardProvider: (ghostty_clipboard_e) -> NSPasteboard? = defaultPasteboard(for:)
+    ) {
+        guard location == GHOSTTY_CLIPBOARD_STANDARD else {
+            return
+        }
+        guard let pasteboard = pasteboardProvider(location),
+              let text = textPlainContent(from: content)
+        else {
+            return
+        }
+
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    static func textPlainContent(from content: UnsafeBufferPointer<ghostty_clipboard_content_s>) -> String? {
+        content.first { item in
+            guard let mime = item.mime else { return false }
+            return String(cString: mime) == "text/plain"
+        }.flatMap { item -> String? in
+            guard let data = item.data else { return nil }
+            return String(cString: data)
+        }
+    }
+
+    private static func defaultPasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
+        guard location == GHOSTTY_CLIPBOARD_STANDARD else {
+            return nil
+        }
+        return .general
     }
 }
 
