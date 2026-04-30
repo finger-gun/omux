@@ -51,6 +51,7 @@ make dev
 make build
 make test
 make verify
+make smoke
 swift build
 swift test
 swift run omux tab
@@ -64,7 +65,7 @@ swift run omux help
 swift run OpenMUXApp
 ```
 
-If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, or `make verify`.
+If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, `make verify`, or `make smoke`.
 
 ## Workspace shell status
 

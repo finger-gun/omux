@@ -1,4 +1,4 @@
-.PHONY: help setup build-ghostty build test verify dev app cli-help
+.PHONY: help setup build-ghostty build test verify smoke dev app cli-help
 
 help:
 	@printf "OpenMUX development commands\n\n"
@@ -7,6 +7,7 @@ help:
 	@printf "  make build         Build Swift packages and app\n"
 	@printf "  make test          Run the Swift test suite\n"
 	@printf "  make verify        Run build and test\n"
+	@printf "  make smoke         Launch and sample OpenMUXApp as a smoke test\n"
 	@printf "  make dev           Launch OpenMUXApp\n"
 	@printf "  make app           Launch OpenMUXApp\n"
 	@printf "  make cli-help      Show omux CLI help\n"
@@ -23,6 +24,9 @@ test:
 	swift test
 
 verify: build test
+
+smoke:
+	./Scripts/smoke-openmux-app.sh
 
 dev:
 	swift run OpenMUXApp
