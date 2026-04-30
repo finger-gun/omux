@@ -45,4 +45,74 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             XCTAssertFalse(contents.contains("CGhostty"), "CGhostty leaked outside OmuxTerminalBridge in \(fileURL.path)")
         }
     }
+
+    @MainActor
+    func testTerminalSessionSnapshotsUpdateWhenCommandRuns() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        try bridge.run(command: "printf 'hello from shell'", inPane: pane.id)
+
+        let expectation = expectation(description: "terminal output updates")
+        let token = bridge.addObserver(for: pane.id) { snapshot in
+            if snapshot.renderedText.contains("hello from shell") {
+                expectation.fulfill()
+            }
+        }
+
+        waitForExpectations(timeout: 2)
+        bridge.removeObserver(for: pane.id, token: token)
+    }
+
+    func testTerminalPaneInputPreservesRightOptionAndCompositionPaths() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+
+        try bridge.handle(
+            NormalizedKeyEvent(
+                keyCode: 19,
+                key: "2",
+                text: "@",
+                modifiers: [.rightOption],
+                phase: .keyDown,
+                isRepeat: false,
+                route: .terminal
+            ),
+            inPane: pane.id
+        )
+
+        try bridge.handle(
+            NormalizedKeyEvent(
+                keyCode: 33,
+                key: "",
+                text: nil,
+                modifiers: [.rightOption],
+                phase: .keyDown,
+                isRepeat: false,
+                route: .composition
+            ),
+            inPane: pane.id
+        )
+
+        try bridge.handle(
+            NormalizedKeyEvent(
+                keyCode: 14,
+                key: "e",
+                text: "é",
+                modifiers: [],
+                phase: .keyDown,
+                isRepeat: false,
+                route: .terminal
+            ),
+            inPane: pane.id
+        )
+
+        let snapshot = try XCTUnwrap(bridge.snapshot(for: pane.id))
+        XCTAssertTrue(snapshot.renderedText.contains("@é"))
+    }
 }

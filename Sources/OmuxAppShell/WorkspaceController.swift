@@ -24,9 +24,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     public func openWorkspace(at path: String) throws -> Workspace {
         let directoryURL = URL(fileURLWithPath: path)
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let session = SessionDescriptor(shell: shell, workingDirectory: path)
-        let pane = Pane(title: directoryURL.lastPathComponent.isEmpty ? "workspace" : directoryURL.lastPathComponent, session: session)
+        let pane = makePane(title: directoryURL.lastPathComponent.isEmpty ? "workspace" : directoryURL.lastPathComponent, workingDirectory: path)
         let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
         let workspace = Workspace(
             name: directoryURL.lastPathComponent.isEmpty ? "OpenMUX" : directoryURL.lastPathComponent,
@@ -36,7 +34,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: session, to: pane)
+        _ = try bridge.attach(session: pane.session, to: pane)
 
         lock.lock()
         workspaces.append(workspace)
@@ -48,7 +46,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 category: .lifecycle,
                 name: "workspace-opened",
                 workspaceID: workspace.id,
-                sessionID: session.id,
+                sessionID: pane.session.id,
                 metadata: ["path": path]
             )
         )
@@ -142,5 +140,162 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return lastNotification
+    }
+
+    public var terminalBridge: GhosttyTerminalBridge {
+        bridge
+    }
+
+    @discardableResult
+    public func createTab() throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let workingDirectory = workspaces[index].rootPath
+        let pane = makePane(title: "Shell", workingDirectory: workingDirectory)
+        let tab = Tab(title: "Tab \(workspaces[index].tabs.count + 1)", panes: [pane], focusedPaneID: pane.id)
+        workspaces[index].appendTab(tab)
+        let updatedWorkspace = workspaces[index]
+        lock.unlock()
+
+        _ = try bridge.createSurface(for: pane)
+        _ = try bridge.attach(session: pane.session, to: pane)
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: "tab-created",
+                workspaceID: updatedWorkspace.id,
+                tabID: tab.id,
+                paneID: pane.id,
+                sessionID: pane.session.id
+            )
+        )
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func splitFocusedPane() throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex,
+              let focusedPane = workspaces[index].focusedPane
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        let pane = makePane(title: focusedPane.title, workingDirectory: focusedPane.session.workingDirectory)
+        let success = workspaces[index].appendPaneToFocusedTab(pane)
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else {
+            return nil
+        }
+
+        _ = try bridge.createSurface(for: pane)
+        _ = try bridge.attach(session: pane.session, to: pane)
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: "pane-created",
+                workspaceID: updatedWorkspace.id,
+                paneID: pane.id,
+                sessionID: pane.session.id
+            )
+        )
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func focus(tabID: TabID) -> Workspace? {
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        if let index = activeWorkspaceIndex, workspaces[index].focus(tabID: tabID) {
+            updatedWorkspace = workspaces[index]
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func focus(paneID: PaneID) -> Workspace? {
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        if let index = activeWorkspaceIndex, workspaces[index].focus(paneID: paneID) {
+            updatedWorkspace = workspaces[index]
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func runCommand(in sessionID: SessionID, command: String) throws -> Bool {
+        guard let pane = pane(for: sessionID) else {
+            return false
+        }
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .command,
+                name: "command-started",
+                workspaceID: activeWorkspaceID,
+                paneID: pane.id,
+                sessionID: sessionID,
+                metadata: ["command": command]
+            )
+        )
+
+        try bridge.run(command: command, inPane: pane.id)
+        return true
+    }
+
+    public func handleInput(_ event: NormalizedKeyEvent, in paneID: PaneID) throws {
+        try bridge.handle(event, inPane: paneID)
+    }
+
+    public func focusedPaneID(in workspace: Workspace) -> PaneID? {
+        workspace.focusedPane?.id
+    }
+
+    private var activeWorkspaceIndex: Int? {
+        guard let activeWorkspaceID else {
+            return nil
+        }
+
+        return workspaces.firstIndex(where: { $0.id == activeWorkspaceID })
+    }
+
+    private func pane(for sessionID: SessionID) -> Pane? {
+        lock.lock()
+        defer { lock.unlock() }
+        return workspaces
+            .flatMap(\.tabs)
+            .flatMap(\.panes)
+            .first(where: { $0.session.id == sessionID })
+    }
+
+    private func makePane(title: String, workingDirectory: String) -> Pane {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let session = SessionDescriptor(shell: shell, workingDirectory: workingDirectory)
+        return Pane(title: title, session: session)
     }
 }

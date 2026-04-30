@@ -43,10 +43,25 @@ final class OpenMUXControlPlaneService {
                 id: request.id,
                 result: .array(workspaces.map { .object($0.rpcObject) })
             )
+        case .createTab:
+            if let workspace = try controller.createTab() {
+                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active workspace"))
+        case .splitPane:
+            if let workspace = try controller.splitFocusedPane() {
+                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane"))
         case .focusSession:
             let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? ""
             let focused = try controller.focus(sessionID: SessionID(rawValue: sessionID))
             return JSONRPCResponse(id: request.id, result: .bool(focused))
+        case .runCommand:
+            let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? ""
+            let command = request.params?.objectValue?["command"]?.stringValue ?? ""
+            let didRun = try controller.runCommand(in: SessionID(rawValue: sessionID), command: command)
+            return JSONRPCResponse(id: request.id, result: .bool(didRun))
         case .sendNotification:
             let title = request.params?.objectValue?["title"]?.stringValue ?? "OpenMUX"
             let body = request.params?.objectValue?["body"]?.stringValue ?? ""
@@ -87,6 +102,8 @@ private extension Workspace {
             "name": .string(name),
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabs.count),
+            "paneCount": .integer(tabs.reduce(into: 0) { $0 += $1.panes.count }),
+            "focusedSessionID": focusedPane.map { .string($0.session.id.rawValue) } ?? .null,
         ]
     }
 }

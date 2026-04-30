@@ -40,4 +40,31 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(output[0].contains("demo"))
         XCTAssertTrue(output[0].contains("/tmp/demo"))
     }
+
+    func testCLISupportsTabSplitAndRunCommands() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "commands.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            JSONRPCResponse(id: request.id, result: .string(request.method))
+        }
+        defer { server.stop() }
+
+        let client = OmuxControlClient(socketPath: socketPath)
+        var output = [String]()
+        let command = OmuxCLICommand(client: client, writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "tab"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "split"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
+
+        XCTAssertEqual(output, [
+            ControlMethod.createTab.rawValue,
+            ControlMethod.splitPane.rawValue,
+            ControlMethod.runCommand.rawValue,
+        ])
+    }
 }

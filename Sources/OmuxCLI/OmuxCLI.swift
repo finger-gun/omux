@@ -26,6 +26,12 @@ public struct OmuxCLICommand {
             case "list":
                 let response = try client.request(method: .listWorkspaces)
                 writeLine(response.result?.prettyPrinted ?? "[]")
+            case "tab":
+                let response = try client.request(method: .createTab)
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "split":
+                let response = try client.request(method: .splitPane)
+                writeLine(response.result?.prettyPrinted ?? "")
             case "open":
                 guard commandArguments.count >= 2 else {
                     writeLine("usage: omux open <path>")
@@ -47,6 +53,22 @@ public struct OmuxCLICommand {
                 let response = try client.request(
                     method: .focusSession,
                     params: .object(["sessionID": .string(commandArguments[1])])
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "run":
+                guard commandArguments.count >= 3 else {
+                    writeLine("usage: omux run <session-id> <command>")
+                    return 1
+                }
+
+                let sessionID = commandArguments[1]
+                let command = commandArguments.dropFirst(2).joined(separator: " ")
+                let response = try client.request(
+                    method: .runCommand,
+                    params: .object([
+                        "sessionID": .string(sessionID),
+                        "command": .string(command),
+                    ])
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "notify":
@@ -95,7 +117,10 @@ public struct OmuxCLICommand {
     Commands:
       omux list
       omux open <path>
+      omux tab
+      omux split
       omux focus <session-id>
+      omux run <session-id> <command>
       omux notify <title> [body]
       omux restore <workspace-id>
     """

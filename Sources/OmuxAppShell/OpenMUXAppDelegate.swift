@@ -30,7 +30,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
-            let windowController = WorkspaceWindowController(workspace: workspace)
+            let windowController = WorkspaceWindowController(workspace: workspace, controller: workspaceController)
             self.windowController = windowController
             windowController.showWindow(nil)
             try controlPlaneService.start()

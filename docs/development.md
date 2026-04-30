@@ -33,6 +33,20 @@ The current bridge uses a foundation runtime placeholder until the vendored Ghos
 ```bash
 swift build
 swift test
+swift run omux tab
+swift run omux split
+swift run omux run <session-id> "pwd"
 swift run omux help
 swift run OpenMUXApp
 ```
+
+## Workspace shell status
+
+The current `workspace-shell` slice adds:
+
+- real bridge-backed pane views
+- tabs and split panes in the native shell
+- shared workspace/session actions used by both the UI and `omux`
+- command execution routed to live pane sessions
+
+Persistence, richer notifications, and more advanced hook behavior remain follow-on work.

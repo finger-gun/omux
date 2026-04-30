@@ -72,5 +72,9 @@ let package = Package(
             name: "OmuxHooksTests",
             dependencies: ["OmuxHooks", "OmuxCore"]
         ),
+        .testTarget(
+            name: "OmuxAppShellTests",
+            dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks"]
+        ),
     ]
 )

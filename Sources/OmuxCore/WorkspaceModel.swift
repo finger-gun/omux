@@ -56,6 +56,17 @@ public struct Tab: Equatable, Codable, Sendable {
 
         focusedPaneID = paneID
     }
+
+    public var focusedPane: Pane? {
+        panes.first(where: { $0.id == focusedPaneID })
+    }
+
+    public mutating func appendPane(_ pane: Pane, focus: Bool = true) {
+        panes.append(pane)
+        if focus {
+            focusedPaneID = pane.id
+        }
+    }
 }
 
 public struct Workspace: Equatable, Codable, Sendable {
@@ -83,6 +94,10 @@ public struct Workspace: Equatable, Codable, Sendable {
         tabs.first(where: { $0.id == focusedTabID })
     }
 
+    public var focusedPane: Pane? {
+        focusedTab?.focusedPane
+    }
+
     @discardableResult
     public mutating func focus(sessionID: SessionID) -> Bool {
         for tabIndex in tabs.indices {
@@ -94,6 +109,46 @@ public struct Workspace: Equatable, Codable, Sendable {
         }
 
         return false
+    }
+
+    @discardableResult
+    public mutating func focus(tabID: TabID) -> Bool {
+        guard tabs.contains(where: { $0.id == tabID }) else {
+            return false
+        }
+
+        focusedTabID = tabID
+        return true
+    }
+
+    @discardableResult
+    public mutating func focus(paneID: PaneID) -> Bool {
+        for tabIndex in tabs.indices {
+            if tabs[tabIndex].panes.contains(where: { $0.id == paneID }) {
+                focusedTabID = tabs[tabIndex].id
+                tabs[tabIndex].focusedPaneID = paneID
+                return true
+            }
+        }
+
+        return false
+    }
+
+    public mutating func appendTab(_ tab: Tab, focus: Bool = true) {
+        tabs.append(tab)
+        if focus {
+            focusedTabID = tab.id
+        }
+    }
+
+    @discardableResult
+    public mutating func appendPaneToFocusedTab(_ pane: Pane) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        tabs[tabIndex].appendPane(pane)
+        return true
     }
 }
 
