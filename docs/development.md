@@ -46,6 +46,11 @@ When `GhosttyKit.xcframework` is present, hosted panes use runtime-owned native 
 ## Commands
 
 ```bash
+make setup
+make dev
+make build
+make test
+make verify
 swift build
 swift test
 swift run omux tab
@@ -58,6 +63,8 @@ swift run omux run <session-id> "pwd"
 swift run omux help
 swift run OpenMUXApp
 ```
+
+If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, or `make verify`.
 
 ## Workspace shell status
 
