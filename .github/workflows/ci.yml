@@ -27,6 +27,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Cache Ghostty build state
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/tools
+            Vendor/ghostty/.zig-cache
+            Vendor/ghostty/zig-out
+          key: ${{ runner.os }}-ghostty-${{ hashFiles('Vendor/ghostty/PINNED_REF', 'Scripts/build-ghostty.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-ghostty-
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-brew-zig15
+          restore-keys: |
+            ${{ runner.os }}-brew-
+
       - name: Ensure Metal tools are available
         run: |
           if ! xcrun -f metal >/dev/null 2>&1; then
