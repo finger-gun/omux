@@ -8,6 +8,8 @@ TOOL_DIR="$ROOT_DIR/.build/tools"
 ZIG_VERSION="0.15.2"
 ZIG_DIR="$TOOL_DIR/zig-$ZIG_VERSION"
 ZIG_BIN="$ZIG_DIR/zig"
+OUTPUT_DIR="$VENDOR_DIR/macos/GhosttyKit.xcframework"
+BUILD_STAMP_FILE="$VENDOR_DIR/macos/GhosttyKit.xcframework.omux-build-stamp"
 
 if [ ! -d "$VENDOR_DIR" ]; then
   echo "Expected vendored ghostty checkout at $VENDOR_DIR" >&2
@@ -77,12 +79,20 @@ ensure_zig() {
 }
 
 PINNED_REF="$(cat "$PINNED_REF_FILE")"
+SCRIPT_HASH="$(shasum -a 256 "$0" | awk '{print $1}')"
+BUILD_STAMP="pinned_ref=$PINNED_REF;zig=$ZIG_VERSION;script=$SCRIPT_HASH"
 ensure_zig
+
+if [ -d "$OUTPUT_DIR" ] && [ -f "$BUILD_STAMP_FILE" ] && [ "$(cat "$BUILD_STAMP_FILE")" = "$BUILD_STAMP" ]; then
+  echo "Using cached GhosttyKit xcframework for pinned snapshot: $PINNED_REF"
+  exit 0
+fi
 
 echo "Building GhosttyKit xcframework against pinned snapshot: $PINNED_REF"
 "$ZIG_BIN" version
 
 cd "$VENDOR_DIR"
+rm -rf "$OUTPUT_DIR" "$BUILD_STAMP_FILE"
 "$ZIG_BIN" build \
   -Dapp-runtime=none \
   -Demit-lib-vt=false \
@@ -91,9 +101,11 @@ cd "$VENDOR_DIR"
   -Dxcframework-target=native \
   -Doptimize=ReleaseFast
 
-if [ ! -d "$VENDOR_DIR/macos/GhosttyKit.xcframework" ]; then
-  echo "Expected xcframework at $VENDOR_DIR/macos/GhosttyKit.xcframework" >&2
+if [ ! -d "$OUTPUT_DIR" ]; then
+  echo "Expected xcframework at $OUTPUT_DIR" >&2
   exit 1
 fi
 
-echo "Built $VENDOR_DIR/macos/GhosttyKit.xcframework"
+printf '%s\n' "$BUILD_STAMP" > "$BUILD_STAMP_FILE"
+
+echo "Built $OUTPUT_DIR"
