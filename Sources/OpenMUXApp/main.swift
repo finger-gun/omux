@@ -1,0 +1,3 @@
+import OmuxAppShell
+
+OpenMUXApplication.main()

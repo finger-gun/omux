@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omux}",
+            "name": "Debug OpenMUXApp",
+            "target": "OpenMUXApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug OpenMUXApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omux}",
+            "name": "Release OpenMUXApp",
+            "target": "OpenMUXApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release OpenMUXApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omux}",
+            "name": "Debug omux",
+            "target": "omux",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug omux"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omux}",
+            "name": "Release omux",
+            "target": "omux",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release omux"
+        }
+    ]
+}

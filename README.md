@@ -100,6 +100,18 @@ This is not positioned as a finished product. It is a foundation meant to be bui
 
 OpenMUX is in its early stage, and the current direction is defined in the [manifest](./docs/manifest.md).
 
+## Development
+
+The repository now includes an initial Swift package foundation for:
+
+- a native **OpenMUXApp** macOS executable
+- the **`omux`** CLI
+- a narrow **terminal bridge** boundary
+- a local **JSON-RPC** control plane
+- external **hook execution** seams
+
+See [docs/development.md](./docs/development.md) for module boundaries and foundation rules.
+
 ## Contributing
 
 Please read [CONTRIBUTING](./CONTRIBUTING.md) and [CODE OF CONDUCT](./CODE_OF_CONDUCT.md) before opening a pull request.
