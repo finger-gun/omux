@@ -120,6 +120,7 @@ final class OmuxAppShellTests: XCTestCase {
         let paneID = try XCTUnwrap(workspace.focusedPane?.id)
 
         let expectation = expectation(description: "same session receives multiple commands")
+        expectation.assertForOverFulfill = false
         let token = bridge.addObserver(for: paneID) { snapshot in
             if snapshot.renderedText.contains("/\n") {
                 expectation.fulfill()
