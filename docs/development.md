@@ -79,7 +79,7 @@ If you want one stable, native entrypoint for daily development, prefer the root
 The current shell baseline adds:
 
 - real bridge-backed pane views
-- a terminal-native shell composition with persistent sidebar navigation, sidebar-owned workspace/tab switching, a quieter top bar, and denser custom pane chrome
+- a terminal-native shell composition with persistent sidebar navigation, sidebar-owned workspace/tab switching, no persistent top bar, flatter pane chrome, and a titlebar that visually blends into the shell surface
 - direct typing into the focused pane
 - persistent pane-owned interactive shell sessions behind workspace and pane navigation instead of a separate Sessions sidebar section
 - split-right and split-down panes routed through native View menu commands instead of persistent shell buttons
@@ -92,6 +92,7 @@ The current shell baseline adds:
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions
 - pane resize propagation into the live terminal runtime
+- keyboard-first workspace controls including `Cmd+D` split right, `Cmd+Shift+D` split down, `Cmd+B` workspace-column toggle, `Cmd+1` through `Cmd+9` ordered workspace jumps, and `Cmd+0` previous-workspace recall
 
 ## Pane stack model
 

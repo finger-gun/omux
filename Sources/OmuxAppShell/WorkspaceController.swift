@@ -10,6 +10,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let hookRunner: ExternalHookRunner
     private var workspaces: [Workspace] = []
     private var activeWorkspaceID: WorkspaceID?
+    private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
 
     public var onChange: ((Workspace) -> Void)?
@@ -43,7 +44,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.lock()
         workspaces.append(workspace)
-        activeWorkspaceID = workspace.id
+        setActiveWorkspaceID(workspace.id)
         lock.unlock()
 
         try hookRunner.emit(
@@ -72,7 +73,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         for index in workspaces.indices {
             if workspaces[index].focus(sessionID: sessionID) {
-                activeWorkspaceID = workspaces[index].id
+                setActiveWorkspaceID(workspaces[index].id)
                 updatedWorkspace = workspaces[index]
                 break
             }
@@ -104,7 +105,7 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
-        activeWorkspaceID = workspace.id
+        setActiveWorkspaceID(workspace.id)
         onChange?(workspace)
         return workspace
     }
@@ -196,7 +197,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
         let uniqueName = uniqueWorkspaceName(baseName: trimmedName, excluding: workspaceID)
         workspaces[index].name = uniqueName
-        activeWorkspaceID = workspaces[index].id
+        setActiveWorkspaceID(workspaces[index].id, recordPrevious: false)
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
@@ -371,7 +372,10 @@ public final class WorkspaceController: @unchecked Sendable {
         let removedWorkspace = workspaces.remove(at: index)
         let nextIndex = min(index, workspaces.count - 1)
         let updatedWorkspace = workspaces[nextIndex]
-        activeWorkspaceID = updatedWorkspace.id
+        if previousWorkspaceID == removedWorkspace.id {
+            previousWorkspaceID = nil
+        }
+        setActiveWorkspaceID(updatedWorkspace.id, recordPrevious: false)
         lock.unlock()
 
         for pane in removedWorkspace.tabs.flatMap(\.panes) {
@@ -519,12 +523,69 @@ public final class WorkspaceController: @unchecked Sendable {
         workspace.focusedPane?.id
     }
 
+    @discardableResult
+    public func focusWorkspace(atDisplayIndex index: Int) -> Workspace? {
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        if workspaces.indices.contains(index) {
+            let workspace = workspaces[index]
+            if activeWorkspaceID != workspace.id {
+                setActiveWorkspaceID(workspace.id)
+                updatedWorkspace = workspace
+            }
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func focusPreviousWorkspace() -> Workspace? {
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        if let previousWorkspaceID,
+           activeWorkspaceID != previousWorkspaceID,
+           let index = workspaces.firstIndex(where: { $0.id == previousWorkspaceID }) {
+            let workspace = workspaces[index]
+            setActiveWorkspaceID(workspace.id)
+            updatedWorkspace = workspace
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        return updatedWorkspace
+    }
+
+    public func canFocusPreviousWorkspace() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let previousWorkspaceID else {
+            return false
+        }
+
+        return previousWorkspaceID != activeWorkspaceID && workspaces.contains(where: { $0.id == previousWorkspaceID })
+    }
+
     private var activeWorkspaceIndex: Int? {
         guard let activeWorkspaceID else {
             return nil
         }
 
         return workspaces.firstIndex(where: { $0.id == activeWorkspaceID })
+    }
+
+    private func setActiveWorkspaceID(_ workspaceID: WorkspaceID, recordPrevious: Bool = true) {
+        if recordPrevious, let activeWorkspaceID, activeWorkspaceID != workspaceID {
+            previousWorkspaceID = activeWorkspaceID
+        }
+        activeWorkspaceID = workspaceID
     }
 
     private func pane(for sessionID: SessionID) -> Pane? {

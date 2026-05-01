@@ -9,6 +9,15 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxAppShellTests: XCTestCase {
+    @MainActor
+    private final class InMemorySidebarVisibilityStore: WorkspaceSidebarVisibilityStoring {
+        var isSidebarVisible: Bool
+
+        init(isSidebarVisible: Bool = true) {
+            self.isSidebarVisible = isSidebarVisible
+        }
+    }
+
     func testWorkspaceControllerCreatesTabsAndSplits() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -176,6 +185,34 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.name, "Project Alpha")
     }
 
+    func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+        XCTAssertEqual(controller.focusWorkspace(atDisplayIndex: 0)?.id, firstWorkspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.id, firstWorkspace.id)
+        XCTAssertEqual(controller.focusPreviousWorkspace()?.id, secondWorkspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+    }
+
+    func testWorkspaceControllerIgnoresMissingOrderedWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        XCTAssertNil(controller.focusWorkspace(atDisplayIndex: 8))
+        XCTAssertEqual(controller.activeWorkspace()?.id, workspace.id)
+        XCTAssertFalse(controller.canFocusPreviousWorkspace())
+    }
+
     func testRunCommandTargetsLiveSession() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -241,7 +278,6 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
         XCTAssertNotNil(findView(ofType: WorkspaceSidebarView.self, in: rootView))
-        XCTAssertNotNil(findView(ofType: WorkspaceTopBarView.self, in: rootView))
         XCTAssertNotNil(findView(ofType: WorkspaceCanvasView.self, in: rootView))
     }
 
@@ -257,10 +293,8 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
-        let topBar = try XCTUnwrap(findView(ofType: WorkspaceTopBarView.self, in: rootView))
 
         XCTAssertTrue(findLabel(withString: "tmp", in: sidebar))
-        XCTAssertFalse(findLabel(withString: "New Tab", in: topBar))
         XCTAssertFalse(findLabel(withString: "SESSIONS", in: sidebar))
     }
 
@@ -353,7 +387,7 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkspaceWindowTopBarShowsWorkspaceName() throws {
+    func testWorkspaceWindowUsesUnifiedTitlebarConfiguration() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -362,11 +396,12 @@ final class OmuxAppShellTests: XCTestCase {
         let workspace = try controller.openWorkspace(at: "/tmp")
         let renamedWorkspace = try XCTUnwrap(controller.renameWorkspace(workspace.id, to: "Project Alpha"))
         let windowController = WorkspaceWindowController(workspace: renamedWorkspace, controller: controller)
-        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
-        let topBar = try XCTUnwrap(findView(ofType: WorkspaceTopBarView.self, in: rootView))
+        let window = try XCTUnwrap(windowController.window)
 
-        XCTAssertTrue(findLabel(withString: "Project Alpha", in: topBar))
-        XCTAssertFalse(findLabel(withString: "Main", in: topBar))
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(window.titlebarAppearsTransparent)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertEqual(window.title, "Project Alpha")
     }
 
     @MainActor
@@ -407,6 +442,32 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertNotNil(findView(ofType: PaneHeaderView.self, in: rootView))
         XCTAssertNil(findView(ofType: NSSegmentedControl.self, in: rootView))
+    }
+
+    @MainActor
+    func testWorkspaceWindowRestoresPersistedSidebarVisibility() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let store = InMemorySidebarVisibilityStore(isSidebarVisible: false)
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            sidebarVisibilityStore: store
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(sidebar.isHidden)
+
+        windowController.toggleSidebarVisibility()
+        XCTAssertTrue(store.isSidebarVisible)
+        XCTAssertFalse(sidebar.isHidden)
     }
 
     func testBuiltInThemesIncludeDefaultAndCuratedPresets() {

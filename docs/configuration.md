@@ -29,8 +29,8 @@ Themes are flat TOML files with a closed token set. Those tokens drive both the 
 | Token | AppKit role | Ghostty output |
 | --- | --- | --- |
 | `bg.canvas` | window canvas, terminal background | `background` |
-| `bg.surface` | sidebar, top bar, pane cards | — |
-| `bg.elevated` | pane headers, pill/button base | — |
+| `bg.surface` | sidebar and supporting shell surfaces | — |
+| `bg.elevated` | pane headers and compact shell actions | — |
 | `fg.primary` | primary labels | `foreground` |
 | `fg.secondary` | secondary labels | — |
 | `fg.muted` | section labels, subdued copy | — |

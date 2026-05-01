@@ -4,12 +4,11 @@ import OmuxTerminalBridge
 
 private enum ShellLayoutMetrics {
     static let sidebarWidth: CGFloat = 224
-    static let outerPadding: CGFloat = 12
-    static let interRegionSpacing: CGFloat = 12
-    static let topBarHeight: CGFloat = 58
-    static let canvasPadding: CGFloat = 10
-    static let splitSpacing: CGFloat = 12
-    static let paneHeaderHeight: CGFloat = 34
+    static let outerPadding: CGFloat = 0
+    static let interRegionSpacing: CGFloat = 8
+    static let canvasPadding: CGFloat = 0
+    static let splitSpacing: CGFloat = 8
+    static let paneHeaderHeight: CGFloat = 28
 }
 
 @MainActor
@@ -19,11 +18,13 @@ final class WorkspaceWindowController: NSWindowController {
     init(
         workspace: Workspace,
         controller: WorkspaceController,
-        initialTheme: WorkspaceShellTheme = .defaultTheme
+        initialTheme: WorkspaceShellTheme = .defaultTheme,
+        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared
     ) {
         self.rootViewController = WorkspaceShellViewController(
             controller: controller,
-            initialTheme: initialTheme
+            initialTheme: initialTheme,
+            sidebarVisibilityStore: sidebarVisibilityStore
         )
         let window = NSWindow(
             contentRect: NSRect(x: 120, y: 120, width: 1220, height: 780),
@@ -31,6 +32,9 @@ final class WorkspaceWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.title = workspace.name
         window.contentViewController = rootViewController
         super.init(window: window)
@@ -50,20 +54,33 @@ final class WorkspaceWindowController: NSWindowController {
     func updateTheme(_ theme: WorkspaceShellTheme) {
         rootViewController.updateTheme(theme)
     }
+
+    func toggleSidebarVisibility() {
+        rootViewController.toggleSidebarVisibility()
+    }
 }
 
 @MainActor
 final class WorkspaceShellViewController: NSViewController {
     private let controller: WorkspaceController
     private let sidebarView = WorkspaceSidebarView()
-    private let topBarView = WorkspaceTopBarView()
     private let canvasView = WorkspaceCanvasView()
+    private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
+    private var sidebarWidthConstraint: NSLayoutConstraint?
+    private var mainColumnLeadingConstraint: NSLayoutConstraint?
     private var currentWorkspace: Workspace?
     private var currentTheme: WorkspaceShellTheme
+    private var isSidebarVisible: Bool
 
-    init(controller: WorkspaceController, initialTheme: WorkspaceShellTheme) {
+    init(
+        controller: WorkspaceController,
+        initialTheme: WorkspaceShellTheme,
+        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
+    ) {
         self.controller = controller
         self.currentTheme = initialTheme
+        self.sidebarVisibilityStore = sidebarVisibilityStore
+        self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -79,50 +96,40 @@ final class WorkspaceShellViewController: NSViewController {
 
         let mainColumn = NSStackView()
         mainColumn.orientation = .vertical
-        mainColumn.spacing = ShellLayoutMetrics.interRegionSpacing
+        mainColumn.spacing = 0
         mainColumn.translatesAutoresizingMaskIntoConstraints = false
 
-        mainColumn.addArrangedSubview(topBarView)
         mainColumn.addArrangedSubview(canvasView)
-        topBarView.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.topBarHeight).isActive = true
 
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
 
+        let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
+        let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
+            equalTo: sidebarView.trailingAnchor,
+            constant: ShellLayoutMetrics.interRegionSpacing
+        )
+        self.sidebarWidthConstraint = sidebarWidthConstraint
+        self.mainColumnLeadingConstraint = mainColumnLeadingConstraint
+
         NSLayoutConstraint.activate([
-            sidebarView.topAnchor.constraint(equalTo: view.topAnchor),
+            sidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             sidebarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth),
+            sidebarWidthConstraint,
 
-            mainColumn.topAnchor.constraint(equalTo: view.topAnchor, constant: ShellLayoutMetrics.outerPadding),
-            mainColumn.leadingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: ShellLayoutMetrics.interRegionSpacing),
+            mainColumn.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: ShellLayoutMetrics.outerPadding),
+            mainColumnLeadingConstraint,
             mainColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -ShellLayoutMetrics.outerPadding),
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
         ])
+
+        applySidebarVisibility()
     }
 
     func update(workspace: Workspace) {
         currentWorkspace = workspace
         apply(theme: currentTheme)
-
-        topBarView.render(
-            workspace: workspace,
-            theme: currentTheme,
-            availableThemes: WorkspaceShellTheme.availableThemes,
-            onSelectTheme: { [weak self] themeIdentifier in
-                guard let self,
-                      let theme = WorkspaceShellTheme.availableThemes.first(where: { $0.identifier == themeIdentifier })
-                else {
-                    return
-                }
-
-                currentTheme = theme
-                if let workspace = currentWorkspace {
-                    update(workspace: workspace)
-                }
-            }
-        )
 
         let workspaceItems = makeWorkspaceSidebarItems(
             summaries: controller.listWorkspaces(),
@@ -170,8 +177,20 @@ final class WorkspaceShellViewController: NSViewController {
         view.layer?.backgroundColor = theme.shell.windowBackground.cgColor
         view.window?.backgroundColor = theme.shell.windowBackground
         sidebarView.apply(theme: theme)
-        topBarView.apply(theme: theme)
         canvasView.apply(theme: theme)
+    }
+
+    func toggleSidebarVisibility() {
+        isSidebarVisible.toggle()
+        sidebarVisibilityStore.isSidebarVisible = isSidebarVisible
+        applySidebarVisibility()
+    }
+
+    private func applySidebarVisibility() {
+        sidebarView.isHidden = !isSidebarVisible
+        sidebarWidthConstraint?.constant = isSidebarVisible ? ShellLayoutMetrics.sidebarWidth : 0
+        mainColumnLeadingConstraint?.constant = isSidebarVisible ? ShellLayoutMetrics.interRegionSpacing : 0
+        view.layoutSubtreeIfNeeded()
     }
 
     private func makeWorkspaceSidebarItems(
@@ -292,8 +311,7 @@ final class WorkspaceSidebarView: NSView {
 
     func apply(theme: WorkspaceShellTheme) {
         layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        layer?.borderWidth = 0
         workspacesSection.apply(theme: theme)
     }
 
@@ -437,110 +455,6 @@ private final class WorkspaceSidebarSectionView: NSView {
 }
 
 @MainActor
-final class WorkspaceTopBarView: NSView {
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let pathLabel = NSTextField(labelWithString: "")
-    private let themePicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let themeActionProxy = ThemePickerProxy()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 12
-
-        let titleColumn = NSStackView()
-        titleColumn.orientation = .vertical
-        titleColumn.spacing = 2
-        titleColumn.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        pathLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-
-        titleColumn.addArrangedSubview(titleLabel)
-        titleColumn.addArrangedSubview(pathLabel)
-
-        themePicker.translatesAutoresizingMaskIntoConstraints = false
-        themePicker.setContentHuggingPriority(.required, for: .horizontal)
-        themePicker.font = .systemFont(ofSize: 12, weight: .medium)
-        themePicker.controlSize = .small
-
-        let content = NSStackView()
-        content.orientation = .horizontal
-        content.alignment = .centerY
-        content.spacing = 12
-        content.translatesAutoresizingMaskIntoConstraints = false
-        content.addArrangedSubview(titleColumn)
-        content.addArrangedSubview(NSView())
-        content.addArrangedSubview(themePicker)
-
-        addSubview(content)
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    func apply(theme: WorkspaceShellTheme) {
-        layer?.backgroundColor = theme.shell.topBarBackground.cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = theme.shell.subduedBorder.cgColor
-        titleLabel.textColor = theme.shell.textPrimary
-        pathLabel.textColor = theme.shell.textSecondary
-        themePicker.contentTintColor = theme.shell.textPrimary
-    }
-
-    func render(
-        workspace: Workspace,
-        theme: WorkspaceShellTheme,
-        availableThemes: [WorkspaceShellTheme],
-        onSelectTheme: @escaping @MainActor (String) -> Void
-    ) {
-        apply(theme: theme)
-        titleLabel.stringValue = workspace.name
-        pathLabel.stringValue = workspace.rootPath
-
-        themePicker.removeAllItems()
-        themePicker.addItems(withTitles: availableThemes.map(\.displayName))
-        if let selectedIndex = availableThemes.firstIndex(where: { $0.identifier == theme.identifier }) {
-            themePicker.selectItem(at: selectedIndex)
-        }
-
-        themePicker.action = #selector(ThemePickerProxy.selectTheme(_:))
-        themePicker.target = themeActionProxy
-        themeActionProxy.onSelectTheme = { [weak themePicker] in
-            guard let themePicker else {
-                return
-            }
-
-            let selectedIndex = themePicker.indexOfSelectedItem
-            guard availableThemes.indices.contains(selectedIndex) else {
-                return
-            }
-
-            onSelectTheme(availableThemes[selectedIndex].identifier)
-        }
-    }
-}
-
-@MainActor
-private final class ThemePickerProxy: NSObject {
-    var onSelectTheme: (() -> Void)?
-
-    @objc func selectTheme(_ sender: NSPopUpButton) {
-        _ = sender
-        onSelectTheme?()
-    }
-}
-
-@MainActor
 final class WorkspaceCanvasView: NSView {
     private var currentContentView: NSView?
 
@@ -548,7 +462,6 @@ final class WorkspaceCanvasView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = 14
     }
 
     @available(*, unavailable)
@@ -558,8 +471,7 @@ final class WorkspaceCanvasView: NSView {
 
     func apply(theme: WorkspaceShellTheme) {
         layer?.backgroundColor = theme.shell.canvasBackground.cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        layer?.borderWidth = 0
     }
 
     func render(layoutView: NSView?, theme: WorkspaceShellTheme) {
@@ -668,7 +580,6 @@ final class PaneCardView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = 12
 
         container.orientation = .vertical
         container.spacing = 0
@@ -705,9 +616,9 @@ final class PaneCardView: NSView {
         container.addArrangedSubview(headerView)
         container.addArrangedSubview(terminalPaneView)
 
-        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = (focused ? theme.shell.accent : theme.shell.border).cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
     }
 }
 
@@ -767,7 +678,7 @@ final class PaneHeaderView: NSView {
         controls.addArrangedSubview(addButton)
 
         let closeButton = ChromePillButton()
-        closeButton.configure(title: "x", active: false, theme: theme, compact: true)
+        closeButton.configure(title: "×", active: false, theme: theme, compact: true)
         closeButton.isEnabled = paneStack.panes.count > 1
         closeButton.onPress = {
             try? onClosePaneTab(paneStack.focusedPaneID)
@@ -818,14 +729,14 @@ private class ChromePillButton: NSControl {
 
     func configure(title: String, active: Bool, theme: WorkspaceShellTheme, compact: Bool = false) {
         self.compact = compact
-        contentInsets = NSEdgeInsets(top: compact ? 3 : 5, left: compact ? 8 : 10, bottom: compact ? 3 : 5, right: compact ? 8 : 10)
+        contentInsets = NSEdgeInsets(top: compact ? 2 : 4, left: compact ? 6 : 8, bottom: compact ? 2 : 4, right: compact ? 6 : 8)
         titleLabel.stringValue = title
         titleLabel.font = .systemFont(ofSize: compact ? 11 : 12, weight: active ? .semibold : .medium)
         titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
-        layer?.cornerRadius = compact ? 7 : 8
-        layer?.backgroundColor = (active ? theme.shell.chromeButtonActiveBackground : theme.shell.chromeButtonBackground).cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = (active ? theme.shell.accent.withAlphaComponent(0.45) : theme.shell.subduedBorder).cgColor
+        layer?.cornerRadius = compact ? 3 : 4
+        layer?.backgroundColor = (active ? theme.shell.selection : NSColor.clear).cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
@@ -834,7 +745,7 @@ private class ChromePillButton: NSControl {
         let labelSize = titleLabel.intrinsicContentSize
         return NSSize(
             width: labelSize.width + contentInsets.left + contentInsets.right,
-            height: max(labelSize.height + contentInsets.top + contentInsets.bottom, compact ? 22 : 28)
+            height: max(labelSize.height + contentInsets.top + contentInsets.bottom, compact ? 18 : 24)
         )
     }
 
@@ -869,7 +780,6 @@ final class SidebarItemButton: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = 4
 
         titleField.maximumNumberOfLines = 1
         titleField.lineBreakMode = .byTruncatingTail
@@ -900,8 +810,8 @@ final class SidebarItemButton: NSView {
         layer?.backgroundColor = item.isActive
             ? theme.shell.selection.cgColor
             : NSColor.clear.cgColor
-        layer?.borderWidth = item.isActive ? 1 : 0
-        layer?.borderColor = theme.shell.accent.withAlphaComponent(0.28).cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
         needsLayout = true
     }
 

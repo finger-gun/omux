@@ -19,6 +19,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
     private weak var splitRightMenuItem: NSMenuItem?
     private weak var splitDownMenuItem: NSMenuItem?
     private weak var removePaneMenuItem: NSMenuItem?
+    private weak var toggleSidebarMenuItem: NSMenuItem?
+    private weak var previousWorkspaceMenuItem: NSMenuItem?
+    private var workspaceJumpMenuItems: [NSMenuItem] = []
 
     public override init() {
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
@@ -145,6 +148,27 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func toggleSidebarFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.toggleSidebarVisibility()
+    }
+
+    @objc private func focusPreviousWorkspaceFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = workspaceController.focusPreviousWorkspace()
+        refreshMenuValidation()
+    }
+
+    @objc private func focusNumberedWorkspaceFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem else {
+            return
+        }
+
+        let index = item.tag
+        _ = workspaceController.focusWorkspace(atDisplayIndex: index)
+        refreshMenuValidation()
+    }
+
     private func configureMenus() {
         let mainMenu = NSMenu()
 
@@ -194,19 +218,52 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(renameWorkspaceMenuItem)
         viewMenu.addItem(.separator())
 
+        let toggleSidebarMenuItem = NSMenuItem(
+            title: "Toggle Workspace Column",
+            action: #selector(toggleSidebarFromMenu(_:)),
+            keyEquivalent: "b"
+        )
+        toggleSidebarMenuItem.target = self
+        viewMenu.addItem(toggleSidebarMenuItem)
+
+        let previousWorkspaceMenuItem = NSMenuItem(
+            title: "Previous Workspace",
+            action: #selector(focusPreviousWorkspaceFromMenu(_:)),
+            keyEquivalent: "0"
+        )
+        previousWorkspaceMenuItem.target = self
+        viewMenu.addItem(previousWorkspaceMenuItem)
+
+        var workspaceJumpMenuItems: [NSMenuItem] = []
+        for index in 0..<9 {
+            let item = NSMenuItem(
+                title: "Go to Workspace \(index + 1)",
+                action: #selector(focusNumberedWorkspaceFromMenu(_:)),
+                keyEquivalent: "\(index + 1)"
+            )
+            item.target = self
+            item.tag = index
+            viewMenu.addItem(item)
+            workspaceJumpMenuItems.append(item)
+        }
+
+        viewMenu.addItem(.separator())
+
         let splitRightMenuItem = NSMenuItem(
             title: "Split Right",
             action: #selector(splitPaneRightFromMenu(_:)),
-            keyEquivalent: "]"
+            keyEquivalent: "d"
         )
+        splitRightMenuItem.keyEquivalentModifierMask = [.command]
         splitRightMenuItem.target = self
         viewMenu.addItem(splitRightMenuItem)
 
         let splitDownMenuItem = NSMenuItem(
             title: "Split Down",
             action: #selector(splitPaneDownFromMenu(_:)),
-            keyEquivalent: "["
+            keyEquivalent: "D"
         )
+        splitDownMenuItem.keyEquivalentModifierMask = [.command, .shift]
         splitDownMenuItem.target = self
         viewMenu.addItem(splitDownMenuItem)
 
@@ -225,6 +282,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         self.newWorkspaceMenuItem = newWorkspaceMenuItem
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
+        self.toggleSidebarMenuItem = toggleSidebarMenuItem
+        self.previousWorkspaceMenuItem = previousWorkspaceMenuItem
+        self.workspaceJumpMenuItems = workspaceJumpMenuItems
         self.splitRightMenuItem = splitRightMenuItem
         self.splitDownMenuItem = splitDownMenuItem
         self.removePaneMenuItem = removePaneMenuItem
@@ -235,6 +295,12 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         renameWorkspaceMenuItem?.isEnabled = workspaceController.canRenameActiveWorkspace()
         deleteWorkspaceMenuItem?.isEnabled = workspaceController.canDeleteActiveWorkspace()
         let hasWorkspace = workspaceController.activeWorkspace() != nil
+        toggleSidebarMenuItem?.isEnabled = hasWorkspace
+        previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
+        let workspaceCount = workspaceController.listWorkspaces().count
+        for (index, item) in workspaceJumpMenuItems.enumerated() {
+            item.isEnabled = index < workspaceCount
+        }
         splitRightMenuItem?.isEnabled = hasWorkspace
         splitDownMenuItem?.isEnabled = hasWorkspace
         removePaneMenuItem?.isEnabled = workspaceController.canRemoveActivePane()

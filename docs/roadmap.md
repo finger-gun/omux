@@ -19,7 +19,7 @@ It is intentionally directional rather than date-driven.
 | ✅ Done | Runtime fallback path | When the vendored runtime is unavailable, OpenMUX still falls back to the internal PTY-backed host. |
 | ✅ Done | Native developer workflow | `make setup`, `make dev`, `make build`, `make test`, `make verify`, and `make smoke` provide a stable native workflow. |
 | ✅ Done | CI baseline and app smoke coverage | CI now runs normal build/test checks and a dedicated runtime-enabled launch smoke test. |
-| ✅ Done | Visual shell redesign | The shell now has a terminal-native sidebar, quiet top bar, custom pane chrome, and a stronger workspace hierarchy without drifting into IDE-like enclosure. |
+| ✅ Done | Visual shell redesign | The shell now has a terminal-native sidebar, no persistent top bar, flatter pane chrome, unified titlebar styling, and a stronger workspace hierarchy without drifting into IDE-like enclosure. |
 | ✅ Done | Config and theme foundation | OpenMUX now owns `~/.omux/config.toml`, token-based themes, generated Ghostty config output, explicit config reload/doctor commands, and bundled presets for Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, and Solarized light/dark. |
 | ⏳ Next | Runtime transcript and snapshot quality | Improve runtime-backed pane snapshots so they expose richer transcript state instead of the current minimal placeholder snapshot. |
 | ⏳ Next | Pane stack polish | Add reordering, drag/drop, and better local pane-tab ergonomics inside split regions. |
@@ -46,7 +46,7 @@ It is intentionally directional rather than date-driven.
 
 Today, OpenMUX is best understood as:
 
-1. a native AppKit-first macOS shell with a terminal-native sidebar, top bar, and custom pane chrome
+1. a native AppKit-first macOS shell with a terminal-native sidebar, flattened pane chrome, unified titlebar styling, and keyboard-first workspace navigation
 2. a terminal workspace with tabs, splits, pane-local tab stacks, and built-in shell themes
 3. a narrow Ghostty-backed terminal bridge with a safe fallback path
 4. a local-first automation surface through `omux`, JSON-RPC, and hooks
