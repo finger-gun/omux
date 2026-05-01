@@ -84,7 +84,7 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
-    func testCLIPrintsTerminalEventsUntilStreamCloses() throws {
+    func testCLIPrintsControlPlaneEventsUntilStreamCloses() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appending(path: "events.sock")
@@ -108,14 +108,13 @@ final class OmuxCLITests: XCTestCase {
                     id: nil,
                     method: ControlMethod.terminalEvents.rawValue,
                     params: .object([
-                        "name": .string("terminal.commandFinished"),
+                        "name": .string("workspace.opened"),
                         "workspaceID": .string("workspace-1"),
-                        "tabID": .string("tab-1"),
-                        "paneID": .string("pane-1"),
-                        "sessionID": .string("session-1"),
+                        "tabID": .null,
+                        "paneID": .null,
+                        "sessionID": .null,
                         "payload": .object([
-                            "durationNanoseconds": .integer(12),
-                            "exitCode": .integer(0),
+                            "path": .string("/tmp/demo"),
                         ]),
                     ])
                 )
@@ -135,8 +134,8 @@ final class OmuxCLITests: XCTestCase {
 
         XCTAssertEqual(exitCode, 0)
         XCTAssertEqual(output.count, 1)
-        XCTAssertTrue(output[0].contains("\"name\" : \"terminal.commandFinished\""))
-        XCTAssertTrue(output[0].contains("\"paneID\" : \"pane-1\""))
+        XCTAssertTrue(output[0].contains("\"name\" : \"workspace.opened\""))
+        XCTAssertTrue(output[0].contains("\"workspaceID\" : \"workspace-1\""))
     }
 
     func testCLIConfigDoctorPrintsWarningsAndReturnsZero() throws {

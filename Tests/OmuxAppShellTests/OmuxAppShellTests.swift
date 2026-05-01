@@ -109,6 +109,96 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(closed.focusedTab?.focusedPaneID, originalPaneID)
     }
 
+    func testWorkspaceControllerPublishesSharedActionEvents() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let originalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let originalSessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
+
+        _ = try XCTUnwrap(controller.createTab())
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
+        let splitPaneID = try XCTUnwrap(splitWorkspace.focusedPane?.id)
+        let splitSessionID = try XCTUnwrap(splitWorkspace.focusedPane?.session.id)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let paneTabID = try XCTUnwrap(paneTabWorkspace.focusedPane?.id)
+        _ = try XCTUnwrap(controller.focusPaneTab(paneID: splitPaneID))
+        _ = try XCTUnwrap(controller.closePaneTab(paneID: paneTabID))
+        XCTAssertTrue(try controller.focus(sessionID: originalSessionID))
+        XCTAssertTrue(try controller.runCommand(in: splitSessionID, command: "pwd"))
+
+        XCTAssertEqual(
+            publishedEvents.map(\.name),
+            [
+                "workspace.opened",
+                "tab.created",
+                "pane.split",
+                "paneTab.created",
+                "paneTab.focused",
+                "paneTab.closed",
+                "session.focused",
+                "command.started",
+            ]
+        )
+        XCTAssertEqual(publishedEvents[0].payload.objectValue?["path"], .string("/tmp"))
+        XCTAssertEqual(publishedEvents[2].payload.objectValue?["axis"], .string("rows"))
+        XCTAssertNotNil(publishedEvents[3].payload.objectValue?["paneStackID"])
+        XCTAssertEqual(publishedEvents[4].paneID, splitPaneID)
+    }
+
+    func testWorkspaceControllerPublishesSparseNotificationAndRestoreEvents() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.openWorkspace(at: "/var/tmp")
+
+        publishedEvents.removeAll()
+        try controller.notify(NotificationRequest(title: "Done", body: "Build finished"))
+        let restoredWorkspace = try XCTUnwrap(controller.restore(workspaceID: firstWorkspace.id))
+
+        XCTAssertEqual(restoredWorkspace.id, firstWorkspace.id)
+        XCTAssertEqual(publishedEvents.map(\.name), ["notification.raised", "workspace.restored"])
+        XCTAssertEqual(publishedEvents[0].workspaceID, secondWorkspace.id)
+        XCTAssertNil(publishedEvents[0].paneID)
+        XCTAssertNil(publishedEvents[0].sessionID)
+        XCTAssertEqual(publishedEvents[1].workspaceID, firstWorkspace.id)
+        XCTAssertNil(publishedEvents[1].paneID)
+    }
+
+    func testWorkspaceControllerDoesNotPublishActionEventsForRejectedActions() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        publishedEvents.removeAll()
+
+        XCTAssertFalse(try controller.focus(sessionID: SessionID(rawValue: "missing-session")))
+        XCTAssertFalse(try controller.runCommand(in: SessionID(rawValue: "missing-session"), command: "pwd"))
+        XCTAssertNil(try controller.closePaneTab(paneID: PaneID(rawValue: "missing-pane")))
+        XCTAssertNil(controller.restore(workspaceID: WorkspaceID(rawValue: "missing-workspace")))
+        XCTAssertTrue(publishedEvents.isEmpty)
+    }
+
     func testWorkspaceControllerRemovesActivePaneByClosingSinglePaneTab() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -803,7 +893,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.workingDirectory, "/var/tmp")
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedWorkingDirectory, "/var/tmp")
-        XCTAssertEqual(publishedEvent?.name, .workingDirectoryChanged)
+        XCTAssertEqual(publishedEvent?.name, "terminal.cwdChanged")
         XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
     }
 

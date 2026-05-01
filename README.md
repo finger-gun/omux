@@ -5,153 +5,189 @@
 <h1 align="center">OpenMUX</h1>
 
 <p align="center">
-  A fast, native, flexible, and hackable terminal workspace for developers.
+  Native macOS terminal workspace for developers.
+</p>
+
+<p align="center">
+  Fast, native, flexible, and hackable. Terminal-first, scriptable by default, and built to stay open to your workflow.
 </p>
 
 <p align="center">
   <span>
-  <a href="https://github.com/finger-gun/omux/actions/workflows/ci.yml"><img src="https://github.com/finger-gun/omux/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" /></a>
-  <img src="https://img.shields.io/badge/Status-Beta-F59E0B?style=flat-square" alt="Beta status" />
-  <img src="https://img.shields.io/badge/AI-Friendly-7C3AED?style=flat-square" alt="AI Friendly" />
-  <img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
+    <a href="https://github.com/finger-gun/omux/actions/workflows/ci.yml"><img src="https://github.com/finger-gun/omux/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" /></a>
+    <img src="https://img.shields.io/badge/Status-Beta-F59E0B?style=flat-square" alt="Beta status" />
+    <img src="https://img.shields.io/badge/Platform-macOS-111827?style=flat-square" alt="macOS platform" />
+    <img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
   </span>
 </p>
 
 <p align="center">
+  <a href="https://openmux.fingergun.dev/">Website</a>
+  ·
   <a href="./docs/manifest.md">Manifesto</a>
+  ·
+  <a href="./docs/development.md">Development</a>
+  ·
+  <a href="./docs/configuration.md">Configuration</a>
+  ·
+  <a href="./docs/releasing.md">Releases</a>
 </p>
 
 ---
 
+![OpenMUX in action](assets/screen-1.png)
+
 ## Why OpenMUX
 
-OpenMUX exists to reclaim the terminal as a workspace that is fast, reliable, and open to change.
+The terminal should be a workspace, not a locked box.
 
-It is built for developers who want tools they can understand, adapt, script, and build on, without being forced into a single vendor, workflow, or bloated all-in-one platform.
+OpenMUX exists for developers who want native terminal workflows without giving up inspectability, scriptability, or control. It takes the opposite bet from bloated, vendor-shaped terminals: keep the core small, keep the seams visible, and let hooks, events, and commands do the heavy lifting.
 
-![OpenMux in action](assets/screen-1.png)
+## What OpenMUX can do today
 
-### OpenMUX vs cmux vs Ghostty
+OpenMUX is already a usable beta foundation with:
 
-We love them all: Ghostty is an excellent terminal and engine, and cmux proves there is real appetite for a richer terminal workspace. OpenMUX is taking a different bet: **the most open, terminal-first, native, and hackable workspace layer built on those lessons**.
+- native macOS shell chrome built AppKit-first
+- workspaces, top-level tabs, split panes, and pane-local tab stacks
+- persistent interactive shell sessions with direct typing, paste, resize, and command injection
+- a local `omux` CLI plus JSON-RPC control plane
+- external hooks and a mixed local event stream via `omux events`
+- token-based theme ownership with built-in themes and user overrides
+- vendored Ghostty runtime hosting behind a narrow OpenMUX bridge, with a fallback terminal host path
+- explicit keyboard-correctness work for ISO layouts, Option behavior, dead keys, compose input, and IME-sensitive flows
 
-| Dimension | OpenMUX | cmux | Ghostty |
-| --- | --- | --- | --- |
-| Core strength | Native terminal workspace with tabs, panes, workspaces, hooks, and automation as first-class concepts | Ambitious integrated workspace with a lot built in | Exceptional terminal emulator and a strong embeddable terminal engine |
-| Product direction | **Terminal-first, AI-friendly, and open by design** | Rich, opinionated workspace experience | Focused terminal app and upstream rendering/runtime foundation |
-| Extensibility | **Open hooks, JSON-RPC control plane, external plugins first** | Powerful product surface, but less centered on an open control plane | Great foundation for hosts and terminal users; higher-level workflow layers are left to the host |
-| Native architecture | **AppKit-first macOS app with a narrow `libghostty` bridge** | Native workspace product built around `libghostty` | Native macOS terminal and the upstream `libghostty` source |
-| Keyboard and input bar | **Treats ISO layouts, right Option, dead keys, and IME behavior as blocker-level quality** | Strong ambition here too, but OpenMUX is making this an explicit architecture rule from day one | Excellent terminal fundamentals and the right low-level model to build on |
-| Best fit | **Developers who want a workspace they can inspect, script, extend, and truly own** | Developers who want an integrated batteries-included workspace | Developers who want a fast terminal, or builders who want a great terminal engine |
+## Workspace primitives
 
-## Principles
+OpenMUX is built around durable primitives instead of one blessed workflow:
 
-- **Open by design** — core behavior should be inspectable, replaceable, and extendable.
-- **Native where it matters** — terminal input, focus, accessibility, windows, and notifications should feel at home on macOS.
-- **Built on strong foundations** — use `libghostty` deliberately and keep it behind a narrow OpenMUX bridge.
-- **Terminal first** — the terminal is the product, not a sidecar to something else.
-- **Tools, not opinions** — OpenMUX should support shell users, tmux users, SSH-heavy workflows, and AI-assisted workflows equally well.
-- **Hackability over features** — expose hooks and extension points instead of hardcoding every workflow into the core.
-- **Sensible defaults** — useful tabs, session management, notifications, and keybindings should work out of the box.
-- **International-first** — keyboard handling must work correctly across layouts, modifiers, and compose/dead key input.
+- **Workspaces** for project-level context
+- **Tabs** for top-level workspace organization
+- **Split panes** for side-by-side and stacked layouts
+- **Pane-local tab stacks** for multiple sessions inside one split region
+- **Persistent sessions** so UI actions and CLI automation target the same live shell
+- **Hooks, events, and commands** as first-class extension seams
 
-## AI-Friendly by Design
+## `omux` and the local control plane
 
-OpenMUX is not an AI-first terminal, but it is intended to be **AI-friendly**.
+The CLI talks to the running app over a local JSON-RPC Unix socket boundary.
 
-That means building the project in ways that are easy for both humans and AI systems to work with:
+Current examples:
 
-- Clear contracts and explicit interfaces
-- Strong typing over ambiguous behavior
-- Open specifications and documented extension points
-- Predictable structure instead of hidden magic
+```bash
+swift run omux list
+swift run omux open ~/projects/omux
+swift run omux tab
+swift run omux split down
+swift run omux pane-tab
+swift run omux pane-tab-focus <pane-id>
+swift run omux pane-tab-close [pane-id]
+swift run omux run <session-id> "pwd"
+swift run omux notify "Build finished"
+swift run omux events
+```
 
-AI should integrate through the same open system as everything else: CLI commands, JSON-RPC, hooks, events, and external plugins.
+`omux events` now streams both:
 
-The goal is not to turn the terminal into an agent product.
-The goal is to make OpenMUX easy to understand, extend, and build on with good engineering discipline, without privileging one vendor or one agent.
+- `terminal.*` runtime events such as cwd changes, title changes, bells, progress, command completion, and renderer health
+- successful shared action events such as `workspace.opened`, `tab.created`, `pane.split`, `paneTab.created`, `paneTab.focused`, `paneTab.closed`, `session.focused`, `command.started`, `notification.raised`, and `workspace.restored`
 
-## What OpenMUX is
+## Architecture direction
 
-OpenMUX is aiming to be a modern foundation for terminal workspaces:
+OpenMUX keeps a narrow core with stable seams:
 
-- A **native macOS app** built AppKit-first, with SwiftUI used selectively where it helps
-- Built on strong foundations with **libghostty** isolated behind a narrow bridge
-- Designed around a **hookable core**
-- Controlled through a local **`omux` + JSON-RPC** control plane
-- Extended through **external plugins first**
-- Focused on **performance as a feature**
+- **AppKit-first shell** for windows, focus, menus, notifications, and precision input behavior
+- **Thin `libghostty` bridge** so higher-level product logic stays in OpenMUX-native concepts
+- **Local-first control plane** through `omux` and JSON-RPC
+- **Hooks and events** for lifecycle, session, command, UI, and future plugin automation
+- **External plugin processes first** instead of hardwiring one workflow into the app
 
-## What OpenMUX is not
+The product speaks in OpenMUX concepts: workspaces, tabs, panes, sessions, hooks, notifications, commands, and events.
 
-- Not an AI-first terminal
-- Not a browser inside a terminal
-- Not a vendor-specific workflow tool
-- Not a monolithic "do everything" tool
-- Not a web app wrapped as a desktop app
-- Not tied to a single vendor or ecosystem
-- Not a fork of cmux or Ghostty
+## Configuration and themes
 
-## Architecture Direction
+OpenMUX owns its user-facing configuration:
 
-The architecture is intentionally small and composable. OpenMUX is designed around a few stable seams:
+- config file: `~/.omux/config.toml`
+- custom themes: `~/.omux/themes/`
+- generated Ghostty artifacts: `~/.omux/generated/ghostty/`
 
-- **AppKit-first shell** for windows, panes, focus, keyboard handling, and native macOS behavior
-- **Thin libghostty bridge** so higher-level product logic stays in OpenMUX-native concepts
-- **Local-first control plane** via `omux` and JSON-RPC over a Unix domain socket
-- **Hook and event system** for lifecycle, session, command, UI, and input behavior
-- **External plugin processes first**, with richer runtimes possible later
+Built-in themes currently include:
 
-Plugins are a primary extension model, not an afterthought. The protocol is the platform: tools, scripts, and agents should all be able to cooperate through the same open control surface.
+- `monokai-soda`
+- `catppuccin`
+- `dracula`
+- `nord`
+- `gruvbox`
+- `one-dark`
+- `solarized-dark`
+- `solarized-light`
 
-## Vision
+Useful commands:
 
-OpenMUX aims to become the standard foundation for modern terminal workspaces by staying:
+```bash
+omux config init
+omux config doctor
+omux config reload
+omux theme list
+omux theme nord
+```
 
-- **Native**
-- **Reliable**
-- **Extensible**
-- **Scriptable**
+## Quick start for development
 
-This is not positioned as a finished product. It is a foundation meant to be built on.
+OpenMUX uses Swift Package Manager with a vendored Ghostty runtime path.
 
-## Status
+```bash
+make setup
+make dev
+make test
+make verify
+swift run OpenMUXApp
+```
 
-OpenMUX is in its early stage, and the current direction is defined in the [manifest](./docs/manifest.md).
+If you want the current module boundaries, runtime build notes, and command list, see [docs/development.md](./docs/development.md).
 
-## Development
+## Releases and installation
 
-The repository now includes an initial Swift package foundation for:
+OpenMUX has an early GitHub Release flow for downloadable macOS artifacts.
 
-- a native **OpenMUXApp** macOS executable
-- the **`omux`** CLI
-- a narrow **terminal bridge** boundary
-- a local **JSON-RPC** control plane
-- external **hook execution** seams
+- local packaging: `make package-release RELEASE_VERSION=0.1.0`
+- tag-driven GitHub Releases on `v*`
+- unsigned macOS app and CLI archives plus checksums
 
-See [docs/development.md](./docs/development.md) for module boundaries and foundation rules.
-
-## Releases
-
-OpenMUX now ships with a first-pass GitHub Release flow for downloadable artifacts:
-
-- local packaging via `make package-release RELEASE_VERSION=X.Y.Z`
-- tag-driven GitHub Releases on `v*` tags
-- generated release notes configured through [`.github/release.yml`](./.github/release.yml)
-
-The current automation publishes unsigned macOS app and CLI archives plus checksums. See [docs/releasing.md](./docs/releasing.md) for the exact flow and the follow-up path to Developer ID signing and notarized DMG distribution.
-
-If you install the app bundle directly, it also includes a bundled `omux` binary. You can install it from the app with **OpenMUX → Install omux CLI**, or from Terminal with:
+The app bundle includes a bundled `omux` binary. You can install it from the app with **OpenMUX -> Install omux CLI**, or from Terminal with:
 
 ```bash
 /Applications/OpenMUX.app/Contents/MacOS/omux install-cli
 ```
 
-You can also watch live terminal events from the running app with:
+For the exact packaging and release flow, see [docs/releasing.md](./docs/releasing.md).
 
-```bash
-omux events
-```
+## Status
+
+OpenMUX is in **beta**.
+
+The foundations are now in place:
+
+1. Native app shell, workspace tabs, split panes, and pane-local tabs
+2. `omux` CLI, JSON-RPC control plane, hooks, and local events
+3. Vendored Ghostty runtime path with fallback terminal hosting
+4. Theme/config ownership in OpenMUX-native terms
+5. CI and first-pass release automation
+
+Current follow-on areas include transcript quality, layout restore polish, richer automation, and a broader plugin story.
+
+## Project principles
+
+OpenMUX is:
+
+- **Open by design**
+- **Terminal first**
+- **Native where it matters**
+- **Hackable over bloated**
+- **AI-friendly, not AI-first**
+- **International-first for keyboard correctness**
+
+Read the full rationale in the [manifesto](./docs/manifest.md).
 
 ## Contributing
 
@@ -165,8 +201,8 @@ OpenMUX is released under **Apache-2.0**. See [LICENSE](./LICENSE).
 
 <div align="center">
 
-<b>Made for developers who want the terminal to stay fast, flexible, and open.</b>
+<b>Build your terminal workspace, not someone else's.</b>
 
-Made with ❤️ in Skåne. A <a href="https://fingergun.dev/">Finger Gun</a> project, making nothing into something.
+<a href="https://openmux.fingergun.dev/">openmux.fingergun.dev</a> · Built with ❤️ in Skåne. A <a href="https://fingergun.dev/">Finger Gun</a> project.
 
 </div>

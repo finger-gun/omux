@@ -127,15 +127,32 @@ The current pane-hosting split is:
 
 This keeps the shell AppKit-first while preserving one narrow terminal-engine seam.
 
+## Control-plane event stream
+
+`omux events` now streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events for the first wave of short `omux` commands.
+
+Current first-wave shared action event names:
+
+- `workspace.opened`
+- `tab.created`
+- `pane.split`
+- `paneTab.created`
+- `paneTab.focused`
+- `paneTab.closed`
+- `session.focused`
+- `command.started`
+- `notification.raised`
+- `workspace.restored`
+
 ## Terminal action dispatch
 
-OpenMUX now translates a focused first wave of Ghostty action callbacks into OpenMUX-native terminal events instead of rejecting every upcall.
+OpenMUX still translates a focused first wave of Ghostty action callbacks into OpenMUX-native terminal events instead of rejecting every upcall.
 
 The dispatch path is intentionally layered:
 
 1. `CGhosttyRuntime` decodes supported `ghostty_action_s` values into bridge-owned `TerminalAction` records keyed by `runtimeSurfaceID`.
 2. `GhosttyTerminalBridge` enriches them with `paneID` and `sessionID` and publishes typed `TerminalActionEvent` values to observers.
-3. `OmuxAppShell.TerminalActionCoordinator` resolves workspace/tab context, updates pane state, performs native host-side behavior, emits structured hooks, and publishes app-local control-plane terminal events.
+3. `OmuxAppShell.TerminalActionCoordinator` resolves workspace/tab context, updates pane state, performs native host-side behavior, emits structured hooks, and publishes `terminal.*` events into the shared control-plane event stream.
 
 Supported first-wave actions:
 
@@ -154,7 +171,7 @@ Key boundary rules:
 
 - Ghostty enums and payload structs stay inside `OmuxTerminalBridge`.
 - Hook payloads now use `OmuxValue` instead of string-only metadata.
-- Control-plane terminal event names are OpenMUX-native (`terminal.cwdChanged`, `terminal.commandFinished`, and so on) and are defined without committing to a long-lived streaming transport.
+- Control-plane event names are OpenMUX-native (`terminal.cwdChanged`, `workspace.opened`, `command.started`, and so on) and are defined without committing to a long-lived streaming transport.
 - Unsupported and app-shell ownership actions remain rejected by default.
 - The fallback runtime stays silent for terminal-action events unless it gains equivalent native signals later.
 

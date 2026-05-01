@@ -13,6 +13,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
+    private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
         controller: self,
@@ -20,7 +21,14 @@ public final class WorkspaceController: @unchecked Sendable {
     )
 
     public var onChange: ((Workspace) -> Void)?
-    public var onTerminalEvent: ((ControlPlaneTerminalEvent) -> Void)?
+    public var onControlPlaneEvent: ((ControlPlaneEvent) -> Void)? {
+        get { controlPlaneEventHandler }
+        set { controlPlaneEventHandler = newValue }
+    }
+    public var onTerminalEvent: ((ControlPlaneEvent) -> Void)? {
+        get { controlPlaneEventHandler }
+        set { controlPlaneEventHandler = newValue }
+    }
 
     public init(
         bridge: GhosttyTerminalBridge,
@@ -65,6 +73,16 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceOpened,
+                workspaceID: workspace.id,
+                tabID: tab.id,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                payload: .object(["path": .string(path)])
+            )
+        )
         onChange?(workspace)
         return workspace
     }
@@ -155,6 +173,7 @@ public final class WorkspaceController: @unchecked Sendable {
             return false
         }
 
+        let focusedPane = updatedWorkspace.focusedPane
         try hookRunner.emit(
             HookInvocation(
                 category: .session,
@@ -164,19 +183,37 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .sessionFocused,
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: sessionID,
+                payload: .object([:])
+            )
+        )
         onChange?(updatedWorkspace)
         return true
     }
 
     public func restore(workspaceID: WorkspaceID) -> Workspace? {
         lock.lock()
-        defer { lock.unlock() }
-
         guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
+            lock.unlock()
             return nil
         }
 
         setActiveWorkspaceID(workspace.id)
+        lock.unlock()
+
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceRestored,
+                workspaceID: workspace.id,
+                payload: .object([:])
+            )
+        )
         onChange?(workspace)
         return workspace
     }
@@ -188,6 +225,18 @@ public final class WorkspaceController: @unchecked Sendable {
             HookInvocation(
                 category: .ui,
                 name: "notification-raised",
+                workspaceID: activeWorkspaceID,
+                payload: .object([
+                    "title": .string(request.title),
+                    "body": .string(request.body),
+                    "severity": .string(request.severity.rawValue),
+                ])
+            )
+        )
+
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .notificationRaised,
                 workspaceID: activeWorkspaceID,
                 payload: .object([
                     "title": .string(request.title),
@@ -344,6 +393,16 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .tabCreated,
+                workspaceID: updatedWorkspace.id,
+                tabID: tab.id,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                payload: .object([:])
+            )
+        )
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -380,6 +439,16 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .paneSplit,
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                payload: .object(["axis": .string(axis.rawValue)])
+            )
+        )
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -419,6 +488,16 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .paneTabCreated,
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                payload: .object(["paneStackID": .string(focusedStack.id.rawValue)])
+            )
+        )
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -458,6 +537,18 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
 
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .paneTabClosed,
+                workspaceID: updatedWorkspace.id,
+                tabID: updatedWorkspace.focusedTabID,
+                paneID: removedPane.id,
+                sessionID: removedPane.session.id,
+                payload: .object([
+                    "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
+                ])
+            )
+        )
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -580,6 +671,17 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         if let updatedWorkspace {
+            let focusedPane = updatedWorkspace.focusedPane
+            publishControlPlaneEvent(
+                ControlPlaneEvent(
+                    name: .paneTabFocused,
+                    workspaceID: updatedWorkspace.id,
+                    tabID: updatedWorkspace.focusedTabID,
+                    paneID: focusedPane?.id ?? paneID,
+                    sessionID: focusedPane?.session.id,
+                    payload: .object([:])
+                )
+            )
             onChange?(updatedWorkspace)
         }
 
@@ -639,7 +741,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func runCommand(in sessionID: SessionID, command: String) throws -> Bool {
-        guard let pane = pane(for: sessionID) else {
+        guard let context = controlPlaneContext(for: sessionID) else {
             return false
         }
 
@@ -647,14 +749,25 @@ public final class WorkspaceController: @unchecked Sendable {
             HookInvocation(
                 category: .command,
                 name: "command-started",
-                workspaceID: activeWorkspaceID,
-                paneID: pane.id,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                paneID: context.paneID,
                 sessionID: sessionID,
                 payload: .object(["command": .string(command)])
             )
         )
 
-        try bridge.run(command: command, inPane: pane.id)
+        try bridge.run(command: command, inPane: context.paneID)
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .commandStarted,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                paneID: context.paneID,
+                sessionID: sessionID,
+                payload: .object(["command": .string(command)])
+            )
+        )
         return true
     }
 
@@ -806,6 +919,23 @@ public final class WorkspaceController: @unchecked Sendable {
             .first(where: { $0.session.id == sessionID })
     }
 
+    private func controlPlaneContext(
+        for sessionID: SessionID
+    ) -> (workspaceID: WorkspaceID, tabID: TabID?, paneID: PaneID)? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for workspace in workspaces {
+            for tab in workspace.tabs {
+                if let pane = tab.panes.first(where: { $0.session.id == sessionID }) {
+                    return (workspaceID: workspace.id, tabID: tab.id, paneID: pane.id)
+                }
+            }
+        }
+
+        return nil
+    }
+
     private func paneStackID(for paneID: PaneID, in workspace: Workspace) -> PaneStackID? {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
@@ -816,8 +946,12 @@ public final class WorkspaceController: @unchecked Sendable {
         terminalActionCoordinator.handle(event)
     }
 
-    func publishTerminalEvent(_ event: ControlPlaneTerminalEvent) {
-        onTerminalEvent?(event)
+    func publishControlPlaneEvent(_ event: ControlPlaneEvent) {
+        controlPlaneEventHandler?(event)
+    }
+
+    func publishTerminalEvent(_ event: ControlPlaneEvent) {
+        publishControlPlaneEvent(event)
     }
 
     func deliverNotification(_ request: NotificationRequest) {

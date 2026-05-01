@@ -90,8 +90,35 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(reload.result, .object(["method": .string(ControlMethod.configReload.rawValue)]))
     }
 
-    func testControlPlaneTerminalEventUsesOpenMUXNativePayloads() {
-        let event = ControlPlaneTerminalEvent(
+    func testControlPlaneEventSupportsSparseOpenMUXNativePayloads() {
+        let event = ControlPlaneEvent(
+            name: .notificationRaised,
+            workspaceID: WorkspaceID(rawValue: "workspace-1"),
+            payload: .object([
+                "title": .string("Heads up"),
+                "body": .string("Build finished"),
+            ])
+        )
+
+        XCTAssertEqual(event.name, "notification.raised")
+        XCTAssertEqual(
+            event.rpcValue,
+            .object([
+                "name": .string("notification.raised"),
+                "workspaceID": .string("workspace-1"),
+                "tabID": .null,
+                "paneID": .null,
+                "sessionID": .null,
+                "payload": .object([
+                    "title": .string("Heads up"),
+                    "body": .string("Build finished"),
+                ]),
+            ])
+        )
+    }
+
+    func testTerminalEventUsesOpenMUXNativePayloads() {
+        let event = ControlPlaneEvent(
             name: .commandFinished,
             workspaceID: WorkspaceID(rawValue: "workspace-1"),
             tabID: TabID(rawValue: "tab-1"),
@@ -103,7 +130,7 @@ final class OmuxControlPlaneTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(event.name.rawValue, "terminal.commandFinished")
+        XCTAssertEqual(event.name, "terminal.commandFinished")
         XCTAssertEqual(
             event.rpcValue,
             .object([
@@ -120,7 +147,7 @@ final class OmuxControlPlaneTests: XCTestCase {
         )
     }
 
-    func testTerminalEventStreamDeliversNotifications() throws {
+    func testTerminalEventStreamDeliversMixedNotifications() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appending(path: "events.sock")
@@ -158,12 +185,12 @@ final class OmuxControlPlaneTests: XCTestCase {
                     id: nil,
                     method: ControlMethod.terminalEvents.rawValue,
                     params: .object([
-                        "name": .string("terminal.commandFinished"),
+                        "name": .string("workspace.opened"),
                         "workspaceID": .string("workspace-1"),
-                        "tabID": .string("tab-1"),
-                        "paneID": .string("pane-1"),
-                        "sessionID": .string("session-1"),
-                        "payload": .object(["exitCode": .integer(0)]),
+                        "tabID": .null,
+                        "paneID": .null,
+                        "sessionID": .null,
+                        "payload": .object(["path": .string("/tmp/demo")]),
                     ])
                 )
                 try UnixSocketIO.writeLine(try encoder.encode(finishedEvent), to: descriptor)
@@ -181,7 +208,7 @@ final class OmuxControlPlaneTests: XCTestCase {
 
         XCTAssertEqual(receivedEvents.count, 2)
         XCTAssertEqual(receivedEvents[0].objectValue?["name"], .string("terminal.cwdChanged"))
-        XCTAssertEqual(receivedEvents[1].objectValue?["name"], .string("terminal.commandFinished"))
+        XCTAssertEqual(receivedEvents[1].objectValue?["name"], .string("workspace.opened"))
     }
 }
 
