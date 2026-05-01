@@ -63,13 +63,25 @@ Themes are flat TOML files with a closed token set. Those tokens drive both the 
 OpenMUX currently ships:
 
 - `monokai-soda`
+- `ayu-mirage`
 - `catppuccin`
+- `cobalt2`
+- `doom-one`
 - `dracula`
-- `nord`
+- `everforest-dark`
+- `flexoki-dark`
+- `github-dark`
 - `gruvbox`
+- `horizon`
+- `kanagawa-wave`
+- `nord`
 - `one-dark`
+- `rose-pine`
 - `solarized-dark`
 - `solarized-light`
+- `tokyo-night-storm`
+
+The additional imported presets are generated from selected Ghostty-format themes in the [iTerm2 Color Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) collection. Maintainers can refresh them with `make import-themes`, which uses `Scripts/theme-imports/iterm2-popular.txt` and the pinned ref in `Scripts/theme-imports/iterm2-colors-ref`.
 
 ## `[terminal]` settings
 

@@ -1,0 +1,11 @@
+# output-id | upstream Ghostty theme name | OpenMUX display name
+tokyo-night-storm | TokyoNight Storm | Tokyo Night Storm
+github-dark | GitHub Dark Default | GitHub Dark
+everforest-dark | Everforest Dark Hard | Everforest Dark
+ayu-mirage | Ayu Mirage | Ayu Mirage
+cobalt2 | Cobalt2 | Cobalt2
+doom-one | Doom One | Doom One
+horizon | Horizon | Horizon
+kanagawa-wave | Kanagawa Wave | Kanagawa Wave
+rose-pine | Rose Pine | Rose Pine
+flexoki-dark | Flexoki Dark | Flexoki Dark

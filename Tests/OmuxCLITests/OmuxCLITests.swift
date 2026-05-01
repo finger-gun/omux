@@ -321,13 +321,22 @@ final class OmuxCLITests: XCTestCase {
         defer { server.stop() }
 
         var output = [String]()
+        var selectedInput: String?
         let command = OmuxCLICommand(
             client: OmuxControlClient(socketPath: socketPath),
             writeLine: { output.append($0) },
-            readInputLine: { "5" }
+            readInputLine: {
+                selectedInput = output
+                    .first(where: { $0.contains(" nord — Nord") })?
+                    .split(separator: ".", maxSplits: 1)
+                    .first
+                    .map(String.init)
+                return selectedInput ?? ""
+            }
         )
 
         XCTAssertEqual(command.run(arguments: ["omux", "theme"]), 0)
+        XCTAssertNotNil(selectedInput)
         let contents = try String(contentsOf: tempHome.appendingPathComponent("config.toml"), encoding: .utf8)
         XCTAssertTrue(contents.contains("name = \"nord\""))
         XCTAssertEqual(output.first, "Available themes:")

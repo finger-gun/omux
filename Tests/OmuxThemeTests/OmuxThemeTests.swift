@@ -10,16 +10,38 @@ struct OmuxThemeTests {
 
         #expect(diagnostics.contains(where: { $0.severity.isError }) == false)
         #expect(Set(themes.map(\.name)) == Set([
-            "monokai-soda",
+            "ayu-mirage",
             "catppuccin",
+            "cobalt2",
+            "doom-one",
             "dracula",
-            "nord",
+            "everforest-dark",
+            "flexoki-dark",
+            "github-dark",
             "gruvbox",
+            "horizon",
+            "kanagawa-wave",
+            "nord",
             "one-dark",
+            "rose-pine",
             "solarized-dark",
             "solarized-light",
+            "tokyo-night-storm",
+            "monokai-soda",
         ]))
         #expect(themes.allSatisfy { $0.tokens[.backgroundSurface] == $0.tokens[.backgroundCanvas] })
+    }
+
+    @Test
+    func importedBuiltInThemeLoadsWithExpectedTokens() {
+        let result = OmuxThemeRegistry().loadTheme(named: "tokyo-night-storm")
+
+        #expect(result.hasErrors == false)
+        #expect(result.theme?.displayName == "Tokyo Night Storm")
+        #expect(result.theme?.tokens[.backgroundCanvas]?.hexString == "#24283b")
+        #expect(result.theme?.tokens[.foregroundPrimary]?.hexString == "#c0caf5")
+        #expect(result.theme?.tokens[.ansiBlue]?.hexString == "#7aa2f7")
+        #expect(result.theme?.tokens[.accent]?.hexString == "#7aa2f7")
     }
 
     @Test

@@ -20,7 +20,7 @@ It is intentionally directional rather than date-driven.
 | ✅ Done | Native developer workflow | `make setup`, `make dev`, `make build`, `make test`, `make verify`, and `make smoke` provide a stable native workflow. |
 | ✅ Done | CI baseline and app smoke coverage | CI now runs normal build/test checks and a dedicated runtime-enabled launch smoke test. |
 | ✅ Done | Visual shell redesign | The shell now has a terminal-native sidebar, no persistent top bar, flatter pane chrome, unified titlebar styling, and a stronger workspace hierarchy without drifting into IDE-like enclosure. |
-| ✅ Done | Config and theme foundation | OpenMUX now owns `~/.omux/config.toml`, token-based themes, generated Ghostty config output, explicit config reload/doctor commands, and bundled presets for Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, and Solarized light/dark. |
+| ✅ Done | Config and theme foundation | OpenMUX now owns `~/.omux/config.toml`, token-based themes, generated Ghostty config output, explicit config reload/doctor commands, bundled presets for Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, Solarized light/dark, and ten imported iTerm2 Color Schemes presets. |
 | ⏳ Next | Runtime transcript and snapshot quality | Improve runtime-backed pane snapshots so they expose richer transcript state instead of the current minimal placeholder snapshot. |
 | ⏳ Next | Pane stack polish | Add reordering, drag/drop, and better local pane-tab ergonomics inside split regions. |
 | ⏳ Next | Layout persistence and restore | Save and restore workspaces, splits, pane stacks, and sessions in a predictable way. |
@@ -38,7 +38,7 @@ It is intentionally directional rather than date-driven.
 | High | Workspace usability | Refine pane-tab interactions, focus behavior, restore flows, and sidebar/session navigation so the shell feels more complete day to day. |
 | High | Layout persistence and restore | Save and restore workspaces, splits, pane stacks, sessions, and active theme selection in a predictable way. |
 | High | Automation platform | Keep growing the `omux` + JSON-RPC + hooks surface so external tools and AI workflows can build on OpenMUX cleanly. |
-| Medium | Theme customization | Grow beyond the current bundled themes with more user overrides, import/export helpers, and richer editing workflows on top of the token model. |
+| Medium | Theme customization | Grow beyond the current bundled themes with more user overrides, import/export helpers, contrast checks, and richer editing workflows on top of the token model. |
 | Medium | Plugin architecture | Define the next layer above hooks for longer-running extensions and richer tool integrations. |
 | Medium | Interaction polish | Improve hover states, focus cues, transitions, empty states, notifications, and other details that make the UI feel deliberate without bloating the core model. |
 
