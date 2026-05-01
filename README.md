@@ -146,6 +146,12 @@ If you install the app bundle directly, it also includes a bundled `omux` binary
 /Applications/OpenMUX.app/Contents/MacOS/omux install-cli
 ```
 
+You can also watch live terminal events from the running app with:
+
+```bash
+omux events
+```
+
 ## Contributing
 
 Please read [CONTRIBUTING](./CONTRIBUTING.md) and [CODE OF CONDUCT](./CODE_OF_CONDUCT.md) before opening a pull request.

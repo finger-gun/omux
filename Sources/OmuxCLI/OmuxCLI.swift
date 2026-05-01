@@ -62,6 +62,10 @@ public struct OmuxCLICommand {
             case "list":
                 let response = try client.request(method: .listWorkspaces)
                 writeLine(response.result?.prettyPrinted ?? "[]")
+            case "events":
+                try client.streamTerminalEvents { event in
+                    writeLine(event.prettyPrinted)
+                }
             case "tab":
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
@@ -188,6 +192,7 @@ public struct OmuxCLICommand {
       omux theme <name>
       omux theme list
       omux list
+      omux events
       omux open <path>
       omux tab
       omux split [right|down]

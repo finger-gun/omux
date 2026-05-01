@@ -84,6 +84,61 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLIPrintsTerminalEventsUntilStreamCloses() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "events.sock")
+            .path(percentEncoded: false)
+
+        let encoder = JSONEncoder()
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start(
+            handler: { request in
+                JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+            },
+            streamHandler: { descriptor, request in
+                guard request.method == ControlMethod.terminalEvents.rawValue else {
+                    return false
+                }
+
+                let ack = JSONRPCResponse(id: request.id, result: .string("subscribed"))
+                try UnixSocketIO.writeLine(try encoder.encode(ack), to: descriptor)
+
+                let event = JSONRPCRequest(
+                    id: nil,
+                    method: ControlMethod.terminalEvents.rawValue,
+                    params: .object([
+                        "name": .string("terminal.commandFinished"),
+                        "workspaceID": .string("workspace-1"),
+                        "tabID": .string("tab-1"),
+                        "paneID": .string("pane-1"),
+                        "sessionID": .string("session-1"),
+                        "payload": .object([
+                            "durationNanoseconds": .integer(12),
+                            "exitCode": .integer(0),
+                        ]),
+                    ])
+                )
+                try UnixSocketIO.writeLine(try encoder.encode(event), to: descriptor)
+                return true
+            }
+        )
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        let exitCode = command.run(arguments: ["omux", "events"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(output.count, 1)
+        XCTAssertTrue(output[0].contains("\"name\" : \"terminal.commandFinished\""))
+        XCTAssertTrue(output[0].contains("\"paneID\" : \"pane-1\""))
+    }
+
     func testCLIConfigDoctorPrintsWarningsAndReturnsZero() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

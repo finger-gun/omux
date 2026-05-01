@@ -119,4 +119,77 @@ final class OmuxControlPlaneTests: XCTestCase {
             ])
         )
     }
+
+    func testTerminalEventStreamDeliversNotifications() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "events.sock")
+            .path(percentEncoded: false)
+
+        let encoder = JSONEncoder()
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start(
+            handler: { _ in
+                JSONRPCResponse(id: nil, error: JSONRPCError(code: 404, message: "unexpected"))
+            },
+            streamHandler: { descriptor, request in
+                guard request.method == ControlMethod.terminalEvents.rawValue else {
+                    return false
+                }
+
+                let ack = JSONRPCResponse(id: request.id, result: .string("subscribed"))
+                try UnixSocketIO.writeLine(try encoder.encode(ack), to: descriptor)
+
+                let cwdEvent = JSONRPCRequest(
+                    id: nil,
+                    method: ControlMethod.terminalEvents.rawValue,
+                    params: .object([
+                        "name": .string("terminal.cwdChanged"),
+                        "workspaceID": .string("workspace-1"),
+                        "tabID": .string("tab-1"),
+                        "paneID": .string("pane-1"),
+                        "sessionID": .string("session-1"),
+                        "payload": .object(["path": .string("/tmp/demo")]),
+                    ])
+                )
+                try UnixSocketIO.writeLine(try encoder.encode(cwdEvent), to: descriptor)
+
+                let finishedEvent = JSONRPCRequest(
+                    id: nil,
+                    method: ControlMethod.terminalEvents.rawValue,
+                    params: .object([
+                        "name": .string("terminal.commandFinished"),
+                        "workspaceID": .string("workspace-1"),
+                        "tabID": .string("tab-1"),
+                        "paneID": .string("pane-1"),
+                        "sessionID": .string("session-1"),
+                        "payload": .object(["exitCode": .integer(0)]),
+                    ])
+                )
+                try UnixSocketIO.writeLine(try encoder.encode(finishedEvent), to: descriptor)
+                return true
+            }
+        )
+        defer { server.stop() }
+
+        let client = OmuxControlClient(socketPath: socketPath)
+        var receivedEvents: [RPCValue] = []
+
+        try client.streamTerminalEvents { event in
+            receivedEvents.append(event)
+        }
+
+        XCTAssertEqual(receivedEvents.count, 2)
+        XCTAssertEqual(receivedEvents[0].objectValue?["name"], .string("terminal.cwdChanged"))
+        XCTAssertEqual(receivedEvents[1].objectValue?["name"], .string("terminal.commandFinished"))
+    }
+}
+
+private extension RPCValue {
+    var objectValue: [String: RPCValue]? {
+        if case .object(let object) = self {
+            return object
+        }
+        return nil
+    }
 }

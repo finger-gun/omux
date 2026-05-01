@@ -4,9 +4,89 @@ import OmuxConfig
 import OmuxCore
 
 final class OpenMUXControlPlaneService: @unchecked Sendable {
+    private final class TerminalEventSubscription {
+        private let lock = NSLock()
+        private let condition = NSCondition()
+        private var queue: [ControlPlaneTerminalEvent] = []
+        private var cancelled = false
+
+        func push(_ event: ControlPlaneTerminalEvent) {
+            lock.lock()
+            let isCancelled = cancelled
+            lock.unlock()
+            guard isCancelled == false else {
+                return
+            }
+
+            condition.lock()
+            queue.append(event)
+            condition.signal()
+            condition.unlock()
+        }
+
+        func nextEvent(timeout: TimeInterval = 0.5) -> ControlPlaneTerminalEvent? {
+            condition.lock()
+            defer { condition.unlock() }
+
+            while queue.isEmpty && cancelled == false {
+                guard condition.wait(until: Date().addingTimeInterval(timeout)) else {
+                    return nil
+                }
+            }
+
+            guard queue.isEmpty == false else {
+                return nil
+            }
+
+            return queue.removeFirst()
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+
+            condition.lock()
+            condition.broadcast()
+            condition.unlock()
+        }
+    }
+
+    private final class TerminalEventBroadcaster {
+        private let lock = NSLock()
+        private var subscriptions: [UUID: TerminalEventSubscription] = [:]
+
+        func subscribe() -> (id: UUID, subscription: TerminalEventSubscription) {
+            let id = UUID()
+            let subscription = TerminalEventSubscription()
+            lock.lock()
+            subscriptions[id] = subscription
+            lock.unlock()
+            return (id, subscription)
+        }
+
+        func unsubscribe(_ id: UUID) {
+            lock.lock()
+            let subscription = subscriptions.removeValue(forKey: id)
+            lock.unlock()
+            subscription?.cancel()
+        }
+
+        func publish(_ event: ControlPlaneTerminalEvent) {
+            lock.lock()
+            let activeSubscriptions = Array(subscriptions.values)
+            lock.unlock()
+
+            for subscription in activeSubscriptions {
+                subscription.push(event)
+            }
+        }
+    }
+
     private let controller: WorkspaceController
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let server: LocalControlServer
+    private let terminalEventBroadcaster = TerminalEventBroadcaster()
 
     init(
         controller: WorkspaceController,
@@ -19,22 +99,36 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     }
 
     func start() throws {
-        try server.start { [weak self] request in
-            guard let self else {
-                return JSONRPCResponse(
-                    id: request.id,
-                    error: JSONRPCError(code: -32001, message: "control plane unavailable")
-                )
-            }
-            do {
-                return try self.handle(request: request)
-            } catch {
-                return JSONRPCResponse(
-                    id: request.id,
-                    error: JSONRPCError(code: -32001, message: String(describing: error))
-                )
-            }
+        let previousTerminalEventHandler = controller.onTerminalEvent
+        controller.onTerminalEvent = { [weak self] event in
+            previousTerminalEventHandler?(event)
+            self?.terminalEventBroadcaster.publish(event)
         }
+
+        try server.start(
+            handler: { [weak self] request in
+                guard let self else {
+                    return JSONRPCResponse(
+                        id: request.id,
+                        error: JSONRPCError(code: -32001, message: "control plane unavailable")
+                    )
+                }
+                do {
+                    return try self.handle(request: request)
+                } catch {
+                    return JSONRPCResponse(
+                        id: request.id,
+                        error: JSONRPCError(code: -32001, message: String(describing: error))
+                    )
+                }
+            },
+            streamHandler: { [weak self] descriptor, request in
+                guard let self else {
+                    return false
+                }
+                return try self.handleStream(descriptor: descriptor, request: request)
+            }
+        )
     }
 
     func stop() {
@@ -116,9 +210,46 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                     "diagnostics": .array(result.diagnostics.map(\.rpcValue)),
                 ])
             )
+        case .terminalEvents:
+            return JSONRPCResponse(
+                id: request.id,
+                error: JSONRPCError(code: -32600, message: "terminal.events requires a streaming client")
+            )
         case .none:
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: -32601, message: "method not found"))
         }
+    }
+
+    private func handleStream(descriptor: Int32, request: JSONRPCRequest) throws -> Bool {
+        guard ControlMethod(rawValue: request.method) == .terminalEvents else {
+            return false
+        }
+
+        let encoder = JSONEncoder()
+        let subscription = terminalEventBroadcaster.subscribe()
+        defer { terminalEventBroadcaster.unsubscribe(subscription.id) }
+
+        let ack = JSONRPCResponse(id: request.id, result: .string("subscribed"))
+        try UnixSocketIO.writeLine(try encoder.encode(ack), to: descriptor)
+
+        while true {
+            guard let event = subscription.subscription.nextEvent() else {
+                continue
+            }
+
+            let notification = JSONRPCRequest(
+                id: nil,
+                method: ControlMethod.terminalEvents.rawValue,
+                params: event.rpcValue
+            )
+            do {
+                try UnixSocketIO.writeLine(try encoder.encode(notification), to: descriptor)
+            } catch UnixSocketError.writeFailed {
+                break
+            }
+        }
+
+        return true
     }
 }
 

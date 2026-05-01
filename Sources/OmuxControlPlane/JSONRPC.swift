@@ -14,7 +14,7 @@ public struct JSONRPCRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct JSONRPCError: Codable, Equatable, Sendable {
+public struct JSONRPCError: Error, Codable, Equatable, Sendable {
     public let code: Int
     public let message: String
 
@@ -52,4 +52,5 @@ public enum ControlMethod: String, Sendable {
     case restoreLayout = "workspace.restore"
     case configDoctor = "config.doctor"
     case configReload = "config.reload"
+    case terminalEvents = "terminal.events"
 }

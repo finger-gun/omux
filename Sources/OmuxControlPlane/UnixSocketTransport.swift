@@ -42,8 +42,8 @@ enum UnixSocketAddress {
     }
 }
 
-enum UnixSocketIO {
-    static func writeAll(_ data: Data, to descriptor: Int32) throws {
+public enum UnixSocketIO {
+    public static func writeAll(_ data: Data, to descriptor: Int32) throws {
         try data.withUnsafeBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else {
                 return
@@ -66,7 +66,7 @@ enum UnixSocketIO {
         }
     }
 
-    static func readToEnd(from descriptor: Int32) throws -> Data {
+    public static func readToEnd(from descriptor: Int32) throws -> Data {
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
 
@@ -84,6 +84,34 @@ enum UnixSocketIO {
         }
 
         return result
+    }
+
+    public static func writeLine(_ data: Data, to descriptor: Int32) throws {
+        var framed = data
+        framed.append(0x0A)
+        try writeAll(framed, to: descriptor)
+    }
+
+    public static func readLine(from descriptor: Int32) throws -> Data? {
+        var result = Data()
+        var byte: UInt8 = 0
+
+        while true {
+            let bytesRead = Darwin.read(descriptor, &byte, 1)
+            if bytesRead < 0 {
+                throw UnixSocketError.readFailed(errno)
+            }
+
+            if bytesRead == 0 {
+                return result.isEmpty ? nil : result
+            }
+
+            if byte == 0x0A {
+                return result
+            }
+
+            result.append(byte)
+        }
     }
 }
 
@@ -129,10 +157,57 @@ public final class OmuxControlClient {
         let responseData = try UnixSocketIO.readToEnd(from: descriptor)
         return try decoder.decode(JSONRPCResponse.self, from: responseData)
     }
+
+    public func streamTerminalEvents(
+        onEvent: (RPCValue) throws -> Void
+    ) throws {
+        let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw UnixSocketError.socketCreationFailed(errno)
+        }
+        defer { Darwin.close(descriptor) }
+
+        try UnixSocketAddress.withAddress(path: socketPath) { address, length in
+            let result = Darwin.connect(descriptor, address, length)
+            if result != 0 {
+                throw UnixSocketError.connectFailed(errno)
+            }
+        }
+
+        let request = JSONRPCRequest(method: ControlMethod.terminalEvents.rawValue)
+        let data = try encoder.encode(request)
+        try UnixSocketIO.writeAll(data, to: descriptor)
+        _ = Darwin.shutdown(descriptor, SHUT_WR)
+
+        guard let responseData = try UnixSocketIO.readLine(from: descriptor) else {
+            throw UnixSocketError.readFailed(ECONNRESET)
+        }
+
+        let response = try decoder.decode(JSONRPCResponse.self, from: responseData)
+        if let error = response.error {
+            throw error
+        }
+
+        while let line = try UnixSocketIO.readLine(from: descriptor) {
+            guard line.isEmpty == false else {
+                continue
+            }
+
+            let request = try decoder.decode(JSONRPCRequest.self, from: line)
+            guard request.method == ControlMethod.terminalEvents.rawValue,
+                  let params = request.params
+            else {
+                continue
+            }
+
+            try onEvent(params)
+        }
+    }
 }
 
 public final class LocalControlServer: @unchecked Sendable {
     public typealias Handler = @Sendable (JSONRPCRequest) -> JSONRPCResponse?
+    public typealias StreamHandler = @Sendable (Int32, JSONRPCRequest) throws -> Bool
 
     private let socketPath: String
     private let encoder = JSONEncoder()
@@ -145,7 +220,10 @@ public final class LocalControlServer: @unchecked Sendable {
         self.socketPath = socketPath
     }
 
-    public func start(handler: @escaping Handler) throws {
+    public func start(
+        handler: @escaping Handler,
+        streamHandler: StreamHandler? = nil
+    ) throws {
         try ensureSocketDirectoryExists()
         _ = unlink(socketPath)
 
@@ -173,7 +251,7 @@ public final class LocalControlServer: @unchecked Sendable {
         isRunning = true
 
         queue.async { [weak self] in
-            self?.acceptLoop(handler: handler)
+            self?.acceptLoop(handler: handler, streamHandler: streamHandler)
         }
     }
 
@@ -198,7 +276,7 @@ public final class LocalControlServer: @unchecked Sendable {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     }
 
-    private func acceptLoop(handler: @escaping Handler) {
+    private func acceptLoop(handler: @escaping Handler, streamHandler: StreamHandler?) {
         while isRunning {
             let clientDescriptor = Darwin.accept(listeningDescriptor, nil, nil)
             if clientDescriptor < 0 {
@@ -208,16 +286,23 @@ public final class LocalControlServer: @unchecked Sendable {
                 break
             }
 
-            handleConnection(clientDescriptor, handler: handler)
+            handleConnection(clientDescriptor, handler: handler, streamHandler: streamHandler)
         }
     }
 
-    private func handleConnection(_ descriptor: Int32, handler: Handler) {
+    private func handleConnection(
+        _ descriptor: Int32,
+        handler: Handler,
+        streamHandler: StreamHandler?
+    ) {
         defer { Darwin.close(descriptor) }
 
         do {
             let requestData = try UnixSocketIO.readToEnd(from: descriptor)
             let request = try decoder.decode(JSONRPCRequest.self, from: requestData)
+            if try streamHandler?(descriptor, request) == true {
+                return
+            }
             if let response = handler(request) {
                 let responseData = try encoder.encode(response)
                 try UnixSocketIO.writeAll(responseData, to: descriptor)
