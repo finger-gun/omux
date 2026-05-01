@@ -924,7 +924,7 @@ final class WorkspaceCanvasView: NSView {
 }
 
 @MainActor
-private final class SplitLayoutView: NSView {
+final class SplitLayoutView: NSView {
     private struct DragState {
         let dividerIndex: Int
         let initialLocation: CGFloat
@@ -939,6 +939,7 @@ private final class SplitLayoutView: NSView {
     private var dragState: DragState?
 
     override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     init(
         axis: PaneSplitAxis,

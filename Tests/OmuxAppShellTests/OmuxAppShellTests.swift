@@ -819,6 +819,27 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testSplitDividerDoesNotOptIntoWindowBackgroundDragging() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let windowController = WorkspaceWindowController(workspace: splitWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        rootView.layoutSubtreeIfNeeded()
+
+        let splitLayoutView = try XCTUnwrap(findView(ofType: SplitLayoutView.self, in: rootView))
+        XCTAssertFalse(splitLayoutView.mouseDownCanMoveWindow)
+    }
+
+    @MainActor
     func testWorkspaceWindowUsesDedicatedPaneHeaderChrome() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
