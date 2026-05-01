@@ -143,6 +143,10 @@ public final class HostedTerminalPaneView: NSView {
         contentHost.focusTarget
     }
 
+    public var representedPaneID: PaneID {
+        paneID
+    }
+
     public func updateFocusState(_ isFocused: Bool) {
         contentHost.setFocused(isFocused)
         layer?.borderWidth = 0

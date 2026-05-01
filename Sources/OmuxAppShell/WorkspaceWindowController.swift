@@ -13,6 +13,7 @@ private enum ShellLayoutMetrics {
 
 @MainActor
 final class WorkspaceWindowController: NSWindowController {
+    private let controller: WorkspaceController
     private let rootViewController: WorkspaceShellViewController
 
     init(
@@ -21,6 +22,7 @@ final class WorkspaceWindowController: NSWindowController {
         initialTheme: WorkspaceShellTheme = .defaultTheme,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared
     ) {
+        self.controller = controller
         self.rootViewController = WorkspaceShellViewController(
             controller: controller,
             initialTheme: initialTheme,
@@ -49,8 +51,9 @@ final class WorkspaceWindowController: NSWindowController {
     }
 
     func update(workspace: Workspace) {
-        window?.title = workspace.name
-        rootViewController.update(workspace: workspace)
+        let displayedWorkspace = controller.activeWorkspace() ?? workspace
+        window?.title = displayedWorkspace.name
+        rootViewController.update(workspace: displayedWorkspace)
     }
 
     func updateTheme(_ theme: WorkspaceShellTheme) {
@@ -139,6 +142,13 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func update(workspace: Workspace) {
+        let previousWorkspaceID = currentWorkspace?.id
+        let previousFocusedPaneID = currentWorkspace?.focusedPane?.id
+        let shouldRestoreFocus = shouldRestoreFocus(
+            previousWorkspaceID: previousWorkspaceID,
+            previousFocusedPaneID: previousFocusedPaneID,
+            workspace: workspace
+        )
         currentWorkspace = workspace
         apply(theme: currentTheme)
 
@@ -172,7 +182,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
         canvasView.render(layoutView: layout?.view, theme: currentTheme)
 
-        if let focusedPaneView = layout?.focusedPaneView {
+        if shouldRestoreFocus, let focusedPaneView = layout?.focusedPaneView {
             focusRestoreGeneration &+= 1
             let generation = focusRestoreGeneration
 
@@ -206,6 +216,44 @@ final class WorkspaceShellViewController: NSViewController {
         view.window?.backgroundColor = theme.shell.windowBackground
         sidebarView.apply(theme: theme)
         canvasView.apply(theme: theme)
+    }
+
+    private func shouldRestoreFocus(
+        previousWorkspaceID: WorkspaceID?,
+        previousFocusedPaneID: PaneID?,
+        workspace: Workspace
+    ) -> Bool {
+        let focusedPaneID = workspace.focusedPane?.id
+        if previousWorkspaceID != workspace.id || previousFocusedPaneID != focusedPaneID {
+            return true
+        }
+
+        return wasFocusedPaneFirstResponder(paneID: focusedPaneID)
+    }
+
+    private func wasFocusedPaneFirstResponder(paneID: PaneID?) -> Bool {
+        guard let paneID,
+              let firstResponder = view.window?.firstResponder as? NSView,
+              let paneView = findHostedTerminalPaneView(in: canvasView, paneID: paneID)
+        else {
+            return false
+        }
+
+        return firstResponder === paneView.focusTarget || firstResponder.isDescendant(of: paneView.focusTarget)
+    }
+
+    private func findHostedTerminalPaneView(in rootView: NSView, paneID: PaneID) -> HostedTerminalPaneView? {
+        if let paneView = rootView as? HostedTerminalPaneView, paneView.representedPaneID == paneID {
+            return paneView
+        }
+
+        for subview in rootView.subviews {
+            if let paneView = findHostedTerminalPaneView(in: subview, paneID: paneID) {
+                return paneView
+            }
+        }
+
+        return nil
     }
 
     func toggleSidebarVisibility() {

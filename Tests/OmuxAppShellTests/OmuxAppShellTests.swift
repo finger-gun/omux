@@ -695,6 +695,32 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowIgnoresInactiveWorkspaceUpdatesForDisplay() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(firstWorkspace.focusedPane)
+        let firstSurfaceID = try XCTUnwrap(bridge.surface(for: firstPane.id)?.runtimeSurfaceID)
+        let secondWorkspace = try controller.createWorkspace()
+
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+
+        let windowController = WorkspaceWindowController(workspace: secondWorkspace, controller: controller)
+        XCTAssertEqual(windowController.window?.title, secondWorkspace.name)
+
+        runtime.emit(.progressReported(state: .active, progress: 42), on: firstSurfaceID)
+        windowController.update(workspace: firstWorkspace)
+
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+        XCTAssertEqual(windowController.window?.title, secondWorkspace.name)
+    }
+
+    @MainActor
     func testWorkspaceWindowDoesNotDuplicateFocusedPaneTitleAheadOfTabs() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
