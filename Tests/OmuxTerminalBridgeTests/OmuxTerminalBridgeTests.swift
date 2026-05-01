@@ -345,7 +345,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
     }
 
     @MainActor
-    func testRuntimeHostedViewRoutesCommandArrowAsTerminalNavigationText() throws {
+    func testRuntimeHostedViewRoutesCommandArrowAsTerminalNavigationKeyEvents() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
@@ -358,7 +358,9 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         runtimeView.keyDown(with: try makeKeyEvent(keyCode: 123, characters: "", modifiers: .command))
         runtimeView.keyDown(with: try makeKeyEvent(keyCode: 124, characters: "", modifiers: .command))
 
-        XCTAssertEqual(runtime.committedTexts, ["\u{1}", "\u{5}"])
+        XCTAssertEqual(runtime.handledEvents.map(\.key), ["a", "e"])
+        XCTAssertEqual(runtime.handledEvents.map(\.modifiers), [[.leftControl], [.leftControl]])
+        XCTAssertTrue(runtime.committedTexts.isEmpty)
         XCTAssertTrue(runtime.accumulatedEvents.isEmpty)
     }
 
@@ -379,7 +381,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertTrue(runtime.accumulatedEvents.isEmpty)
     }
 
-    func testBridgeHandlesCommandArrowShortcutAsNavigationText() throws {
+    func testBridgeHandlesCommandArrowShortcutAsNavigationKeyEventForRuntime() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
@@ -400,7 +402,23 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             inPane: pane.id
         )
 
-        XCTAssertEqual(runtime.sentTexts, ["\u{1}"])
+        XCTAssertEqual(runtime.handledEvents.map(\.key), ["a"])
+        XCTAssertEqual(runtime.handledEvents.map(\.modifiers), [[.leftControl]])
+        XCTAssertTrue(runtime.sentTexts.isEmpty)
+    }
+
+    func testCommandArrowNavigationUsesControlTextForFallbackPty() {
+        let event = NormalizedKeyEvent(
+            keyCode: 124,
+            key: "",
+            text: nil,
+            modifiers: [.leftCommand],
+            phase: .keyDown,
+            isRepeat: false,
+            route: .shortcut
+        )
+
+        XCTAssertEqual(TerminalCommandArrowNavigation.controlText(for: event), "\u{5}")
     }
 
     @MainActor
@@ -1148,6 +1166,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var hostedViews: [String: InspectableRuntimeSurfaceView] = [:]
     private(set) var committedTexts: [String] = []
     private(set) var sentTexts: [String] = []
+    private(set) var handledEvents: [NormalizedKeyEvent] = []
     private(set) var preeditUpdates: [String?] = []
     private(set) var accumulatedEvents: [NormalizedKeyEvent] = []
     private(set) var bindingActions: [String] = []
@@ -1185,6 +1204,9 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
             return existing
         }
         let view = InspectableRuntimeSurfaceView(frame: .zero)
+        view.normalizedKeyHandler = { [weak self] event in
+            self?.handledEvents.append(event)
+        }
         view.committedTextHandler = { [weak self] text in
             self?.committedTexts.append(text)
         }
@@ -1235,7 +1257,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     }
 
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
-        _ = event
+        handledEvents.append(event)
         _ = runtimeSurfaceID
     }
 

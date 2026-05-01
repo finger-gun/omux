@@ -389,9 +389,9 @@ private final class FallbackTerminalTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let normalizedEvent = normalizer.normalize(event)
-        if let navigationText = TerminalNavigationText.commandArrowText(for: normalizedEvent) {
+        if TerminalCommandArrowNavigation.controlText(for: normalizedEvent) != nil {
             do {
-                try bridge.send(text: navigationText, toPane: paneID)
+                try bridge.handle(normalizedEvent, inPane: paneID)
             } catch {
                 NSSound.beep()
             }

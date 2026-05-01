@@ -406,18 +406,24 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 
     public func handle(_ event: NormalizedKeyEvent, inPane paneID: PaneID) throws {
-        if let navigationText = TerminalNavigationText.commandArrowText(for: event) {
-            try send(text: navigationText, toPane: paneID)
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+
+        if let navigationEvent = TerminalCommandArrowNavigation.controlEvent(for: event),
+           let navigationText = TerminalCommandArrowNavigation.controlText(for: event) {
+            if let state, state.runtimeOwned {
+                try runtime.handle(navigationEvent, on: state.runtimeSurfaceID)
+                publishSnapshot(for: paneID)
+            } else {
+                try write(Data(navigationText.utf8), toPane: paneID)
+            }
             return
         }
 
         guard event.route != .shortcut else {
             return
         }
-
-        lock.lock()
-        let state = sessionStateByPane[paneID]
-        lock.unlock()
 
         if let state, state.runtimeOwned {
             try runtime.handle(event, on: state.runtimeSurfaceID)

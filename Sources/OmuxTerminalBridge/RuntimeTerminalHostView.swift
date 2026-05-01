@@ -168,8 +168,8 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 
     override func keyDown(with event: NSEvent) {
         let normalizedEvent = normalizer.normalize(event)
-        if let navigationText = TerminalNavigationText.commandArrowText(for: normalizedEvent) {
-            committedTextHandler?(navigationText)
+        if let navigationEvent = TerminalCommandArrowNavigation.controlEvent(for: normalizedEvent) {
+            normalizedKeyHandler?(navigationEvent)
             return
         }
 
@@ -408,8 +408,8 @@ enum TerminalDroppedFileText {
     }
 }
 
-enum TerminalNavigationText {
-    static func commandArrowText(for event: NormalizedKeyEvent) -> String? {
+enum TerminalCommandArrowNavigation {
+    static func controlText(for event: NormalizedKeyEvent) -> String? {
         guard event.phase == .keyDown,
               event.modifiers.intersection([.leftCommand, .rightCommand]).isEmpty == false,
               event.modifiers.intersection([.leftControl, .rightControl, .leftOption, .rightOption]).isEmpty
@@ -422,6 +422,37 @@ enum TerminalNavigationText {
             return "\u{1}"
         case 124?:
             return "\u{5}"
+        default:
+            return nil
+        }
+    }
+
+    static func controlEvent(for event: NormalizedKeyEvent) -> NormalizedKeyEvent? {
+        guard let controlText = controlText(for: event) else {
+            return nil
+        }
+
+        switch controlText {
+        case "\u{1}":
+            return NormalizedKeyEvent(
+                keyCode: 0,
+                key: "a",
+                text: nil,
+                modifiers: [.leftControl],
+                phase: event.phase,
+                isRepeat: event.isRepeat,
+                route: .terminal
+            )
+        case "\u{5}":
+            return NormalizedKeyEvent(
+                keyCode: 14,
+                key: "e",
+                text: nil,
+                modifiers: [.leftControl],
+                phase: event.phase,
+                isRepeat: event.isRepeat,
+                route: .terminal
+            )
         default:
             return nil
         }
