@@ -9,3 +9,13 @@ horizon | Horizon | Horizon
 kanagawa-wave | Kanagawa Wave | Kanagawa Wave
 rose-pine | Rose Pine | Rose Pine
 flexoki-dark | Flexoki Dark | Flexoki Dark
+catppuccin-macchiato | Catppuccin Macchiato | Catppuccin Macchiato
+catppuccin-frappe | Catppuccin Frappe | Catppuccin Frappe
+github-dark-dimmed | GitHub Dark Dimmed | GitHub Dark Dimmed
+nightfox | Nightfox | Nightfox
+carbonfox | Carbonfox | Carbonfox
+duskfox | Duskfox | Duskfox
+material-ocean | Material Ocean | Material Ocean
+monokai-pro | Monokai Pro | Monokai Pro
+gruvbox-material-dark | Gruvbox Material Dark | Gruvbox Material Dark
+tokyonight-moon | TokyoNight Moon | TokyoNight Moon
