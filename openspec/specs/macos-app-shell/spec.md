@@ -59,6 +59,17 @@ The native macOS shell SHALL use AppKit window configuration so the titlebar/bac
 - **WHEN** a workspace window is displayed with the current theme
 - **THEN** the titlebar region visually matches or blends with the shell background rather than presenting a separate default macOS band
 
+### Requirement: Transparent titlebar preserves native double-click zoom
+Workspace windows SHALL preserve native macOS double-click titlebar zoom/maximize behavior while using the transparent full-size-content titlebar appearance.
+
+#### Scenario: Titlebar double-click requests window zoom
+- **WHEN** the user double-clicks the workspace window titlebar or unified titlebar background region
+- **THEN** OpenMUX invokes the native window zoom behavior for that window
+
+#### Scenario: Titlebar appearance remains integrated
+- **WHEN** a workspace window is displayed
+- **THEN** the titlebar region remains visually integrated with the shell background
+
 ### Requirement: The native shell surfaces terminal action outcomes without surrendering shell ownership
 The native macOS shell SHALL consume supported terminal action events and apply the resulting user-visible behavior through OpenMUX-owned shell state, pane chrome, and native host integrations rather than delegating shell ownership to the terminal engine.
 
