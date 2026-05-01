@@ -344,6 +344,107 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(output.contains("Theme set to Nord."))
     }
 
+    func testCLIInteractiveThemePickerSelectsThemeAndReloads() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        try OmuxConfigTemplate.starter(themeName: "monokai-soda").write(
+            to: tempHome.appendingPathComponent("config.toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "itp.sock")
+            .path(percentEncoded: false)
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            if request.method == ControlMethod.configReload.rawValue {
+                return JSONRPCResponse(id: request.id, result: .object([
+                    "applied": .bool(true),
+                    "diagnostics": .array([]),
+                ]))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            isInteractiveThemePickerAvailable: { true },
+            selectThemeInteractively: { themes, currentThemeName in
+                XCTAssertEqual(currentThemeName, "monokai-soda")
+                return themes.first(where: { $0.name == "nord" })
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "theme"]), 0)
+        let contents = try String(contentsOf: tempHome.appendingPathComponent("config.toml"), encoding: .utf8)
+        XCTAssertTrue(contents.contains("name = \"nord\""))
+        XCTAssertEqual(output, ["Theme set to Nord.", "No diagnostics.", "OpenMUX config reloaded."])
+    }
+
+    func testCLIInteractiveThemePickerCancellationDoesNotModifyConfig() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try OmuxConfigTemplate.starter(themeName: "monokai-soda").write(
+            to: configURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            isInteractiveThemePickerAvailable: { true },
+            selectThemeInteractively: { _, _ in nil }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "theme"]), 0)
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("name = \"monokai-soda\""))
+        XCTAssertEqual(output, ["Cancelled."])
+    }
+
+    func testInteractiveThemePickerViewportKeepsSelectedThemeVisible() {
+        let viewport = ThemePickerViewport.make(itemCount: 28, selectedIndex: 17, terminalRows: 8)
+
+        XCTAssertLessThanOrEqual(viewport.startIndex, 17)
+        XCTAssertLessThan(17, viewport.endIndex)
+        XCTAssertEqual(viewport.visibleCount, 6)
+        XCTAssertEqual(viewport.endIndex - viewport.startIndex, 6)
+    }
+
+    func testInteractiveThemePickerViewportClampsNearEnd() {
+        let viewport = ThemePickerViewport.make(itemCount: 28, selectedIndex: 27, terminalRows: 8)
+
+        XCTAssertEqual(viewport.startIndex, 22)
+        XCTAssertEqual(viewport.endIndex, 28)
+        XCTAssertEqual(viewport.visibleCount, 6)
+    }
+
     func testCLIInstallCommandCreatesSymlinkAndPrintsPathHintWhenNeeded() throws {
         let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let tempHome = tempRoot.appendingPathComponent("home", isDirectory: true)

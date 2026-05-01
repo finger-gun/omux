@@ -707,8 +707,45 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
         XCTAssertTrue(window.titlebarAppearsTransparent)
+        XCTAssertTrue(window.isMovableByWindowBackground)
         XCTAssertEqual(window.titleVisibility, .hidden)
         XCTAssertEqual(window.title, "Project Alpha")
+        XCTAssertTrue(window.contentViewController?.view is WorkspaceRootView)
+    }
+
+    @MainActor
+    func testWorkspaceRootViewDoubleClickInUnifiedTitlebarRequestsZoom() throws {
+        let rootView = WorkspaceRootView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        rootView.titlebarHeightOverrideForTesting = 36
+        let window = NSWindow(
+            contentRect: rootView.bounds,
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = rootView
+        var zoomRequested = false
+        rootView.titlebarDoubleClickHandler = { _ in
+            zoomRequested = true
+        }
+
+        let event = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 80, y: 470),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 2,
+                pressure: 1
+            )
+        )
+
+        rootView.mouseDown(with: event)
+
+        XCTAssertTrue(zoomRequested)
     }
 
     @MainActor

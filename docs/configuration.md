@@ -64,22 +64,32 @@ OpenMUX currently ships:
 
 - `monokai-soda`
 - `ayu-mirage`
+- `carbonfox`
 - `catppuccin`
+- `catppuccin-frappe`
+- `catppuccin-macchiato`
 - `cobalt2`
 - `doom-one`
 - `dracula`
+- `duskfox`
 - `everforest-dark`
 - `flexoki-dark`
 - `github-dark`
+- `github-dark-dimmed`
 - `gruvbox`
+- `gruvbox-material-dark`
 - `horizon`
 - `kanagawa-wave`
+- `material-ocean`
+- `monokai-pro`
+- `nightfox`
 - `nord`
 - `one-dark`
 - `rose-pine`
 - `solarized-dark`
 - `solarized-light`
 - `tokyo-night-storm`
+- `tokyonight-moon`
 
 The additional imported presets are generated from selected Ghostty-format themes in the [iTerm2 Color Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) collection. Maintainers can refresh them with `make import-themes`, which uses `Scripts/theme-imports/iterm2-popular.txt` and the pinned ref in `Scripts/theme-imports/iterm2-colors-ref`.
 
@@ -150,3 +160,5 @@ omux theme
 omux theme <name>
 omux theme list
 ```
+
+When attached to an interactive terminal, `omux theme` opens a keyboard picker: use Up/Down to move, Enter to apply the highlighted theme, and `q` or Escape to cancel. In non-interactive contexts it keeps the scriptable prompt that accepts a typed theme number or name.

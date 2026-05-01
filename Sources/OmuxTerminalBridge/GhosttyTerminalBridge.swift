@@ -406,6 +406,11 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 
     public func handle(_ event: NormalizedKeyEvent, inPane paneID: PaneID) throws {
+        if let navigationText = TerminalNavigationText.commandArrowText(for: event) {
+            try send(text: navigationText, toPane: paneID)
+            return
+        }
+
         guard event.route != .shortcut else {
             return
         }

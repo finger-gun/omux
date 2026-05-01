@@ -12,6 +12,45 @@ private enum ShellLayoutMetrics {
 }
 
 @MainActor
+final class WorkspaceRootView: NSView {
+    var titlebarHeightOverrideForTesting: CGFloat?
+    var titlebarDoubleClickHandler: ((NSWindow) -> Void)?
+
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isInUnifiedTitlebar(event) else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        guard let window else {
+            return
+        }
+
+        if event.clickCount >= 2 {
+            if let titlebarDoubleClickHandler {
+                titlebarDoubleClickHandler(window)
+            } else {
+                window.zoom(nil)
+            }
+            return
+        }
+
+        window.performDrag(with: event)
+    }
+
+    func isInUnifiedTitlebar(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        let titlebarHeight = titlebarHeightOverrideForTesting ?? safeAreaInsets.top
+        guard titlebarHeight > 0 else {
+            return false
+        }
+        return point.y >= bounds.maxY - titlebarHeight
+    }
+}
+
+@MainActor
 final class WorkspaceWindowController: NSWindowController {
     private let controller: WorkspaceController
     private let rootViewController: WorkspaceShellViewController
@@ -38,6 +77,7 @@ final class WorkspaceWindowController: NSWindowController {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.title = workspace.name
         window.contentViewController = rootViewController
         window.setContentSize(NSSize(width: 1220, height: 780))
@@ -101,7 +141,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     override func loadView() {
-        view = NSView()
+        view = WorkspaceRootView()
         view.translatesAutoresizingMaskIntoConstraints = true
         view.wantsLayer = true
 

@@ -32,7 +32,7 @@ The import path SHALL copy terminal-facing tokens directly from upstream Ghostty
 ## MODIFIED Requirements
 
 ### Requirement: Built-in themes ship as data
-The system SHALL ship its built-in themes as TOML files bundled as package resources, not as hand-coded source constants. The built-in set SHALL include `monokai-soda` (default), `catppuccin`, `dracula`, `nord`, `gruvbox`, `one-dark`, `solarized-dark`, `solarized-light`, `tokyo-night-storm`, `github-dark`, `everforest-dark`, `ayu-mirage`, `cobalt2`, `doom-one`, `horizon`, `kanagawa-wave`, `rose-pine`, and `flexoki-dark`.
+The system SHALL ship its built-in themes as TOML files bundled as package resources, not as hand-coded source constants. The built-in set SHALL include `monokai-soda` (default), `catppuccin`, `dracula`, `nord`, `gruvbox`, `one-dark`, `solarized-dark`, `solarized-light`, `tokyo-night-storm`, `github-dark`, `everforest-dark`, `ayu-mirage`, `cobalt2`, `doom-one`, `horizon`, `kanagawa-wave`, `rose-pine`, `flexoki-dark`, `catppuccin-macchiato`, `catppuccin-frappe`, `github-dark-dimmed`, `nightfox`, `carbonfox`, `duskfox`, `material-ocean`, `monokai-pro`, `gruvbox-material-dark`, and `tokyonight-moon`.
 
 #### Scenario: Default theme on first run
 - **WHEN** OpenMUX starts and no theme is configured

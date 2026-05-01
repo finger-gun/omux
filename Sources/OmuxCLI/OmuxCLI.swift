@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
@@ -8,6 +9,8 @@ public struct OmuxCLICommand {
     private let client: OmuxControlClient
     private let writeLine: (String) -> Void
     private let readInputLine: () -> String?
+    private let isInteractiveThemePickerAvailable: () -> Bool
+    private let selectThemeInteractively: ([OmuxTheme], String?) throws -> OmuxTheme?
     private let configLoader: OmuxConfigLoader
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
@@ -25,7 +28,9 @@ public struct OmuxCLICommand {
             readInputLine: readInputLine,
             configLoader: configLoader,
             themeRegistry: themeRegistry,
-            installer: OmuxCLIInstaller()
+            installer: OmuxCLIInstaller(),
+            isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
+            selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) }
         )
     }
 
@@ -35,11 +40,17 @@ public struct OmuxCLICommand {
         readInputLine: @escaping () -> String?,
         configLoader: OmuxConfigLoader,
         themeRegistry: OmuxThemeRegistry,
-        installer: OmuxCLIInstaller
+        installer: OmuxCLIInstaller,
+        isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
+        selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
+            try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1)
+        }
     ) {
         self.client = client
         self.writeLine = writeLine
         self.readInputLine = readInputLine
+        self.isInteractiveThemePickerAvailable = isInteractiveThemePickerAvailable
+        self.selectThemeInteractively = selectThemeInteractively
         self.configLoader = configLoader
         self.themeRegistry = themeRegistry
         self.installer = installer
@@ -284,18 +295,27 @@ public struct OmuxCLICommand {
                 guard exitCode == 0 else {
                     return exitCode
                 }
-                printThemes(themes, currentThemeName: currentThemeName)
-                writeLine("Select theme number or name:")
-                guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      input.isEmpty == false else {
-                    writeLine("omux error: no theme selected")
-                    return 1
+
+                if isInteractiveThemePickerAvailable() {
+                    guard let theme = try selectThemeInteractively(themes, currentThemeName) else {
+                        writeLine("Cancelled.")
+                        return 0
+                    }
+                    selectedTheme = theme
+                } else {
+                    printThemes(themes, currentThemeName: currentThemeName)
+                    writeLine("Select theme number or name:")
+                    guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          input.isEmpty == false else {
+                        writeLine("omux error: no theme selected")
+                        return 1
+                    }
+                    if ["q", "quit", "exit"].contains(input.lowercased()) {
+                        writeLine("Cancelled.")
+                        return 0
+                    }
+                    selectedTheme = resolveThemeSelection(input, themes: themes)
                 }
-                if ["q", "quit", "exit"].contains(input.lowercased()) {
-                    writeLine("Cancelled.")
-                    return 0
-                }
-                selectedTheme = resolveThemeSelection(input, themes: themes)
             }
 
             guard let selectedTheme else {
@@ -491,6 +511,270 @@ public struct OmuxCLICommand {
         }
 
         return diagnostics.contains(where: { $0.severity.isError }) ? 1 : 0
+    }
+}
+
+struct ThemePickerViewport: Equatable {
+    let startIndex: Int
+    let endIndex: Int
+    let visibleCount: Int
+
+    static func make(itemCount: Int, selectedIndex: Int, terminalRows: Int) -> ThemePickerViewport {
+        guard itemCount > 0 else {
+            return ThemePickerViewport(startIndex: 0, endIndex: 0, visibleCount: 0)
+        }
+
+        let reservedRows = 2
+        let visibleCount = min(itemCount, max(1, terminalRows - reservedRows))
+        let clampedSelectedIndex = min(max(0, selectedIndex), itemCount - 1)
+        let preferredStart = clampedSelectedIndex - (visibleCount / 2)
+        let maxStart = max(0, itemCount - visibleCount)
+        let startIndex = min(max(0, preferredStart), maxStart)
+
+        return ThemePickerViewport(
+            startIndex: startIndex,
+            endIndex: startIndex + visibleCount,
+            visibleCount: visibleCount
+        )
+    }
+}
+
+private struct TerminalThemePicker {
+    enum PickerError: Error, LocalizedError {
+        case terminalUnavailable
+        case unableToReadTerminalAttributes
+        case unableToEnterRawMode
+        case unableToRestoreTerminalMode
+
+        var errorDescription: String? {
+            switch self {
+            case .terminalUnavailable:
+                return "interactive terminal is not available"
+            case .unableToReadTerminalAttributes:
+                return "unable to read terminal attributes"
+            case .unableToEnterRawMode:
+                return "unable to enter raw terminal mode"
+            case .unableToRestoreTerminalMode:
+                return "unable to restore terminal mode"
+            }
+        }
+    }
+
+    private enum Key {
+        case up
+        case down
+        case enter
+        case cancel
+        case other
+    }
+
+    static func isAvailable() -> Bool {
+        isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+    }
+
+    func selectTheme(themes: [OmuxTheme], currentThemeName: String?) throws -> OmuxTheme? {
+        guard Self.isAvailable() else {
+            throw PickerError.terminalUnavailable
+        }
+        guard themes.isEmpty == false else {
+            return nil
+        }
+
+        var selectedIndex = themes.firstIndex(where: { $0.name == currentThemeName }) ?? 0
+        var renderedLineCount = 0
+
+        return try withRawTerminalMode {
+            write("\u{1B}[?25l")
+            defer {
+                clearRenderedLines(renderedLineCount)
+                write("\u{1B}[?25h")
+            }
+
+            render(
+                themes: themes,
+                selectedIndex: selectedIndex,
+                currentThemeName: currentThemeName,
+                previousLineCount: &renderedLineCount
+            )
+
+            while true {
+                switch readKey() {
+                case .up:
+                    selectedIndex = selectedIndex == 0 ? themes.count - 1 : selectedIndex - 1
+                    render(
+                        themes: themes,
+                        selectedIndex: selectedIndex,
+                        currentThemeName: currentThemeName,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .down:
+                    selectedIndex = selectedIndex == themes.count - 1 ? 0 : selectedIndex + 1
+                    render(
+                        themes: themes,
+                        selectedIndex: selectedIndex,
+                        currentThemeName: currentThemeName,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .enter:
+                    return themes[selectedIndex]
+                case .cancel:
+                    return nil
+                case .other:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func withRawTerminalMode<Result>(_ body: () throws -> Result) throws -> Result {
+        var original = termios()
+        guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+            throw PickerError.unableToReadTerminalAttributes
+        }
+
+        var raw = original
+        cfmakeraw(&raw)
+        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
+            throw PickerError.unableToEnterRawMode
+        }
+
+        do {
+            let result = try body()
+            guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) == 0 else {
+                throw PickerError.unableToRestoreTerminalMode
+            }
+            return result
+        } catch {
+            _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
+            throw error
+        }
+    }
+
+    private func render(
+        themes: [OmuxTheme],
+        selectedIndex: Int,
+        currentThemeName: String?,
+        previousLineCount: inout Int
+    ) {
+        clearRenderedLines(previousLineCount)
+
+        let viewport = ThemePickerViewport.make(
+            itemCount: themes.count,
+            selectedIndex: selectedIndex,
+            terminalRows: terminalRowCount()
+        )
+        let selectedOrdinal = min(max(0, selectedIndex), themes.count - 1) + 1
+        var lines = ["Available themes \(selectedOrdinal)/\(themes.count) (Up/Down, Enter, q):"]
+
+        for index in viewport.startIndex..<viewport.endIndex {
+            let theme = themes[index]
+            let currentMarker = theme.name == currentThemeName ? "*" : " "
+            let pointer = index == selectedIndex ? ">" : " "
+            let line = "\(pointer)\(currentMarker) \(theme.name) — \(theme.displayName)"
+            lines.append(index == selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
+        }
+
+        if viewport.visibleCount < themes.count {
+            lines.append("Showing \(viewport.startIndex + 1)-\(viewport.endIndex) of \(themes.count)")
+        }
+
+        write(lines.map { "\u{1B}[2K\r\($0)" }.joined(separator: "\n") + "\n")
+        previousLineCount = lines.count
+    }
+
+    private func terminalRowCount() -> Int {
+        var size = winsize()
+        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0 else {
+            return 24
+        }
+        return Int(size.ws_row)
+    }
+
+    private func clearRenderedLines(_ lineCount: Int) {
+        guard lineCount > 0 else {
+            return
+        }
+
+        write("\u{1B}[\(lineCount)A")
+        for index in 0..<lineCount {
+            write("\u{1B}[2K\r")
+            if index < lineCount - 1 {
+                write("\u{1B}[1B")
+            }
+        }
+        write("\u{1B}[\(lineCount - 1)A")
+    }
+
+    private func readKey() -> Key {
+        guard let byte = readByte() else {
+            return .cancel
+        }
+
+        switch byte {
+        case 0x03:
+            return .cancel
+        case 0x0A, 0x0D:
+            return .enter
+        case 0x1B:
+            guard let second = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            guard second == 0x5B, let third = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            if third == 0x41 {
+                return .up
+            }
+            if third == 0x42 {
+                return .down
+            }
+            return .other
+        case 0x6A:
+            return .down
+        case 0x6B:
+            return .up
+        case 0x71, 0x51:
+            return .cancel
+        default:
+            return .other
+        }
+    }
+
+    private func readByte(timeoutMicroseconds: Int? = nil) -> UInt8? {
+        if let timeoutMicroseconds {
+            let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+            guard flags >= 0 else {
+                return nil
+            }
+            guard fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+                return nil
+            }
+            defer {
+                _ = fcntl(STDIN_FILENO, F_SETFL, flags)
+            }
+
+            let deadline = Date().addingTimeInterval(Double(timeoutMicroseconds) / 1_000_000)
+            while Date() < deadline {
+                var byte: UInt8 = 0
+                let count = Darwin.read(STDIN_FILENO, &byte, 1)
+                if count == 1 {
+                    return byte
+                }
+                if errno != EAGAIN && errno != EWOULDBLOCK {
+                    return nil
+                }
+                usleep(1_000)
+            }
+            return nil
+        }
+
+        var byte: UInt8 = 0
+        let count = Darwin.read(STDIN_FILENO, &byte, 1)
+        return count == 1 ? byte : nil
+    }
+
+    private func write(_ text: String) {
+        FileHandle.standardOutput.write(Data(text.utf8))
     }
 }
 

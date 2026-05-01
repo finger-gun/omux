@@ -38,6 +38,16 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.fileURL])
+    }
+
     func configureHostedPane(
         paneID: PaneID,
         isFocused: Bool,
@@ -158,6 +168,11 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 
     override func keyDown(with event: NSEvent) {
         let normalizedEvent = normalizer.normalize(event)
+        if let navigationText = TerminalNavigationText.commandArrowText(for: normalizedEvent) {
+            committedTextHandler?(navigationText)
+            return
+        }
+
         if normalizedEvent.route == .shortcut {
             super.keyDown(with: event)
             return
@@ -298,6 +313,33 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         }
     }
 
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        TerminalDroppedFileText.pasteText(from: sender.draggingPasteboard) == nil ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let text = TerminalDroppedFileText.pasteText(from: sender.draggingPasteboard) else {
+            return false
+        }
+
+        window?.makeFirstResponder(self)
+        if isFocusedPane == false, let paneID {
+            onFocus?(paneID)
+        }
+        committedTextHandler?(text)
+        return true
+    }
+
+    @discardableResult
+    func insertDroppedFileURLs(_ urls: [URL]) -> Bool {
+        guard let text = TerminalDroppedFileText.pasteText(for: urls) else {
+            return false
+        }
+
+        committedTextHandler?(text)
+        return true
+    }
+
     private func syncPreedit(clearIfNeeded: Bool = true) {
         if markedText.length > 0 {
             preeditHandler?(markedText.string)
@@ -337,3 +379,51 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 }
 
 extension RuntimeTerminalHostView: @preconcurrency NSTextInputClient {}
+
+enum TerminalDroppedFileText {
+    static func pasteText(from pasteboard: NSPasteboard) -> String? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+        ]
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options)?
+            .compactMap { $0 as? URL } ?? []
+        return pasteText(for: urls)
+    }
+
+    static func pasteText(for urls: [URL]) -> String? {
+        let quotedPaths = urls
+            .filter(\.isFileURL)
+            .map { shellQuotedPath($0.path(percentEncoded: false)) }
+        guard quotedPaths.isEmpty == false else {
+            return nil
+        }
+        return quotedPaths.joined(separator: " ")
+    }
+
+    static func shellQuotedPath(_ path: String) -> String {
+        guard path.isEmpty == false else {
+            return "''"
+        }
+        return "'\(path.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+}
+
+enum TerminalNavigationText {
+    static func commandArrowText(for event: NormalizedKeyEvent) -> String? {
+        guard event.phase == .keyDown,
+              event.modifiers.intersection([.leftCommand, .rightCommand]).isEmpty == false,
+              event.modifiers.intersection([.leftControl, .rightControl, .leftOption, .rightOption]).isEmpty
+        else {
+            return nil
+        }
+
+        switch event.keyCode {
+        case 123?:
+            return "\u{1}"
+        case 124?:
+            return "\u{5}"
+        default:
+            return nil
+        }
+    }
+}

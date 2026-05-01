@@ -79,6 +79,8 @@ swift run omux help
 swift run OpenMUXApp
 ```
 
+`swift run omux theme` opens the interactive arrow-key picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback.
+
 If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, `make verify`, or `make smoke`. Use `make import-themes` when refreshing the selected imported iTerm2 Color Schemes presets from the pinned upstream ref.
 
 For release packaging and GitHub Releases, see [docs/releasing.md](./releasing.md).
@@ -93,7 +95,7 @@ The current shell baseline adds:
 - persistent pane-owned interactive shell sessions behind workspace and pane navigation instead of a separate Sessions sidebar section
 - split-right and split-down panes routed through native View menu commands instead of persistent shell buttons
 - pane stacks at each split leaf, with local pane tabs inside a region
-- token-owned shell-and-terminal theming sourced from `~/.omux/config.toml`, user theme overrides in `~/.omux/themes/`, and bundled presets including Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, Solarized light/dark, and ten imported iTerm2 Color Schemes presets
+- token-owned shell-and-terminal theming sourced from `~/.omux/config.toml`, user theme overrides in `~/.omux/themes/`, and bundled presets including Monokai Soda, Catppuccin, Dracula, Nord, Gruvbox, One Dark, Solarized light/dark, and imported iTerm2 Color Schemes presets
 - explicit config diagnostics and `omux config doctor` / `omux config reload` support through the same local control plane
 - a second polish pass that tightens shell proportions, makes sidebar navigation visible/useful, and gives shell controls real intrinsic sizing
 - a follow-up navigation pass that moves workspace tabs into the left rail, adds a compact sidebar workspace-creation affordance, supports workspace renaming, and disables destructive workspace/pane commands when they would empty the shell

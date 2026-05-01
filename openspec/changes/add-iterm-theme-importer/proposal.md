@@ -8,7 +8,7 @@ This change adds a repeatable import path for selected themes from the iTerm2 Co
 
 - Provide a scriptable importer that transforms upstream Ghostty-format iTerm2 Color Schemes files into OpenMUX theme TOML.
 - Use a manifest so the selected imported themes, display names, source names, and output identifiers are inspectable and reproducible.
-- Add ten recognizable built-in themes from the catalog using the importer.
+- Add recognizable built-in themes from the catalog using the importer.
 - Keep imported output inside OpenMUX's existing theme registry and compiler path.
 - Preserve terminal-first behavior by prioritizing exact terminal palette mapping and deterministic shell chrome token derivation.
 
@@ -23,7 +23,7 @@ This change adds a repeatable import path for selected themes from the iTerm2 Co
 ## What Changes
 
 - Add a repository script that fetches selected upstream Ghostty theme files from `mbadolato/iTerm2-Color-Schemes`, validates the expected color keys, and emits OpenMUX theme TOML files.
-- Add a manifest for ten selected themes from the catalog.
+- Add a manifest for selected themes from the catalog.
 - Add generated built-in theme resources for the selected themes.
 - Update theme tests and documentation so the expanded bundled theme set is explicit.
 - Record upstream source/ref information in generated files to support review and future refreshes.
@@ -36,7 +36,7 @@ This change adds a repeatable import path for selected themes from the iTerm2 Co
 
 ### Modified Capabilities
 
-- `theme-system`: The built-in theme set gains an import pipeline and ten additional bundled presets generated from selected iTerm2 Color Schemes Ghostty files.
+- `theme-system`: The built-in theme set gains an import pipeline and additional bundled presets generated from selected iTerm2 Color Schemes Ghostty files.
 
 ## Impact
 

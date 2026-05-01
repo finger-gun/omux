@@ -359,6 +359,7 @@ private final class FallbackTerminalTextView: NSTextView {
         let textStorage = NSTextStorage()
         textStorage.addLayoutManager(layoutManager)
         super.init(frame: .zero, textContainer: textContainer)
+        registerForDraggedTypes([.fileURL])
     }
 
     @available(*, unavailable)
@@ -388,6 +389,15 @@ private final class FallbackTerminalTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let normalizedEvent = normalizer.normalize(event)
+        if let navigationText = TerminalNavigationText.commandArrowText(for: normalizedEvent) {
+            do {
+                try bridge.send(text: navigationText, toPane: paneID)
+            } catch {
+                NSSound.beep()
+            }
+            return
+        }
+
         if normalizedEvent.route == .shortcut {
             super.keyDown(with: event)
             return
@@ -410,6 +420,29 @@ private final class FallbackTerminalTextView: NSTextView {
             try bridge.send(text: text, toPane: paneID)
         } catch {
             NSSound.beep()
+        }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        TerminalDroppedFileText.pasteText(from: sender.draggingPasteboard) == nil ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let text = TerminalDroppedFileText.pasteText(from: sender.draggingPasteboard) else {
+            return false
+        }
+
+        window?.makeFirstResponder(self)
+        if isFocusedPane == false {
+            onFocus(paneID)
+        }
+
+        do {
+            try bridge.send(text: text, toPane: paneID)
+            return true
+        } catch {
+            NSSound.beep()
+            return false
         }
     }
 }

@@ -12,7 +12,7 @@ The iTerm2 Color Schemes repository publishes many schemes in Ghostty config for
 - Keep imported themes deterministic by using an explicit manifest with output identifiers, display names, source names, and a pinned upstream ref.
 - Validate upstream files before writing theme resources so missing color keys fail loudly.
 - Generate OpenMUX-only shell chrome tokens through deterministic derivation from the imported terminal palette.
-- Add ten imported built-in themes while preserving the existing default.
+- Add imported built-in themes while preserving the existing default.
 
 **Non-Goals:**
 
@@ -79,7 +79,7 @@ Generated TOML files include comments naming the upstream repository, ref, and u
 ## Migration Plan
 
 1. Add the importer script and manifest/ref files.
-2. Run the importer to generate ten new theme TOML files under the existing bundled resource directory.
+2. Run the importer to generate new theme TOML files under the existing bundled resource directory.
 3. Update tests and docs to include the expanded built-in set.
 4. Runtime migration is unnecessary because theme loading already discovers bundled TOML resources.
 
