@@ -96,6 +96,8 @@ final class WorkspaceShellViewController: NSViewController {
 
         let mainColumn = NSStackView()
         mainColumn.orientation = .vertical
+        mainColumn.alignment = .width
+        mainColumn.distribution = .fill
         mainColumn.spacing = 0
         mainColumn.translatesAutoresizingMaskIntoConstraints = false
 
@@ -122,6 +124,7 @@ final class WorkspaceShellViewController: NSViewController {
             mainColumnLeadingConstraint,
             mainColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -ShellLayoutMetrics.outerPadding),
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
+            canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
         ])
 
         applySidebarVisibility()
@@ -580,6 +583,7 @@ final class PaneStackView: NSView {
         )
         paneCardView.configure(
             headerView: headerView,
+            statusText: activePane.terminalState.statusSummary,
             terminalPaneView: terminalPaneView,
             theme: theme,
             focused: activePane.id == focusedPaneID
@@ -607,6 +611,7 @@ final class PaneStackView: NSView {
 @MainActor
 final class PaneCardView: NSView {
     private let container = NSStackView()
+    private let statusLabel = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -614,9 +619,15 @@ final class PaneCardView: NSView {
         wantsLayer = true
 
         container.orientation = .vertical
+        container.alignment = .width
+        container.distribution = .fill
         container.spacing = 0
         container.translatesAutoresizingMaskIntoConstraints = false
         addSubview(container)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        statusLabel.lineBreakMode = .byTruncatingMiddle
 
         NSLayoutConstraint.activate([
             container.topAnchor.constraint(equalTo: topAnchor),
@@ -633,6 +644,7 @@ final class PaneCardView: NSView {
 
     func configure(
         headerView: PaneHeaderView,
+        statusText: String?,
         terminalPaneView: HostedTerminalPaneView,
         theme: WorkspaceShellTheme,
         focused: Bool
@@ -643,10 +655,21 @@ final class PaneCardView: NSView {
         }
 
         terminalPaneView.apply(themePalette: theme.terminalPalette)
+        terminalPaneView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        terminalPaneView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         headerView.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
+        statusLabel.stringValue = statusText ?? ""
+        statusLabel.textColor = theme.shell.textMuted
+        statusLabel.isHidden = statusText == nil
 
         container.addArrangedSubview(headerView)
+        headerView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        if statusText != nil {
+            container.addArrangedSubview(statusLabel)
+            statusLabel.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        }
         container.addArrangedSubview(terminalPaneView)
+        terminalPaneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
 
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0

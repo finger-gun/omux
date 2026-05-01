@@ -152,4 +152,21 @@ final class OmuxCoreTests: XCTestCase {
 
         XCTAssertNil(tab.closeFocusedPane())
     }
+
+    func testOmuxValuePreservesStructuredPayloadShape() throws {
+        let value: OmuxValue = .object([
+            "path": .string("/tmp/project"),
+            "exitCode": .integer(1),
+            "duration": .double(1.5),
+            "healthy": .bool(false),
+            "items": .array([.string("one"), .null]),
+        ])
+
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(OmuxValue.self, from: data)
+
+        XCTAssertEqual(decoded, value)
+        XCTAssertEqual(decoded.objectValue?["exitCode"]?.integerValue, 1)
+        XCTAssertEqual(decoded.objectValue?["items"]?.arrayValue?.count, 2)
+    }
 }

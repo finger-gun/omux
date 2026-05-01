@@ -16,7 +16,7 @@ public struct HookInvocation: Codable, Equatable, Sendable {
     public let tabID: TabID?
     public let paneID: PaneID?
     public let sessionID: SessionID?
-    public let metadata: [String: String]
+    public let payload: OmuxValue
     public let occurredAt: Date
 
     public init(
@@ -26,7 +26,7 @@ public struct HookInvocation: Codable, Equatable, Sendable {
         tabID: TabID? = nil,
         paneID: PaneID? = nil,
         sessionID: SessionID? = nil,
-        metadata: [String: String] = [:],
+        payload: OmuxValue = .object([:]),
         occurredAt: Date = Date()
     ) {
         self.category = category
@@ -35,7 +35,7 @@ public struct HookInvocation: Codable, Equatable, Sendable {
         self.tabID = tabID
         self.paneID = paneID
         self.sessionID = sessionID
-        self.metadata = metadata
+        self.payload = payload
         self.occurredAt = occurredAt
     }
 }

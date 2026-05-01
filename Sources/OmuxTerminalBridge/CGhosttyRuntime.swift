@@ -180,7 +180,12 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                     let owner = Unmanaged<CGhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
                     owner.scheduleTick()
                 },
-                action_cb: { _, _, _ in false },
+                action_cb: { app, target, action in
+                    guard let app else { return false }
+                    guard let userdata = ghostty_app_userdata(app) else { return false }
+                    let owner = Unmanaged<CGhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
+                    return owner.handleAction(target: target, action: action)
+                },
                 read_clipboard_cb: { userdata, location, state in
                     guard let userdata else { return false }
                     let owner = Unmanaged<CGhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
@@ -221,6 +226,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private var focusedRuntimeSurfaceID: String?
     private var tickScheduled = false
     private var compiledConfigPath: URL?
+    private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
 
     public init(compiledConfigPath: URL? = nil) {
         self.compiledConfigPath = compiledConfigPath
@@ -232,6 +238,14 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
 
     public func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
         try replaceCompiledConfig(path: path, updateRunningApp: true)
+    }
+
+    public func setTerminalActionHandler(
+        _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    ) {
+        lock.lock()
+        terminalActionHandler = handler
+        lock.unlock()
     }
 
     public func createSurface(for paneID: PaneID) throws -> String {
@@ -313,6 +327,137 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             runOnMain {
                 ghostty_surface_free(surface)
             }
+        }
+    }
+
+    private func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let runtimeSurfaceID = runtimeSurfaceID(for: target.target.surface)
+        else {
+            return false
+        }
+
+        let translation = translateAction(action)
+        guard case .supported(let terminalAction) = translation else {
+            return false
+        }
+
+        lock.lock()
+        let handler = terminalActionHandler
+        lock.unlock()
+        return handler?(RuntimeTerminalActionRecord(runtimeSurfaceID: runtimeSurfaceID, action: terminalAction)) ?? false
+    }
+
+    private func runtimeSurfaceID(for surface: ghostty_surface_t?) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return surfaces.first(where: { $0.value.surface == surface })?.key
+    }
+
+    private func translateAction(_ action: ghostty_action_s) -> TerminalActionTranslation {
+        switch action.tag {
+        case GHOSTTY_ACTION_PWD:
+            guard let pwd = action.action.pwd.pwd.map(String.init(cString:)) else {
+                return .deferred
+            }
+            return .supported(.workingDirectoryChanged(pwd))
+        case GHOSTTY_ACTION_SET_TITLE:
+            guard let title = action.action.set_title.title.map(String.init(cString:)) else {
+                return .deferred
+            }
+            return .supported(.titleChanged(title))
+        case GHOSTTY_ACTION_SET_TAB_TITLE:
+            guard let title = action.action.set_tab_title.title.map(String.init(cString:)) else {
+                return .deferred
+            }
+            return .supported(.tabTitleChanged(title))
+        case GHOSTTY_ACTION_OPEN_URL:
+            guard let urlPointer = action.action.open_url.url else {
+                return .deferred
+            }
+            let utf8Pointer = UnsafeRawPointer(urlPointer).assumingMemoryBound(to: UInt8.self)
+            let buffer = UnsafeBufferPointer(start: utf8Pointer, count: Int(action.action.open_url.len))
+            let url = String(decoding: buffer, as: UTF8.self)
+            let kind: TerminalOpenURLKind
+            switch action.action.open_url.kind {
+            case GHOSTTY_ACTION_OPEN_URL_KIND_TEXT:
+                kind = .text
+            case GHOSTTY_ACTION_OPEN_URL_KIND_HTML:
+                kind = .html
+            default:
+                kind = .unknown
+            }
+            return .supported(.openURL(url: url, kind: kind))
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            guard let titlePointer = action.action.desktop_notification.title else {
+                return .deferred
+            }
+            let title = String(cString: titlePointer)
+            let body = action.action.desktop_notification.body.map(String.init(cString:))
+            return .supported(.desktopNotification(title: title, body: body))
+        case GHOSTTY_ACTION_RING_BELL:
+            return .supported(.bell)
+        case GHOSTTY_ACTION_COMMAND_FINISHED:
+            let exitCode = action.action.command_finished.exit_code >= 0 ? Int(action.action.command_finished.exit_code) : nil
+            return .supported(
+                .commandFinished(
+                    exitCode: exitCode,
+                    durationNanoseconds: action.action.command_finished.duration
+                )
+            )
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            let state: TerminalProgressState
+            switch action.action.progress_report.state {
+            case GHOSTTY_PROGRESS_STATE_SET:
+                state = .active
+            case GHOSTTY_PROGRESS_STATE_ERROR:
+                state = .error
+            case GHOSTTY_PROGRESS_STATE_INDETERMINATE:
+                state = .indeterminate
+            case GHOSTTY_PROGRESS_STATE_PAUSE:
+                state = .paused
+            default:
+                state = .removed
+            }
+            let progress = action.action.progress_report.progress >= 0 ? Int(action.action.progress_report.progress) : nil
+            return .supported(.progressReported(state: state, progress: progress))
+        case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+            return .supported(
+                .childExited(
+                    exitCode: Int(action.action.child_exited.exit_code),
+                    elapsedMilliseconds: action.action.child_exited.timetime_ms
+                )
+            )
+        case GHOSTTY_ACTION_RENDERER_HEALTH:
+            let isHealthy = action.action.renderer_health == GHOSTTY_RENDERER_HEALTH_HEALTHY
+            return .supported(.rendererHealthChanged(isHealthy: isHealthy))
+        case GHOSTTY_ACTION_NEW_WINDOW,
+             GHOSTTY_ACTION_NEW_TAB,
+             GHOSTTY_ACTION_CLOSE_TAB,
+             GHOSTTY_ACTION_NEW_SPLIT,
+             GHOSTTY_ACTION_CLOSE_ALL_WINDOWS,
+             GHOSTTY_ACTION_TOGGLE_MAXIMIZE,
+             GHOSTTY_ACTION_TOGGLE_FULLSCREEN,
+             GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW,
+             GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS,
+             GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
+             GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
+             GHOSTTY_ACTION_TOGGLE_VISIBILITY,
+             GHOSTTY_ACTION_MOVE_TAB,
+             GHOSTTY_ACTION_GOTO_TAB,
+             GHOSTTY_ACTION_GOTO_SPLIT,
+             GHOSTTY_ACTION_GOTO_WINDOW,
+             GHOSTTY_ACTION_RESIZE_SPLIT,
+             GHOSTTY_ACTION_EQUALIZE_SPLITS,
+             GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM,
+             GHOSTTY_ACTION_PRESENT_TERMINAL,
+             GHOSTTY_ACTION_OPEN_CONFIG,
+             GHOSTTY_ACTION_FLOAT_WINDOW,
+             GHOSTTY_ACTION_CHECK_FOR_UPDATES,
+             GHOSTTY_ACTION_CLOSE_WINDOW:
+            return .rejected
+        default:
+            return .deferred
         }
     }
 

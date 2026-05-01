@@ -3,6 +3,7 @@ import OmuxConfig
 import OmuxTheme
 import Foundation
 import XCTest
+@testable import OmuxControlPlane
 @testable import OmuxAppShell
 @testable import OmuxCore
 @testable import OmuxHooks
@@ -507,6 +508,114 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    func testTerminalActionCoordinatorUpdatesPaneStateAndPublishesControlPlaneEvent() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        var publishedEvent: ControlPlaneTerminalEvent?
+        controller.onTerminalEvent = { event in
+            publishedEvent = event
+        }
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.workingDirectory, "/var/tmp")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedWorkingDirectory, "/var/tmp")
+        XCTAssertEqual(publishedEvent?.name, .workingDirectoryChanged)
+        XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
+    }
+
+    @MainActor
+    func testWorkspaceWindowShowsPaneStatusForTerminalProgressEvents() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        runtime.emit(.progressReported(state: .active, progress: 42), on: runtimeSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: "Progress 42%", in: rootView))
+    }
+
+    @MainActor
+    func testWorkspaceWindowKeepsSinglePaneFilledAcrossCanvas() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+        let canvas = try XCTUnwrap(findView(ofType: WorkspaceCanvasView.self, in: rootView))
+        let hostedPane = try XCTUnwrap(findView(ofType: HostedTerminalPaneView.self, in: rootView))
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        rootView.layoutSubtreeIfNeeded()
+
+        let sidebarFrame = sidebar.convert(sidebar.bounds, to: rootView)
+        let canvasFrame = canvas.convert(canvas.bounds, to: rootView)
+        let hostedFrame = hostedPane.convert(hostedPane.bounds, to: rootView)
+
+        XCTAssertEqual(canvasFrame.minX, sidebarFrame.maxX, accuracy: 1)
+        XCTAssertEqual(canvasFrame.maxX, rootView.bounds.maxX, accuracy: 1)
+        XCTAssertEqual(hostedFrame.minX, canvasFrame.minX, accuracy: 1)
+        XCTAssertEqual(hostedFrame.maxX, canvasFrame.maxX, accuracy: 1)
+    }
+
+    func testTerminalActionCoordinatorEmitsStructuredHooksAndNativeNotifications() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .command,
+                name: "terminal-command-finished",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let runner = ExternalHookRunner(
+            registry: registry,
+            launcher: launcher
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: runner
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.commandFinished(exitCode: 0, durationNanoseconds: 123), on: runtimeSurfaceID)
+
+        let invocation = try XCTUnwrap(launcher.invocations.first)
+        XCTAssertEqual(invocation.name, "terminal-command-finished")
+        XCTAssertEqual(invocation.payload.objectValue?["exitCode"], .integer(0))
+        XCTAssertEqual(controller.latestNotification()?.title, "Command finished")
+    }
+
     @MainActor
     private func findHostedTerminalPaneView(in view: NSView) -> HostedTerminalPaneView? {
         if let hosted = view as? HostedTerminalPaneView {
@@ -595,5 +704,78 @@ final class OmuxAppShellTests: XCTestCase {
             current = candidate.superview
         }
         return nil
+    }
+}
+
+private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
+    private var sessions: [String: SessionDescriptor] = [:]
+    private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+
+    func createSurface(for paneID: PaneID) throws -> String {
+        "action:\(paneID.rawValue)"
+    }
+
+    func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
+        sessions[runtimeSurfaceID] = session
+    }
+
+    func destroySurface(runtimeSurfaceID: String) throws {
+        sessions.removeValue(forKey: runtimeSurfaceID)
+    }
+
+    @MainActor
+    func makeHostedSurfaceView(for paneID: PaneID, runtimeSurfaceID: String) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return nil
+    }
+
+    func ownsSession(for runtimeSurfaceID: String) -> Bool {
+        sessions[runtimeSurfaceID] != nil
+    }
+
+    func setTerminalActionHandler(
+        _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    ) {
+        terminalActionHandler = handler
+    }
+
+    func snapshot(
+        paneID: PaneID,
+        sessionID: SessionID,
+        descriptor: SessionDescriptor,
+        runtimeSurfaceID: String,
+        fallbackSize: TerminalSize
+    ) -> TerminalSessionSnapshot? {
+        guard sessions[runtimeSurfaceID] != nil else {
+            return nil
+        }
+
+        return TerminalSessionSnapshot(
+            paneID: paneID,
+            sessionID: sessionID,
+            runtimeSurfaceID: runtimeSurfaceID,
+            transcript: "",
+            currentInput: "",
+            shell: descriptor.shell,
+            workingDirectory: descriptor.workingDirectory,
+            columns: fallbackSize.columns,
+            rows: fallbackSize.rows
+        )
+    }
+
+    func emit(_ action: TerminalAction, on runtimeSurfaceID: String) {
+        _ = terminalActionHandler?(RuntimeTerminalActionRecord(runtimeSurfaceID: runtimeSurfaceID, action: action))
+    }
+}
+
+private final class CapturingHookLauncher: HookProcessLaunching {
+    private(set) var invocations: [HookInvocation] = []
+
+    func launch(executableURL: URL, arguments: [String], environment: [String: String], input: Data) throws {
+        _ = executableURL
+        _ = arguments
+        _ = environment
+        invocations.append(try JSONDecoder().decode(HookInvocation.self, from: input))
     }
 }

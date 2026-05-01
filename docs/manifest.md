@@ -144,6 +144,8 @@ Instead of putting every feature directly into the core, OpenMUX should expose:
 The goal is not to build everything.
 The goal is to make everything buildable.
 
+That includes terminal-engine upcalls: cwd changes, command completion, bell, URL-open requests, progress, and similar session signals should become OpenMUX-native events and structured hook payloads rather than leaking engine-owned enums or getting flattened to strings.
+
 ---
 
 ### 2.7 Sensible defaults

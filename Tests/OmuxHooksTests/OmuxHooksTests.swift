@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import OmuxCore
 @testable import OmuxHooks
 
 final class OmuxHooksTests: XCTestCase {
@@ -35,7 +36,7 @@ final class OmuxHooksTests: XCTestCase {
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-opened",
-                metadata: ["path": "/tmp/project"]
+                payload: .object(["path": .string("/tmp/project")])
             )
         )
 
@@ -43,6 +44,6 @@ final class OmuxHooksTests: XCTestCase {
         let invocation = try JSONDecoder().decode(HookInvocation.self, from: payload)
 
         XCTAssertEqual(invocation.name, "workspace-opened")
-        XCTAssertEqual(invocation.metadata["path"], "/tmp/project")
+        XCTAssertEqual(invocation.payload.objectValue?["path"], .string("/tmp/project"))
     }
 }

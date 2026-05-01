@@ -23,11 +23,98 @@ public struct Pane: Equatable, Codable, Sendable {
     public let id: PaneID
     public var title: String
     public var session: SessionDescriptor
+    public var terminalState: PaneTerminalState
 
-    public init(id: PaneID = PaneID(), title: String, session: SessionDescriptor) {
+    public init(
+        id: PaneID = PaneID(),
+        title: String,
+        session: SessionDescriptor,
+        terminalState: PaneTerminalState = PaneTerminalState()
+    ) {
         self.id = id
         self.title = title
         self.session = session
+        self.terminalState = terminalState
+    }
+}
+
+public enum PaneProgressState: String, Codable, Sendable {
+    case active
+    case error
+    case indeterminate
+    case paused
+}
+
+public struct PaneProgress: Equatable, Codable, Sendable {
+    public var state: PaneProgressState
+    public var value: Int?
+
+    public init(state: PaneProgressState, value: Int? = nil) {
+        self.state = state
+        self.value = value
+    }
+}
+
+public struct PaneExitStatus: Equatable, Codable, Sendable {
+    public var exitCode: Int
+    public var elapsedMilliseconds: UInt64
+
+    public init(exitCode: Int, elapsedMilliseconds: UInt64) {
+        self.exitCode = exitCode
+        self.elapsedMilliseconds = elapsedMilliseconds
+    }
+}
+
+public struct PaneTerminalState: Equatable, Codable, Sendable {
+    public var reportedWorkingDirectory: String?
+    public var progress: PaneProgress?
+    public var lastExit: PaneExitStatus?
+    public var rendererHealthy: Bool?
+
+    public init(
+        reportedWorkingDirectory: String? = nil,
+        progress: PaneProgress? = nil,
+        lastExit: PaneExitStatus? = nil,
+        rendererHealthy: Bool? = nil
+    ) {
+        self.reportedWorkingDirectory = reportedWorkingDirectory
+        self.progress = progress
+        self.lastExit = lastExit
+        self.rendererHealthy = rendererHealthy
+    }
+
+    public var statusSummary: String? {
+        var parts: [String] = []
+        if let reportedWorkingDirectory {
+            parts.append(reportedWorkingDirectory)
+        }
+        if let progress {
+            switch progress.state {
+            case .active:
+                if let value = progress.value {
+                    parts.append("Progress \(value)%")
+                } else {
+                    parts.append("Progress")
+                }
+            case .error:
+                parts.append("Progress error")
+            case .indeterminate:
+                parts.append("Progress indeterminate")
+            case .paused:
+                parts.append("Progress paused")
+            }
+        }
+        if let lastExit {
+            parts.append("Exited \(lastExit.exitCode)")
+        }
+        if rendererHealthy == false {
+            parts.append("Renderer unhealthy")
+        }
+
+        guard parts.isEmpty == false else {
+            return nil
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -159,6 +246,30 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
 
     public func containsPane(id: PaneID) -> Bool {
         pane(id: id) != nil
+    }
+
+    @discardableResult
+    public mutating func updatePane(
+        _ paneID: PaneID,
+        transform: (inout Pane) -> Void
+    ) -> Bool {
+        switch self {
+        case .paneStack(var paneStack):
+            guard let index = paneStack.panes.firstIndex(where: { $0.id == paneID }) else {
+                return false
+            }
+            transform(&paneStack.panes[index])
+            self = .paneStack(paneStack)
+            return true
+        case .split(let axis, var children):
+            for index in children.indices {
+                if children[index].updatePane(paneID, transform: transform) {
+                    self = .split(axis: axis, children: children)
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     public func containsSession(id: SessionID) -> Bool {
@@ -545,6 +656,19 @@ public struct Workspace: Equatable, Codable, Sendable {
         }
 
         return nil
+    }
+
+    @discardableResult
+    public mutating func updatePane(
+        _ paneID: PaneID,
+        transform: (inout Pane) -> Void
+    ) -> Bool {
+        for tabIndex in tabs.indices {
+            if tabs[tabIndex].rootLayout.updatePane(paneID, transform: transform) {
+                return true
+            }
+        }
+        return false
     }
 
     @discardableResult

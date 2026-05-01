@@ -1,4 +1,5 @@
 import Foundation
+import OmuxCore
 
 public indirect enum RPCValue: Codable, Equatable, Sendable {
     case string(String)
@@ -71,5 +72,47 @@ public indirect enum RPCValue: Codable, Equatable, Sendable {
 public extension RPCValue {
     static func integer(_ value: Int) -> RPCValue {
         .number(Double(value))
+    }
+
+    init(_ value: OmuxValue) {
+        switch value {
+        case .string(let string):
+            self = .string(string)
+        case .integer(let integer):
+            self = .integer(integer)
+        case .double(let double):
+            self = .number(double)
+        case .bool(let bool):
+            self = .bool(bool)
+        case .array(let array):
+            self = .array(array.map(RPCValue.init))
+        case .object(let object):
+            self = .object(object.mapValues(RPCValue.init))
+        case .null:
+            self = .null
+        }
+    }
+
+    var omuxValue: OmuxValue {
+        switch self {
+        case .string(let value):
+            return .string(value)
+        case .number(let value):
+            if value.rounded(.towardZero) == value,
+               value >= Double(Int.min),
+               value <= Double(Int.max)
+            {
+                return .integer(Int(value))
+            }
+            return .double(value)
+        case .bool(let value):
+            return .bool(value)
+        case .array(let value):
+            return .array(value.map(\.omuxValue))
+        case .object(let value):
+            return .object(value.mapValues(\.omuxValue))
+        case .null:
+            return .null
+        }
     }
 }

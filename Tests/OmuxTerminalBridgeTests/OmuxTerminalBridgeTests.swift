@@ -783,6 +783,47 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(snapshot.rows, 40)
     }
 
+    func testBridgePublishesTypedTerminalActionEvents() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        let receivedEvent = LockedValue<TerminalActionEvent?>(nil)
+        let token = bridge.addTerminalActionObserver { event in
+            receivedEvent.value = event
+        }
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: attachment.runtimeSurfaceID)
+
+        XCTAssertEqual(receivedEvent.value?.paneID, pane.id)
+        XCTAssertEqual(receivedEvent.value?.sessionID, session.id)
+        XCTAssertEqual(receivedEvent.value?.runtimeSurfaceID, attachment.runtimeSurfaceID)
+        XCTAssertEqual(receivedEvent.value?.action, .workingDirectoryChanged("/var/tmp"))
+        XCTAssertEqual(receivedEvent.value?.payload.objectValue?["path"], .string("/var/tmp"))
+        bridge.removeTerminalActionObserver(token: token)
+    }
+
+    @MainActor
+    func testFallbackRuntimeDoesNotEmitSyntheticTerminalActionEvents() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        let expectation = expectation(description: "no terminal action event")
+        expectation.isInverted = true
+        let token = bridge.addTerminalActionObserver { _ in
+            expectation.fulfill()
+        }
+
+        try bridge.run(command: "printf 'hello'", inPane: pane.id)
+
+        waitForExpectations(timeout: 0.2)
+        bridge.removeTerminalActionObserver(token: token)
+    }
+
     @MainActor
     func testDirectInputAndDeleteEditTheLiveShellCommand() throws {
         let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
@@ -896,6 +937,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
 private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private var sessions: [String: SessionDescriptor] = [:]
+    private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
     private(set) var visibleBackground: String?
     private(set) var visibleForeground: String?
     private(set) var visiblePalette: [Int: String] = [:]
@@ -1003,6 +1045,12 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
         _ = focused
     }
 
+    func setTerminalActionHandler(
+        _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    ) {
+        terminalActionHandler = handler
+    }
+
     func snapshot(
         paneID: PaneID,
         sessionID: SessionID,
@@ -1027,6 +1075,10 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
         )
     }
 
+    func emit(_ action: TerminalAction, on runtimeSurfaceID: String) {
+        _ = terminalActionHandler?(RuntimeTerminalActionRecord(runtimeSurfaceID: runtimeSurfaceID, action: action))
+    }
+
     private func loadVisibleState(from path: URL) throws {
         let contents = try String(contentsOf: path, encoding: .utf8)
         visiblePalette = [:]
@@ -1047,6 +1099,28 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 }
 
 private final class InspectableRuntimeSurfaceView: RuntimeTerminalHostView {}
+
+private final class LockedValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ value: Value) {
+        storage = value
+    }
+
+    var value: Value {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
+    }
+}
 
 private func makeTheme(name: String) -> OmuxTheme {
     let seed = UInt8(abs(name.hashValue) % 160 + 40)

@@ -118,6 +118,37 @@ The current pane-hosting split is:
 
 This keeps the shell AppKit-first while preserving one narrow terminal-engine seam.
 
+## Terminal action dispatch
+
+OpenMUX now translates a focused first wave of Ghostty action callbacks into OpenMUX-native terminal events instead of rejecting every upcall.
+
+The dispatch path is intentionally layered:
+
+1. `CGhosttyRuntime` decodes supported `ghostty_action_s` values into bridge-owned `TerminalAction` records keyed by `runtimeSurfaceID`.
+2. `GhosttyTerminalBridge` enriches them with `paneID` and `sessionID` and publishes typed `TerminalActionEvent` values to observers.
+3. `OmuxAppShell.TerminalActionCoordinator` resolves workspace/tab context, updates pane state, performs native host-side behavior, emits structured hooks, and publishes app-local control-plane terminal events.
+
+Supported first-wave actions:
+
+- `PWD`
+- `SET_TITLE`
+- `SET_TAB_TITLE`
+- `OPEN_URL`
+- `DESKTOP_NOTIFICATION`
+- `RING_BELL`
+- `COMMAND_FINISHED`
+- `PROGRESS_REPORT`
+- `SHOW_CHILD_EXITED`
+- `RENDERER_HEALTH`
+
+Key boundary rules:
+
+- Ghostty enums and payload structs stay inside `OmuxTerminalBridge`.
+- Hook payloads now use `OmuxValue` instead of string-only metadata.
+- Control-plane terminal event names are OpenMUX-native (`terminal.cwdChanged`, `terminal.commandFinished`, and so on) and are defined without committing to a long-lived streaming transport.
+- Unsupported and app-shell ownership actions remain rejected by default.
+- The fallback runtime stays silent for terminal-action events unless it gains equivalent native signals later.
+
 ## Current limitations
 
 The current shell is usable, but it is still intentionally narrow:

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
 import OmuxTerminalBridge
@@ -12,8 +13,14 @@ public final class WorkspaceController: @unchecked Sendable {
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
+    private lazy var terminalActionCoordinator = TerminalActionCoordinator(
+        bridge: bridge,
+        controller: self,
+        hookRunner: hookRunner
+    )
 
     public var onChange: ((Workspace) -> Void)?
+    public var onTerminalEvent: ((ControlPlaneTerminalEvent) -> Void)?
 
     public init(
         bridge: GhosttyTerminalBridge,
@@ -21,6 +28,7 @@ public final class WorkspaceController: @unchecked Sendable {
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
+        _ = terminalActionCoordinator
     }
 
     public func openWorkspace(at path: String) throws -> Workspace {
@@ -53,7 +61,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 name: "workspace-opened",
                 workspaceID: workspace.id,
                 sessionID: pane.session.id,
-                metadata: ["path": path]
+                payload: .object(["path": .string(path)])
             )
         )
 
@@ -111,23 +119,18 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     public func notify(_ request: NotificationRequest) throws {
-        lock.lock()
-        lastNotification = request
-        lock.unlock()
-
-        DispatchQueue.main.async {
-            NSApplication.shared.requestUserAttention(.informationalRequest)
-        }
+        deliverNotification(request)
 
         try hookRunner.emit(
             HookInvocation(
                 category: .ui,
                 name: "notification-raised",
                 workspaceID: activeWorkspaceID,
-                metadata: [
-                    "title": request.title,
-                    "severity": request.severity.rawValue,
-                ]
+                payload: .object([
+                    "title": .string(request.title),
+                    "body": .string(request.body),
+                    "severity": .string(request.severity.rawValue),
+                ])
             )
         )
     }
@@ -206,7 +209,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 category: .lifecycle,
                 name: "workspace-renamed",
                 workspaceID: updatedWorkspace.id,
-                metadata: ["name": updatedWorkspace.name]
+                payload: .object(["name": .string(updatedWorkspace.name)])
             )
         )
 
@@ -314,7 +317,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
                 sessionID: pane.session.id,
-                metadata: ["paneStackID": focusedStack.id.rawValue]
+                payload: .object(["paneStackID": .string(focusedStack.id.rawValue)])
             )
         )
 
@@ -351,7 +354,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: removedPane.id,
                 sessionID: removedPane.session.id,
-                metadata: ["paneStackID": targetStackID?.rawValue ?? ""]
+                payload: .object([
+                    "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
+                ])
             )
         )
 
@@ -387,7 +392,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 category: .lifecycle,
                 name: "workspace-closed",
                 workspaceID: removedWorkspace.id,
-                metadata: ["path": removedWorkspace.rootPath]
+                payload: .object(["path": .string(removedWorkspace.rootPath)])
             )
         )
 
@@ -499,7 +504,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: activeWorkspaceID,
                 paneID: pane.id,
                 sessionID: sessionID,
-                metadata: ["command": command]
+                payload: .object(["command": .string(command)])
             )
         )
 
@@ -601,6 +606,103 @@ public final class WorkspaceController: @unchecked Sendable {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
             .first
+    }
+
+    func terminalActionCoordinatorHandle(_ event: TerminalActionEvent) {
+        terminalActionCoordinator.handle(event)
+    }
+
+    func publishTerminalEvent(_ event: ControlPlaneTerminalEvent) {
+        onTerminalEvent?(event)
+    }
+
+    func deliverNotification(_ request: NotificationRequest) {
+        lock.lock()
+        lastNotification = request
+        lock.unlock()
+
+        DispatchQueue.main.async {
+            NSApplication.shared.requestUserAttention(.informationalRequest)
+        }
+    }
+
+    func applyTerminalActionState(_ event: TerminalActionEvent) -> WorkspaceTerminalActionContext? {
+        var updatedWorkspace: Workspace?
+        var context: WorkspaceTerminalActionContext?
+
+        lock.lock()
+        for workspaceIndex in workspaces.indices {
+            for tabIndex in workspaces[workspaceIndex].tabs.indices {
+                guard workspaces[workspaceIndex].tabs[tabIndex].panes.contains(where: { $0.id == event.paneID }) else {
+                    continue
+                }
+
+                let workspaceID = workspaces[workspaceIndex].id
+                let tabID = workspaces[workspaceIndex].tabs[tabIndex].id
+                context = WorkspaceTerminalActionContext(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    paneID: event.paneID,
+                    sessionID: event.sessionID
+                )
+
+                switch event.action {
+                case .workingDirectoryChanged(let path):
+                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                        pane.session.workingDirectory = path
+                        pane.terminalState.reportedWorkingDirectory = path
+                    }
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .titleChanged(let title):
+                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                        pane.title = title
+                    }
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .tabTitleChanged(let title):
+                    workspaces[workspaceIndex].tabs[tabIndex].title = title
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .progressReported(let state, let progress):
+                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                        switch state {
+                        case .removed:
+                            pane.terminalState.progress = nil
+                        case .active:
+                            pane.terminalState.progress = PaneProgress(state: .active, value: progress)
+                        case .error:
+                            pane.terminalState.progress = PaneProgress(state: .error, value: progress)
+                        case .indeterminate:
+                            pane.terminalState.progress = PaneProgress(state: .indeterminate, value: progress)
+                        case .paused:
+                            pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
+                        }
+                    }
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .childExited(let exitCode, let elapsedMilliseconds):
+                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                        pane.terminalState.lastExit = PaneExitStatus(
+                            exitCode: exitCode,
+                            elapsedMilliseconds: elapsedMilliseconds
+                        )
+                    }
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .rendererHealthChanged(let isHealthy):
+                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                        pane.terminalState.rendererHealthy = isHealthy
+                    }
+                    updatedWorkspace = workspaces[workspaceIndex]
+                case .openURL, .desktopNotification, .bell, .commandFinished:
+                    break
+                }
+
+                lock.unlock()
+                if let updatedWorkspace {
+                    onChange?(updatedWorkspace)
+                }
+                return context
+            }
+        }
+        lock.unlock()
+        return nil
     }
 
     private func uniqueWorkspaceName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {
