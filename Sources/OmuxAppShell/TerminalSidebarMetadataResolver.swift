@@ -15,23 +15,38 @@ final class TerminalSidebarMetadataResolver {
 
     func metadata(for pane: Pane) -> TerminalSidebarMetadata {
         let path = pane.session.workingDirectory
+        let abbreviatedPath = abbreviate(path: path)
+        let preferredPaneTitle = preferredPaneTitle(for: pane, abbreviatedPath: abbreviatedPath)
+
         guard let gitInfo = resolveGitInfo(for: path) else {
             return TerminalSidebarMetadata(
-                title: abbreviate(path: path),
-                subtitle: nil
+                title: preferredPaneTitle ?? abbreviatedPath,
+                subtitle: preferredPaneTitle == nil ? nil : abbreviatedPath
             )
         }
 
-        let title: String
+        if let preferredPaneTitle {
+            let subtitle = gitAwareSubtitle(
+                branchName: gitInfo.branchName,
+                abbreviatedPath: abbreviatedPath,
+                preferredTitle: preferredPaneTitle
+            )
+            return TerminalSidebarMetadata(
+                title: preferredPaneTitle,
+                subtitle: subtitle
+            )
+        }
+
+        let metadataTitle: String
         if let branchName = gitInfo.branchName {
-            title = branchName
+            metadataTitle = branchName
         } else {
-            title = abbreviate(path: path)
+            metadataTitle = abbreviatedPath
         }
 
         return TerminalSidebarMetadata(
-            title: title,
-            subtitle: abbreviate(path: path)
+            title: metadataTitle,
+            subtitle: abbreviatedPath
         )
     }
 
@@ -86,5 +101,38 @@ final class TerminalSidebarMetadataResolver {
         }
         let suffix = path.dropFirst(homeDirectory.count)
         return suffix.isEmpty ? "~" : "~\(suffix)"
+    }
+
+    private func preferredPaneTitle(for pane: Pane, abbreviatedPath: String) -> String? {
+        let title = pane.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.isEmpty == false else {
+            return nil
+        }
+
+        let normalizedPath = pane.session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultPathTitle = URL(fileURLWithPath: normalizedPath).lastPathComponent
+        let fallbackTitles = Set(["OpenMUX", "Shell"])
+
+        guard title != normalizedPath,
+              title != abbreviatedPath,
+              title != defaultPathTitle,
+              fallbackTitles.contains(title) == false
+        else {
+            return nil
+        }
+
+        return title
+    }
+
+    private func gitAwareSubtitle(
+        branchName: String?,
+        abbreviatedPath: String,
+        preferredTitle: String
+    ) -> String {
+        guard let branchName, branchName != preferredTitle else {
+            return abbreviatedPath
+        }
+
+        return "\(branchName) · \(abbreviatedPath)"
     }
 }

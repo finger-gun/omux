@@ -719,6 +719,31 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowPrefersPaneTitleInTerminalMetadataRows() throws {
+        let repositoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: repositoryURL) }
+        try FileManager.default.createDirectory(at: repositoryURL, withIntermediateDirectories: true)
+        try runGit(["init", repositoryURL.path])
+        try runGit(["-C", repositoryURL.path, "branch", "-M", "main"])
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: repositoryURL.path)
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let renamedWorkspace = try XCTUnwrap(controller.renamePaneTab(paneID, to: "hx"))
+        let windowController = WorkspaceWindowController(workspace: renamedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        XCTAssertTrue(findLabel(withString: "hx", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main · \(repositoryURL.path)", in: sidebar))
+    }
+
+    @MainActor
     func testWorkspaceWindowKeepsSinglePaneFilledAcrossCanvas() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
