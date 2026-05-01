@@ -4,7 +4,7 @@ displayName = "Catppuccin"
 
 [tokens]
 "bg.canvas" = "#11111b"
-"bg.surface" = "#1e1e2e"
+"bg.surface" = "#11111b"
 "bg.elevated" = "#313244"
 "fg.primary" = "#cdd6f4"
 "fg.secondary" = "#a6adc8"

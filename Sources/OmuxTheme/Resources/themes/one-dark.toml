@@ -4,7 +4,7 @@ displayName = "One Dark"
 
 [tokens]
 "bg.canvas" = "#282c34"
-"bg.surface" = "#2f343f"
+"bg.surface" = "#282c34"
 "bg.elevated" = "#353b45"
 "fg.primary" = "#abb2bf"
 "fg.secondary" = "#9da5b4"

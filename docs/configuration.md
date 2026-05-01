@@ -134,4 +134,7 @@ Use the running app’s control plane for diagnostics and explicit reloads:
 omux config doctor
 omux config reload
 omux config init
+omux theme
+omux theme <name>
+omux theme list
 ```

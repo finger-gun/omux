@@ -61,6 +61,9 @@ swift test
 swift run omux config doctor
 swift run omux config reload
 swift run omux config init
+swift run omux theme
+swift run omux theme nord
+swift run omux theme list
 swift run omux tab
 swift run omux split
 swift run omux split down

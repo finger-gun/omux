@@ -4,7 +4,7 @@ displayName = "Monokai Soda"
 
 [tokens]
 "bg.canvas" = "#1a1a1a"
-"bg.surface" = "#232526"
+"bg.surface" = "#1a1a1a"
 "bg.elevated" = "#2d2f30"
 "fg.primary" = "#c4c5b5"
 "fg.secondary" = "#a0a08b"

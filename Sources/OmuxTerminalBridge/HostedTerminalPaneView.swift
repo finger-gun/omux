@@ -58,6 +58,13 @@ public extension TerminalThemePalette {
     )
 }
 
+private enum TerminalLayoutMetrics {
+    static let hostedContentInset: CGFloat = 4
+    static let runtimeSurfaceInset: CGFloat = 0
+    static let fallbackScrollInset: CGFloat = 0
+    static let fallbackTextInset = NSSize(width: 8, height: 8)
+}
+
 @MainActor
 public final class HostedTerminalPaneView: NSView {
     private struct MeasuredTerminalSize: Equatable {
@@ -100,10 +107,10 @@ public final class HostedTerminalPaneView: NSView {
         hostedView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hostedView)
         NSLayoutConstraint.activate([
-            hostedView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            hostedView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            hostedView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            hostedView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            hostedView.topAnchor.constraint(equalTo: topAnchor, constant: TerminalLayoutMetrics.hostedContentInset),
+            hostedView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: TerminalLayoutMetrics.hostedContentInset),
+            hostedView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -TerminalLayoutMetrics.hostedContentInset),
+            hostedView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -TerminalLayoutMetrics.hostedContentInset),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
         ])
@@ -210,10 +217,10 @@ private final class RuntimeTerminalSurfaceContainer: NSView {
         addSubview(runtimeView)
 
         NSLayoutConstraint.activate([
-            runtimeView.topAnchor.constraint(equalTo: topAnchor),
-            runtimeView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            runtimeView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            runtimeView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            runtimeView.topAnchor.constraint(equalTo: topAnchor, constant: TerminalLayoutMetrics.runtimeSurfaceInset),
+            runtimeView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: TerminalLayoutMetrics.runtimeSurfaceInset),
+            runtimeView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -TerminalLayoutMetrics.runtimeSurfaceInset),
+            runtimeView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -TerminalLayoutMetrics.runtimeSurfaceInset),
         ])
     }
 
@@ -273,15 +280,16 @@ final class FallbackTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         textView.backgroundColor = .clear
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainerInset = TerminalLayoutMetrics.fallbackTextInset
         scrollView.documentView = textView
         apply(themePalette: themePalette)
 
         container.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: container.topAnchor, constant: TerminalLayoutMetrics.fallbackScrollInset),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: TerminalLayoutMetrics.fallbackScrollInset),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -TerminalLayoutMetrics.fallbackScrollInset),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -TerminalLayoutMetrics.fallbackScrollInset),
         ])
 
         observerToken = bridge.addObserver(for: pane.id) { [weak textView] snapshot in

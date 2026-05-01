@@ -5,7 +5,7 @@ import OmuxTerminalBridge
 private enum ShellLayoutMetrics {
     static let sidebarWidth: CGFloat = 224
     static let outerPadding: CGFloat = 0
-    static let interRegionSpacing: CGFloat = 8
+    static let interRegionSpacing: CGFloat = 0
     static let canvasPadding: CGFloat = 0
     static let splitSpacing: CGFloat = 8
     static let paneHeaderHeight: CGFloat = 28
@@ -144,6 +144,10 @@ final class WorkspaceShellViewController: NSViewController {
             onCreateWorkspace: { [weak self] in
                 _ = try? self?.controller.createWorkspace()
             },
+            onDeleteWorkspace: { [weak self] in
+                _ = try? self?.controller.deleteActiveWorkspace()
+            },
+            canDeleteWorkspace: controller.canDeleteActiveWorkspace(),
             onSelectTab: { [weak self] tabID in
                 _ = self?.controller.focus(tabID: tabID)
             }
@@ -276,6 +280,17 @@ struct SidebarItem {
     let action: Action
 }
 
+private struct SidebarSectionAccessory {
+    enum Content {
+        case text(String)
+        case symbol(name: String, accessibilityLabel: String)
+    }
+
+    let content: Content
+    let isEnabled: Bool
+    let action: () -> Void
+}
+
 @MainActor
 final class WorkspaceSidebarView: NSView {
     private let workspacesSection = WorkspaceSidebarSectionView()
@@ -320,6 +335,8 @@ final class WorkspaceSidebarView: NSView {
         theme: WorkspaceShellTheme,
         onSelectWorkspace: @escaping @MainActor (WorkspaceID) -> Void,
         onCreateWorkspace: @escaping @MainActor () -> Void,
+        onDeleteWorkspace: @escaping @MainActor () -> Void,
+        canDeleteWorkspace: Bool,
         onSelectTab: @escaping @MainActor (TabID) -> Void
     ) {
         apply(theme: theme)
@@ -330,8 +347,18 @@ final class WorkspaceSidebarView: NSView {
             count: workspaceItems.filter { $0.kind == .workspace }.count,
             emptyState: "No workspaces open",
             theme: theme,
-            accessoryTitle: "+",
-            accessoryAction: onCreateWorkspace,
+            accessories: [
+                SidebarSectionAccessory(
+                    content: .symbol(name: "plus", accessibilityLabel: "Create workspace"),
+                    isEnabled: true,
+                    action: onCreateWorkspace
+                ),
+                SidebarSectionAccessory(
+                    content: .symbol(name: "xmark", accessibilityLabel: "Close active workspace"),
+                    isEnabled: canDeleteWorkspace,
+                    action: onDeleteWorkspace
+                ),
+            ],
             buttonHandler: { item in
                 switch item.action {
                 case .workspace(let workspaceID):
@@ -350,7 +377,7 @@ private final class WorkspaceSidebarSectionView: NSView {
     private let headerStack = NSStackView()
     private let itemStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "")
-    private var accessoryButton: ChromePillButton?
+    private var accessoryButtons: [ChromePillButton] = []
     private var itemButtons: [NSView] = []
 
     init() {
@@ -402,7 +429,7 @@ private final class WorkspaceSidebarSectionView: NSView {
     func apply(theme: WorkspaceShellTheme) {
         titleLabel.textColor = theme.shell.textMuted
         emptyLabel.textColor = theme.shell.textMuted
-        accessoryButton?.configure(title: accessoryButton?.displayTitleLabel.stringValue ?? "+", active: false, theme: theme, compact: true)
+        accessoryButtons.forEach { $0.applyTheme(theme) }
     }
 
     func renderButtons(
@@ -411,8 +438,7 @@ private final class WorkspaceSidebarSectionView: NSView {
         count: Int,
         emptyState: String,
         theme: WorkspaceShellTheme,
-        accessoryTitle: String?,
-        accessoryAction: (() -> Void)?,
+        accessories: [SidebarSectionAccessory],
         buttonHandler: @escaping (SidebarItem) -> Void
     ) {
         titleLabel.stringValue = "\(title) · \(count)"
@@ -424,16 +450,22 @@ private final class WorkspaceSidebarSectionView: NSView {
         }
         itemButtons.removeAll()
 
-        if let accessoryButton {
+        for accessoryButton in accessoryButtons {
             headerStack.removeArrangedSubview(accessoryButton)
             accessoryButton.removeFromSuperview()
         }
-        accessoryButton = nil
-        if let accessoryTitle, let accessoryAction {
+        accessoryButtons.removeAll()
+        for accessory in accessories {
             let button = ChromePillButton()
-            button.configure(title: accessoryTitle, active: false, theme: theme, compact: true)
-            button.onPress = accessoryAction
-            accessoryButton = button
+            switch accessory.content {
+            case .text(let title):
+                button.configure(title: title, active: false, theme: theme, compact: true)
+            case .symbol(let name, let accessibilityLabel):
+                button.configure(symbolName: name, accessibilityLabel: accessibilityLabel, active: false, theme: theme, compact: true)
+            }
+            button.isEnabled = accessory.isEnabled
+            button.onPress = accessory.action
+            accessoryButtons.append(button)
             headerStack.addArrangedSubview(button)
         }
 
@@ -624,7 +656,6 @@ final class PaneCardView: NSView {
 
 @MainActor
 final class PaneHeaderView: NSView {
-    private let titleLabel = NSTextField(labelWithString: "")
     private let tabStrip = NSStackView()
     private let controls = NSStackView()
 
@@ -645,10 +676,6 @@ final class PaneHeaderView: NSView {
         content.alignment = .centerY
         content.spacing = 6
         content.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        titleLabel.textColor = theme.shell.textSecondary
-        titleLabel.stringValue = paneStack.focusedPane?.title ?? "Pane"
 
         tabStrip.orientation = .horizontal
         tabStrip.alignment = .centerY
@@ -671,21 +698,20 @@ final class PaneHeaderView: NSView {
         }
 
         let addButton = ChromePillButton()
-        addButton.configure(title: "+", active: false, theme: theme, compact: true)
+        addButton.configure(symbolName: "plus", accessibilityLabel: "Add pane tab", active: false, theme: theme, compact: true)
         addButton.onPress = {
             try? onCreatePaneTab()
         }
         controls.addArrangedSubview(addButton)
 
         let closeButton = ChromePillButton()
-        closeButton.configure(title: "×", active: false, theme: theme, compact: true)
+        closeButton.configure(symbolName: "xmark", accessibilityLabel: "Close pane tab", active: false, theme: theme, compact: true)
         closeButton.isEnabled = paneStack.panes.count > 1
         closeButton.onPress = {
             try? onClosePaneTab(paneStack.focusedPaneID)
         }
         controls.addArrangedSubview(closeButton)
 
-        content.addArrangedSubview(titleLabel)
         content.addArrangedSubview(tabStrip)
         content.addArrangedSubview(NSView())
         content.addArrangedSubview(controls)
@@ -709,14 +735,26 @@ final class PaneHeaderView: NSView {
 private class ChromePillButton: NSControl {
     var onPress: (() -> Void)?
     private let titleLabel = NSTextField(labelWithString: "")
+    private let imageView = NSImageView()
     private var compact = false
     private var contentInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+    private var title: String?
+    private var symbolName: String?
+    private var accessibilityLabel: String?
+    private var isActive = false
+    private var currentTheme = WorkspaceShellTheme.defaultTheme
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.masksToBounds = true
+
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+        imageView.isHidden = true
+        addSubview(imageView)
+
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.alignment = .center
         addSubview(titleLabel)
@@ -728,30 +766,96 @@ private class ChromePillButton: NSControl {
     }
 
     func configure(title: String, active: Bool, theme: WorkspaceShellTheme, compact: Bool = false) {
+        self.title = title
+        symbolName = nil
+        accessibilityLabel = title
+        imageView.isHidden = true
+        titleLabel.isHidden = false
+        titleLabel.stringValue = title
+        applyConfiguration(active: active, theme: theme, compact: compact)
+    }
+
+    func configure(
+        symbolName: String,
+        accessibilityLabel: String,
+        active: Bool,
+        theme: WorkspaceShellTheme,
+        compact: Bool = false
+    ) {
+        title = nil
+        self.symbolName = symbolName
+        self.accessibilityLabel = accessibilityLabel
+        titleLabel.isHidden = true
+        imageView.isHidden = false
+        imageView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)
+        applyConfiguration(active: active, theme: theme, compact: compact)
+    }
+
+    func applyTheme(_ theme: WorkspaceShellTheme) {
+        applyConfiguration(active: isActive, theme: theme, compact: compact)
+    }
+
+    override var isEnabled: Bool {
+        didSet {
+            updateVisualState()
+        }
+    }
+
+    private func applyConfiguration(active: Bool, theme: WorkspaceShellTheme, compact: Bool) {
+        self.compact = compact
+        isActive = active
+        currentTheme = theme
         self.compact = compact
         contentInsets = NSEdgeInsets(top: compact ? 2 : 4, left: compact ? 6 : 8, bottom: compact ? 2 : 4, right: compact ? 6 : 8)
-        titleLabel.stringValue = title
         titleLabel.font = .systemFont(ofSize: compact ? 11 : 12, weight: active ? .semibold : .medium)
-        titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
         layer?.cornerRadius = compact ? 3 : 4
-        layer?.backgroundColor = (active ? theme.shell.selection : NSColor.clear).cgColor
-        layer?.borderWidth = 0
-        layer?.borderColor = nil
+        imageView.symbolConfiguration = .init(pointSize: compact ? 11 : 12, weight: active ? .semibold : .medium)
+        updateVisualState()
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
 
+    private func updateVisualState() {
+        let foreground = isActive ? currentTheme.shell.textPrimary : currentTheme.shell.textSecondary
+        titleLabel.textColor = foreground
+        imageView.contentTintColor = foreground
+        layer?.backgroundColor = (isActive ? currentTheme.shell.selection : NSColor.clear).cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
+        alphaValue = isEnabled ? 1 : 0.4
+    }
+
     override var intrinsicContentSize: NSSize {
-        let labelSize = titleLabel.intrinsicContentSize
+        let contentSize: NSSize
+        if let title {
+            titleLabel.stringValue = title
+            contentSize = titleLabel.intrinsicContentSize
+        } else {
+            let symbolSide = compact ? CGFloat(11) : CGFloat(12)
+            contentSize = NSSize(width: symbolSide, height: symbolSide)
+        }
         return NSSize(
-            width: labelSize.width + contentInsets.left + contentInsets.right,
-            height: max(labelSize.height + contentInsets.top + contentInsets.bottom, compact ? 18 : 24)
+            width: contentSize.width + contentInsets.left + contentInsets.right,
+            height: max(contentSize.height + contentInsets.top + contentInsets.bottom, compact ? 18 : 24)
         )
     }
 
     override func layout() {
         super.layout()
-        titleLabel.frame = bounds.insetBy(dx: contentInsets.left, dy: contentInsets.top)
+        let contentBounds = bounds.insetBy(dx: contentInsets.left, dy: contentInsets.top)
+        if title == nil {
+            let symbolSide = compact ? CGFloat(11) : CGFloat(12)
+            imageView.frame = NSRect(
+                x: round((bounds.width - symbolSide) / 2),
+                y: round((bounds.height - symbolSide) / 2),
+                width: symbolSide,
+                height: symbolSide
+            )
+            titleLabel.frame = .zero
+        } else {
+            titleLabel.frame = contentBounds
+            imageView.frame = .zero
+        }
     }
 
     override var acceptsFirstResponder: Bool { false }
@@ -763,10 +867,6 @@ private class ChromePillButton: NSControl {
 
         onPress?()
         super.mouseDown(with: event)
-    }
-
-    fileprivate var displayTitleLabel: NSTextField {
-        titleLabel
     }
 }
 

@@ -19,6 +19,7 @@ struct OmuxThemeTests {
             "solarized-dark",
             "solarized-light",
         ]))
+        #expect(themes.allSatisfy { $0.tokens[.backgroundSurface] == $0.tokens[.backgroundCanvas] })
     }
 
     @Test

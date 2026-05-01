@@ -2,17 +2,27 @@ import Foundation
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxTheme
 
 public struct OmuxCLICommand {
     private let client: OmuxControlClient
     private let writeLine: (String) -> Void
+    private let readInputLine: () -> String?
+    private let configLoader: OmuxConfigLoader
+    private let themeRegistry: OmuxThemeRegistry
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
-        writeLine: @escaping (String) -> Void = { print($0) }
+        writeLine: @escaping (String) -> Void = { print($0) },
+        readInputLine: @escaping () -> String? = { Swift.readLine(strippingNewline: true) },
+        configLoader: OmuxConfigLoader = OmuxConfigLoader(),
+        themeRegistry: OmuxThemeRegistry = OmuxThemeRegistry()
     ) {
         self.client = client
         self.writeLine = writeLine
+        self.readInputLine = readInputLine
+        self.configLoader = configLoader
+        self.themeRegistry = themeRegistry
     }
 
     @discardableResult
@@ -27,6 +37,8 @@ public struct OmuxCLICommand {
             switch command {
             case "config":
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
+            case "theme":
+                return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
             case "list":
                 let response = try client.request(method: .listWorkspaces)
                 writeLine(response.result?.prettyPrinted ?? "[]")
@@ -150,6 +162,9 @@ public struct OmuxCLICommand {
       omux config doctor
       omux config reload
       omux config init
+      omux theme
+      omux theme <name>
+      omux theme list
       omux list
       omux open <path>
       omux tab
@@ -185,26 +200,9 @@ public struct OmuxCLICommand {
         do {
             switch subcommand {
             case "doctor":
-                let response = try client.request(method: .configDoctor)
-                guard response.error == nil else {
-                    writeLine("omux error: \(response.error!.message)")
-                    return 1
-                }
-                let diagnostics = response.result?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
-                return printDiagnosticsAndReturnCode(diagnostics)
+                return try runConfigDoctor()
             case "reload":
-                let response = try client.request(method: .configReload)
-                guard response.error == nil else {
-                    writeLine("omux error: \(response.error!.message)")
-                    return 1
-                }
-                let object = response.result?.objectValue ?? [:]
-                let diagnostics = object["diagnostics"]?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
-                let exitCode = printDiagnosticsAndReturnCode(diagnostics)
-                if let applied = object["applied"]?.boolValue {
-                    writeLine(applied ? "OpenMUX config reloaded." : "OpenMUX config unchanged.")
-                }
-                return exitCode
+                return try runConfigReload()
             case "init":
                 let configURL = OmuxConfigPaths.configFileURL
                 if FileManager.default.fileExists(atPath: configURL.path) {
@@ -229,8 +227,206 @@ public struct OmuxCLICommand {
         }
     }
 
-    private func printDiagnosticsAndReturnCode(_ diagnostics: [OmuxConfigDiagnostic]) -> Int32 {
+    private func runThemeCommand(arguments: [String]) -> Int32 {
+        do {
+            let (themes, themeDiagnostics) = themeRegistry.loadThemes()
+            let configResult = configLoader.load()
+            let currentThemeName = configResult.hasErrors ? nil : configResult.config.theme.name
+
+            if arguments.first == "list" {
+                guard arguments.count == 1 else {
+                    writeLine("usage: omux theme [list|<name>]")
+                    return 1
+                }
+                let exitCode = printDiagnosticsAndReturnCode(themeDiagnostics, printEmptyMessage: false)
+                printThemes(themes, currentThemeName: currentThemeName)
+                return exitCode
+            }
+
+            guard arguments.count <= 1 else {
+                writeLine("usage: omux theme [list|<name>]")
+                return 1
+            }
+
+            let selectedTheme: OmuxTheme?
+            if let rawSelection = arguments.first {
+                selectedTheme = resolveThemeSelection(rawSelection, themes: themes)
+            } else {
+                let exitCode = printDiagnosticsAndReturnCode(themeDiagnostics, printEmptyMessage: false)
+                guard exitCode == 0 else {
+                    return exitCode
+                }
+                printThemes(themes, currentThemeName: currentThemeName)
+                writeLine("Select theme number or name:")
+                guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      input.isEmpty == false else {
+                    writeLine("omux error: no theme selected")
+                    return 1
+                }
+                if ["q", "quit", "exit"].contains(input.lowercased()) {
+                    writeLine("Cancelled.")
+                    return 0
+                }
+                selectedTheme = resolveThemeSelection(input, themes: themes)
+            }
+
+            guard let selectedTheme else {
+                let requested = arguments.first ?? ""
+                let label = requested.isEmpty ? "selected theme" : requested
+                writeLine("omux error: unknown theme '\(label)'")
+                return 1
+            }
+
+            return try applyTheme(selectedTheme)
+        } catch {
+            writeLine("omux error: \(error)")
+            return 1
+        }
+    }
+
+    private func runConfigDoctor() throws -> Int32 {
+        let response = try client.request(method: .configDoctor)
+        guard response.error == nil else {
+            writeLine("omux error: \(response.error!.message)")
+            return 1
+        }
+        let diagnostics = response.result?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
+        return printDiagnosticsAndReturnCode(diagnostics)
+    }
+
+    private func runConfigReload() throws -> Int32 {
+        let response = try client.request(method: .configReload)
+        guard response.error == nil else {
+            writeLine("omux error: \(response.error!.message)")
+            return 1
+        }
+        let object = response.result?.objectValue ?? [:]
+        let diagnostics = object["diagnostics"]?.arrayValue?.compactMap(OmuxConfigDiagnostic.init(rpcValue:)) ?? []
+        let exitCode = printDiagnosticsAndReturnCode(diagnostics)
+        if let applied = object["applied"]?.boolValue {
+            writeLine(applied ? "OpenMUX config reloaded." : "OpenMUX config unchanged.")
+        }
+        return exitCode
+    }
+
+    private func applyTheme(_ theme: OmuxTheme) throws -> Int32 {
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        let current = configResult.config
+        let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
+        let updated = OmuxConfig(
+            schema: current.schema,
+            theme: OmuxConfigTheme(name: theme.name),
+            terminal: current.terminal,
+            ghostty: current.ghostty,
+            sourceURL: configURL
+        )
+
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
+
+        writeLine("Theme set to \(theme.displayName).")
+        return try runConfigReload()
+    }
+
+    private func printThemes(_ themes: [OmuxTheme], currentThemeName: String?) {
+        writeLine("Available themes:")
+        for (index, theme) in themes.enumerated() {
+            let marker = theme.name == currentThemeName ? "*" : " "
+            writeLine("\(index + 1).\(marker) \(theme.name) — \(theme.displayName)")
+        }
+    }
+
+    private func resolveThemeSelection(_ selection: String, themes: [OmuxTheme]) -> OmuxTheme? {
+        if let index = Int(selection), themes.indices.contains(index - 1) {
+            return themes[index - 1]
+        }
+
+        let normalizedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return themes.first {
+            $0.name.lowercased() == normalizedSelection || $0.displayName.lowercased() == normalizedSelection
+        }
+    }
+
+    private func render(config: OmuxConfig) -> String {
+        var lines: [String] = [
+            "schema = \(config.schema)",
+            "",
+            "[theme]",
+            "name = \(render(.string(config.theme.name)))",
+            "",
+            "[terminal]",
+        ]
+
+        if let fontFamily = config.terminal.fontFamily {
+            lines.append("font_family = \(render(.string(fontFamily)))")
+        }
+        if let fontSize = config.terminal.fontSize {
+            lines.append("font_size = \(fontSize)")
+        }
+        if let scrollbackLines = config.terminal.scrollbackLines {
+            lines.append("scrollback_lines = \(scrollbackLines)")
+        }
+        if let optionAsAlt = config.terminal.optionAsAlt {
+            switch optionAsAlt {
+            case .disabled:
+                lines.append("option_as_alt = false")
+            case .both:
+                lines.append("option_as_alt = true")
+            case .left:
+                lines.append("option_as_alt = \"left\"")
+            case .right:
+                lines.append("option_as_alt = \"right\"")
+            }
+        }
+
+        lines.append("")
+        lines.append("[ghostty]")
+        for entry in config.ghostty {
+            lines.append("\"\(escape(entry.key))\" = \(render(entry.value))")
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func render(_ value: OmuxTOMLValue) -> String {
+        switch value {
+        case .string(let string):
+            return "\"\(escape(string))\""
+        case .integer(let integer):
+            return String(integer)
+        case .double(let double):
+            return String(double)
+        case .bool(let bool):
+            return bool ? "true" : "false"
+        case .array(let values):
+            return "[\(values.map(render).joined(separator: ", "))]"
+        }
+    }
+
+    private func escape(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
+    private func printDiagnosticsAndReturnCode(
+        _ diagnostics: [OmuxConfigDiagnostic],
+        printEmptyMessage: Bool = true
+    ) -> Int32 {
         if diagnostics.isEmpty {
+            guard printEmptyMessage else {
+                return 0
+            }
             writeLine("No diagnostics.")
             return 0
         }

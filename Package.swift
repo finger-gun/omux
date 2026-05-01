@@ -61,7 +61,7 @@ targets.append(
         ),
         .target(
             name: "OmuxCLI",
-            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig"],
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxTheme"],
             path: "Sources/OmuxCLI"
         ),
         .target(
@@ -105,7 +105,7 @@ targets.append(
         ),
         .testTarget(
             name: "OmuxCLITests",
-            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore"]
+            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore", "OmuxConfig"]
         ),
         .testTarget(
             name: "OmuxHooksTests",

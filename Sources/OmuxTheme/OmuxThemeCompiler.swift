@@ -36,6 +36,8 @@ public enum OmuxManagedGhosttyKey {
         "font-family",
         "font-size",
         "scrollback-limit",
+        "window-padding-x",
+        "window-padding-y",
     ]
 }
 
@@ -162,6 +164,8 @@ public struct OmuxThemeCompiler {
             ("cursor-text", resolvedTokens[.cursorText].hexString),
             ("selection-background", resolvedTokens[.selectionBackground].hexString),
             ("selection-foreground", resolvedTokens[.selectionForeground].hexString),
+            ("window-padding-x", "6"),
+            ("window-padding-y", "6"),
         ]
 
         let paletteTokens: [ThemeToken] = [

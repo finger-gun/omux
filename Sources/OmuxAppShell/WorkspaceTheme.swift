@@ -17,22 +17,19 @@ struct WorkspaceShellTheme {
 
         let canvas = NSColor(themeColor: resolvedTokens[.backgroundCanvas])
         let surface = NSColor(themeColor: resolvedTokens[.backgroundSurface])
-        let elevated = NSColor(themeColor: resolvedTokens[.backgroundElevated])
         let accent = NSColor(themeColor: resolvedTokens[.accent])
         let selection = NSColor(themeColor: resolvedTokens[.selectionBackground])
         let sidebarSelection = selection.blended(withFraction: 0.2, of: accent) ?? selection
-        let chromeIdle = elevated.blended(withFraction: 0.35, of: canvas) ?? elevated
         let chromeActive = sidebarSelection.blended(withFraction: 0.2, of: accent) ?? accent
-        let paneHeader = elevated.blended(withFraction: 0.08, of: accent) ?? elevated
 
         self.shell = WorkspaceShellColors(
             windowBackground: canvas,
             sidebarBackground: surface,
             topBarBackground: surface,
             canvasBackground: canvas,
-            paneCardBackground: surface,
-            paneHeaderBackground: paneHeader,
-            chromeButtonBackground: chromeIdle,
+            paneCardBackground: canvas,
+            paneHeaderBackground: surface,
+            chromeButtonBackground: surface,
             chromeButtonActiveBackground: chromeActive,
             border: NSColor(themeColor: resolvedTokens[.borderStrong]),
             subduedBorder: NSColor(themeColor: resolvedTokens[.borderSubtle]),
@@ -83,7 +80,7 @@ struct WorkspaceShellTheme {
             displayName: "Monokai Soda",
             tokens: [
                 .backgroundCanvas: ThemeColor(red: 0x1A, green: 0x1A, blue: 0x1A),
-                .backgroundSurface: ThemeColor(red: 0x23, green: 0x25, blue: 0x26),
+                .backgroundSurface: ThemeColor(red: 0x1A, green: 0x1A, blue: 0x1A),
                 .backgroundElevated: ThemeColor(red: 0x2D, green: 0x2F, blue: 0x30),
                 .foregroundPrimary: ThemeColor(red: 0xC4, green: 0xC5, blue: 0xB5),
                 .foregroundSecondary: ThemeColor(red: 0xA0, green: 0xA0, blue: 0x8B),

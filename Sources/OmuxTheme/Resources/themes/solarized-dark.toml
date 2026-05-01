@@ -4,7 +4,7 @@ displayName = "Solarized Dark"
 
 [tokens]
 "bg.canvas" = "#002b36"
-"bg.surface" = "#073642"
+"bg.surface" = "#002b36"
 "bg.elevated" = "#0d3d49"
 "fg.primary" = "#839496"
 "fg.secondary" = "#93a1a1"

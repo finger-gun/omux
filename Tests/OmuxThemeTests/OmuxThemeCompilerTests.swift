@@ -77,6 +77,17 @@ struct OmuxThemeCompilerTests {
     }
 
     @Test
+    func compilerEmitsManagedWindowPadding() {
+        let output = OmuxThemeCompiler(buildVersion: "test-build").compile(
+            theme: makeTheme(name: "test"),
+            config: OmuxConfig.defaults
+        )
+
+        #expect(output.contents.contains("window-padding-x = 6"))
+        #expect(output.contents.contains("window-padding-y = 6"))
+    }
+
+    @Test
     func writeCreatesGeneratedFileWithHeader() throws {
         let directory = try temporaryDirectory()
         defer { cleanup(directory) }

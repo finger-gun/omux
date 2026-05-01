@@ -4,7 +4,7 @@ displayName = "Dracula"
 
 [tokens]
 "bg.canvas" = "#282a36"
-"bg.surface" = "#303341"
+"bg.surface" = "#282a36"
 "bg.elevated" = "#3b3f51"
 "fg.primary" = "#f8f8f2"
 "fg.secondary" = "#d0d0da"

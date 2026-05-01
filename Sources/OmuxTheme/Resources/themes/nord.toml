@@ -4,7 +4,7 @@ displayName = "Nord"
 
 [tokens]
 "bg.canvas" = "#2e3440"
-"bg.surface" = "#3b4252"
+"bg.surface" = "#2e3440"
 "bg.elevated" = "#434c5e"
 "fg.primary" = "#eceff4"
 "fg.secondary" = "#d8dee9"

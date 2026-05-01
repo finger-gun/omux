@@ -318,7 +318,7 @@ final class OmuxAppShellTests: XCTestCase {
         let wsLabel = try XCTUnwrap(findLabelView(withString: "tmp", in: sidebar))
         let wsButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: wsLabel))
         XCTAssertNotNil(wsButton)
-        XCTAssertTrue(findLabel(withString: "+", in: sidebar))
+        XCTAssertGreaterThanOrEqual(findViews(ofType: NSImageView.self, in: sidebar).count, 2)
     }
 
     @MainActor
@@ -445,6 +445,21 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowDoesNotDuplicateFocusedPaneTitleAheadOfTabs() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let paneHeader = try XCTUnwrap(findView(ofType: PaneHeaderView.self, in: rootView))
+
+        XCTAssertEqual(countVisibleNonEmptyLabels(in: paneHeader), 1)
+    }
+
+    @MainActor
     func testWorkspaceWindowRestoresPersistedSidebarVisibility() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -471,7 +486,8 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     func testBuiltInThemesIncludeDefaultAndCuratedPresets() {
-        let identifiers = Set(WorkspaceShellTheme.builtInPresets.map(\.identifier))
+        let presets = WorkspaceShellTheme.builtInPresets
+        let identifiers = Set(presets.map(\.identifier))
 
         XCTAssertTrue(identifiers.contains("monokai-soda"))
         XCTAssertTrue(identifiers.contains("catppuccin"))
@@ -481,9 +497,14 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(identifiers.contains("one-dark"))
         XCTAssertTrue(identifiers.contains("solarized-dark"))
         XCTAssertTrue(identifiers.contains("solarized-light"))
-        XCTAssertEqual(WorkspaceShellTheme.builtInPresets.count, identifiers.count)
+        XCTAssertEqual(presets.count, identifiers.count)
         XCTAssertEqual(WorkspaceShellTheme.defaultTheme.identifier, "monokai-soda")
         XCTAssertNotEqual(WorkspaceShellTheme.defaultTheme.terminalPalette, WorkspaceShellTheme.builtInPresets.first(where: { $0.identifier == "catppuccin" })?.terminalPalette)
+        XCTAssertTrue(
+            presets.allSatisfy {
+                $0.shell.windowBackground.isEqual($0.terminalPalette.backgroundColor)
+            }
+        )
     }
 
     @MainActor
@@ -550,6 +571,18 @@ final class OmuxAppShellTests: XCTestCase {
             matches.append(contentsOf: findViews(ofType: type, in: subview))
         }
         return matches
+    }
+
+    @MainActor
+    private func countVisibleNonEmptyLabels(in view: NSView) -> Int {
+        let ownCount: Int
+        if let label = view as? NSTextField, !label.isHidden, !label.stringValue.isEmpty {
+            ownCount = 1
+        } else {
+            ownCount = 0
+        }
+
+        return ownCount + view.subviews.reduce(0) { $0 + countVisibleNonEmptyLabels(in: $1) }
     }
 
     @MainActor
