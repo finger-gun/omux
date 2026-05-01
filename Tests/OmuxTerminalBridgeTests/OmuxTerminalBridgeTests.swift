@@ -1,5 +1,11 @@
 import AppKit
+#if canImport(CGhostty)
 import CGhostty
+#else
+typealias ghostty_input_mouse_state_e = Int32
+let GHOSTTY_MOUSE_PRESS: ghostty_input_mouse_state_e = 1
+let GHOSTTY_MOUSE_RELEASE: ghostty_input_mouse_state_e = 0
+#endif
 import OmuxConfig
 import OmuxTheme
 import Foundation
