@@ -37,22 +37,36 @@ download_zig() {
   esac
 
   archive="$TOOL_DIR/zig-macos-$zig_arch-$ZIG_VERSION.tar.xz"
-  url="https://ziglang.org/download/$ZIG_VERSION/zig-macos-$zig_arch-$ZIG_VERSION.tar.xz"
+  url_candidates="
+https://ziglang.org/download/$ZIG_VERSION/zig-macos-$zig_arch-$ZIG_VERSION.tar.xz
+https://ziglang.org/download/$ZIG_VERSION/zig-$zig_arch-macos-$ZIG_VERSION.tar.xz
+"
 
   mkdir -p "$TOOL_DIR"
   if [ ! -f "$archive" ]; then
-    if ! curl -fL "$url" -o "$archive"; then
+    downloaded_url=""
+    for url in $url_candidates; do
+      if curl -fL "$url" -o "$archive"; then
+        downloaded_url="$url"
+        break
+      fi
       rm -f "$archive"
-      echo "Unable to download Zig $ZIG_VERSION from $url" >&2
+    done
+
+    if [ -z "$downloaded_url" ]; then
+      echo "Unable to download Zig $ZIG_VERSION from any known URL." >&2
       echo "Install zig@0.15 with Homebrew or provide zig $ZIG_VERSION on PATH." >&2
       exit 1
     fi
   fi
 
   rm -rf "$ZIG_DIR"
-  mkdir -p "$ZIG_DIR"
   tar -xJf "$archive" -C "$TOOL_DIR"
-  extracted="$TOOL_DIR/zig-macos-$zig_arch-$ZIG_VERSION"
+  extracted="$(find "$TOOL_DIR" -maxdepth 1 -type d -name "zig*${ZIG_VERSION}" ! -path "$ZIG_DIR" | head -n 1)"
+  if [ -z "$extracted" ]; then
+    echo "Unable to locate extracted Zig directory for version $ZIG_VERSION" >&2
+    exit 1
+  fi
   rm -rf "$ZIG_DIR"
   mv "$extracted" "$ZIG_DIR"
 }
@@ -81,12 +95,13 @@ ensure_zig() {
 PINNED_REF="$(cat "$PINNED_REF_FILE")"
 SCRIPT_HASH="$(shasum -a 256 "$0" | awk '{print $1}')"
 BUILD_STAMP="pinned_ref=$PINNED_REF;zig=$ZIG_VERSION;script=$SCRIPT_HASH"
-ensure_zig
 
 if [ -d "$OUTPUT_DIR" ] && [ -f "$BUILD_STAMP_FILE" ] && [ "$(cat "$BUILD_STAMP_FILE")" = "$BUILD_STAMP" ]; then
   echo "Using cached GhosttyKit xcframework for pinned snapshot: $PINNED_REF"
   exit 0
 fi
+
+ensure_zig
 
 echo "Building GhosttyKit xcframework against pinned snapshot: $PINNED_REF"
 "$ZIG_BIN" version
