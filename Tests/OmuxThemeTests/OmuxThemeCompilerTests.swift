@@ -133,20 +133,19 @@ struct OmuxThemeCompilerTests {
         let compiler = OmuxThemeCompiler(
             buildVersion: "test-build",
             retentionInterval: 60 * 60 * 24,
-            maxDirectoryBytes: 750,
+            maxDirectoryBytes: 1,
             generatedGhosttyDirectoryURL: directory
         )
 
-        let newest = try compiler.write(output: compiler.compile(theme: makeTheme(name: "newest"), config: OmuxConfig.defaults))
-        sleep(1)
-        _ = try compiler.write(output: compiler.compile(theme: makeTheme(name: "middle"), config: OmuxConfig.defaults))
-        sleep(1)
+        let first = try compiler.write(output: compiler.compile(theme: makeTheme(name: "first"), config: OmuxConfig.defaults))
+        let second = try compiler.write(output: compiler.compile(theme: makeTheme(name: "second"), config: OmuxConfig.defaults))
         let active = try compiler.write(output: compiler.compile(theme: makeTheme(name: "active"), config: OmuxConfig.defaults))
 
         compiler.garbageCollect(activeFileURL: active)
 
         #expect(FileManager.default.fileExists(atPath: active.path))
-        #expect(FileManager.default.fileExists(atPath: newest.path) == false)
+        #expect(FileManager.default.fileExists(atPath: first.path) == false)
+        #expect(FileManager.default.fileExists(atPath: second.path) == false)
     }
 }
 
