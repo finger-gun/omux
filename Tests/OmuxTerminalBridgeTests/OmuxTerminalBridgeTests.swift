@@ -292,6 +292,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.mousePressures.first?.pressure, 0.75)
     }
 
+    #if canImport(CGhostty)
     @MainActor
     func testHostedRuntimeClipboardReadsStandardPasteboardText() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
@@ -342,6 +343,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         XCTAssertNil(selectionRead)
     }
+    #endif
 
     @MainActor
     func testRuntimeHostedViewPublishesPreeditAndCommitThroughTextInputClient() throws {

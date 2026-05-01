@@ -169,8 +169,23 @@ final class OmuxAppShellTests: XCTestCase {
         let firstWorkspace = try controller.openWorkspace(at: "/tmp")
         let secondWorkspace = try controller.createWorkspace()
 
-        XCTAssertEqual(firstWorkspace.name, "tmp")
-        XCTAssertEqual(secondWorkspace.name, "tmp 2")
+        XCTAssertEqual(firstWorkspace.name, "Workspace 1")
+        XCTAssertEqual(secondWorkspace.name, "Workspace 2")
+    }
+
+    func testWorkspaceControllerReusesLowestAvailableGeneratedWorkspaceName() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+        _ = try controller.createWorkspace()
+        _ = try controller.closeWorkspace(secondWorkspace.id)
+
+        let replacementWorkspace = try controller.createWorkspace()
+        XCTAssertEqual(replacementWorkspace.name, "Workspace 2")
     }
 
     func testWorkspaceControllerCanRenameWorkspace() throws {
@@ -184,6 +199,20 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertEqual(renamedWorkspace.name, "Project Alpha")
         XCTAssertEqual(controller.activeWorkspace()?.name, "Project Alpha")
+    }
+
+    func testWorkspaceControllerCanRemoveCustomWorkspaceName() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        _ = try controller.renameWorkspace(workspace.id, to: "Project Alpha")
+        let resetWorkspace = try XCTUnwrap(controller.removeCustomWorkspaceName(workspace.id))
+
+        XCTAssertEqual(resetWorkspace.name, "Workspace 1")
+        XCTAssertNil(resetWorkspace.customName)
     }
 
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
@@ -295,7 +324,7 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
-        XCTAssertTrue(findLabel(withString: "tmp", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "Workspace 1", in: sidebar))
         XCTAssertFalse(findLabel(withString: "SESSIONS", in: sidebar))
     }
 
@@ -316,10 +345,42 @@ final class OmuxAppShellTests: XCTestCase {
         window.contentView?.layoutSubtreeIfNeeded()
         rootView.layoutSubtreeIfNeeded()
 
-        let wsLabel = try XCTUnwrap(findLabelView(withString: "tmp", in: sidebar))
+        let wsLabel = try XCTUnwrap(findLabelView(withString: "Workspace 1", in: sidebar))
         let wsButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: wsLabel))
         XCTAssertNotNil(wsButton)
         XCTAssertGreaterThanOrEqual(findViews(ofType: NSImageView.self, in: sidebar).count, 2)
+    }
+
+    @MainActor
+    func testWorkspaceRowContextMenuIncludesResetOnlyForCustomNames() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        _ = try controller.renameWorkspace(workspace.id, to: "Project Alpha")
+        let secondWorkspace = try controller.createWorkspace()
+        let windowController = WorkspaceWindowController(
+            workspace: try XCTUnwrap(controller.activeWorkspace()),
+            controller: controller
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        let renamedLabel = try XCTUnwrap(findLabelView(withString: "Project Alpha", in: sidebar))
+        let renamedButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: renamedLabel))
+        let defaultLabel = try XCTUnwrap(findLabelView(withString: secondWorkspace.name, in: sidebar))
+        let defaultButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: defaultLabel))
+
+        let renamedMenuTitles = renamedButton.menu?.items.map(\.title) ?? []
+        let defaultMenuTitles = defaultButton.menu?.items.map(\.title) ?? []
+
+        XCTAssertTrue(renamedMenuTitles.contains("Remove Custom Name"))
+        XCTAssertFalse(defaultMenuTitles.contains("Remove Custom Name"))
+        XCTAssertTrue(renamedMenuTitles.contains("Close Others"))
+        XCTAssertTrue(renamedMenuTitles.contains("Close Above"))
+        XCTAssertTrue(renamedMenuTitles.contains("Close Below"))
     }
 
     @MainActor
@@ -555,6 +616,109 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowSuppressesCwdOnlyPaneStatusRow() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let paneCard = try XCTUnwrap(findView(ofType: PaneCardView.self, in: rootView))
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(findLabel(withString: "/var/tmp", in: paneCard))
+    }
+
+    @MainActor
+    func testWorkspaceWindowShowsTerminalMetadataRowsAndNavigatesViaSidebar() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(updatedWorkspace.focusedPane)
+        let secondSurfaceID = try XCTUnwrap(bridge.surface(for: secondPane.id)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: secondSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: "/tmp", in: sidebar))
+        let secondPathLabel = try XCTUnwrap(findLabelView(withString: "/var/tmp", in: sidebar))
+        let secondPathButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: secondPathLabel))
+        secondPathButton.mouseDown(with: makeMouseEvent(window: window))
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+        XCTAssertNotEqual(firstPane.id, secondPane.id)
+    }
+
+    @MainActor
+    func testPaneTabContextMenuExposesRenameAndCloseVariants() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter { $0.menu != nil }
+        XCTAssertEqual(tabButtons.count, 2)
+        let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
+
+        XCTAssertTrue(menuTitles.contains("Rename…"))
+        XCTAssertTrue(menuTitles.contains("Close"))
+        XCTAssertTrue(menuTitles.contains("Close Others"))
+        XCTAssertTrue(menuTitles.contains("Close Above"))
+        XCTAssertTrue(menuTitles.contains("Close Below"))
+        XCTAssertEqual(workspace.tabs.count, 1)
+    }
+
+    @MainActor
+    func testWorkspaceWindowShowsGitAwareTerminalMetadataWhenRepositoryIsAvailable() throws {
+        let repositoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: repositoryURL) }
+        try FileManager.default.createDirectory(at: repositoryURL, withIntermediateDirectories: true)
+        try runGit(["init", repositoryURL.path])
+        try runGit(["-C", repositoryURL.path, "branch", "-M", "main"])
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: repositoryURL.path)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+        let expectedTitle = "main"
+
+        XCTAssertTrue(findLabel(withString: expectedTitle, in: sidebar))
+        XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
+    }
+
+    @MainActor
     func testWorkspaceWindowKeepsSinglePaneFilledAcrossCanvas() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -704,6 +868,34 @@ final class OmuxAppShellTests: XCTestCase {
             current = candidate.superview
         }
         return nil
+    }
+
+    @MainActor
+    private func makeMouseEvent(window: NSWindow) -> NSEvent {
+        try! XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 12, y: 12),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+    }
+
+    private func runGit(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
     }
 }
 

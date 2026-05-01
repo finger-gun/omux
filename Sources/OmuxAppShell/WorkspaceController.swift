@@ -32,16 +32,16 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     public func openWorkspace(at path: String) throws -> Workspace {
-        let baseName = Self.baseWorkspaceName(for: path)
-        let pane = makePane(title: baseName, workingDirectory: path)
+        let paneTitle = Self.basePaneTitle(for: path)
+        let pane = makePane(title: paneTitle, workingDirectory: path)
         let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
 
         lock.lock()
-        let workspaceName = uniqueWorkspaceName(baseName: baseName)
+        let generatedWorkspaceName = nextGeneratedWorkspaceName()
         lock.unlock()
 
         let workspace = Workspace(
-            name: workspaceName,
+            generatedName: generatedWorkspaceName,
             rootPath: path,
             tabs: [tab],
             focusedTabID: tab.id
@@ -73,6 +73,12 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return workspaces.map(WorkspaceSummary.init(workspace:))
+    }
+
+    public func allWorkspaces() -> [Workspace] {
+        lock.lock()
+        defer { lock.unlock() }
+        return workspaces
     }
 
     @discardableResult
@@ -198,9 +204,8 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
-        let uniqueName = uniqueWorkspaceName(baseName: trimmedName, excluding: workspaceID)
-        workspaces[index].name = uniqueName
-        setActiveWorkspaceID(workspaces[index].id, recordPrevious: false)
+        let uniqueName = uniqueWorkspaceDisplayName(baseName: trimmedName, excluding: workspaceID)
+        workspaces[index].customName = uniqueName
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
@@ -212,6 +217,24 @@ public final class WorkspaceController: @unchecked Sendable {
                 payload: .object(["name": .string(updatedWorkspace.name)])
             )
         )
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func removeCustomWorkspaceName(_ workspaceID: WorkspaceID) -> Workspace? {
+        lock.lock()
+        guard let index = workspaces.firstIndex(where: { $0.id == workspaceID }),
+              workspaces[index].customName != nil
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        workspaces[index].customName = nil
+        let updatedWorkspace = workspaces[index]
+        lock.unlock()
 
         onChange?(updatedWorkspace)
         return updatedWorkspace
@@ -366,38 +389,40 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func deleteActiveWorkspace() throws -> Workspace? {
-        lock.lock()
-        guard let index = activeWorkspaceIndex,
-              workspaces.count > 1
-        else {
-            lock.unlock()
+        guard let activeWorkspaceID else {
             return nil
         }
+        return try closeWorkspace(activeWorkspaceID)
+    }
 
-        let removedWorkspace = workspaces.remove(at: index)
-        let nextIndex = min(index, workspaces.count - 1)
-        let updatedWorkspace = workspaces[nextIndex]
-        if previousWorkspaceID == removedWorkspace.id {
-            previousWorkspaceID = nil
-        }
-        setActiveWorkspaceID(updatedWorkspace.id, recordPrevious: false)
-        lock.unlock()
-
-        for pane in removedWorkspace.tabs.flatMap(\.panes) {
-            try bridge.teardown(paneID: pane.id)
-        }
-
-        try hookRunner.emit(
-            HookInvocation(
-                category: .lifecycle,
-                name: "workspace-closed",
-                workspaceID: removedWorkspace.id,
-                payload: .object(["path": .string(removedWorkspace.rootPath)])
-            )
+    @discardableResult
+    public func closeWorkspace(_ workspaceID: WorkspaceID) throws -> Workspace? {
+        try removeWorkspaces(
+            matching: { $0.id == workspaceID },
+            preferredActiveWorkspaceID: nil
         )
+    }
 
-        onChange?(updatedWorkspace)
-        return updatedWorkspace
+    @discardableResult
+    public func closeOtherWorkspaces(keeping workspaceID: WorkspaceID) throws -> Workspace? {
+        try removeWorkspaces(
+            matching: { $0.id != workspaceID },
+            preferredActiveWorkspaceID: workspaceID
+        )
+    }
+
+    @discardableResult
+    public func closeWorkspacesAbove(_ workspaceID: WorkspaceID) throws -> Workspace? {
+        try closeWorkspaces(relativeTo: workspaceID) { targetIndex, _ in
+            0..<targetIndex
+        }
+    }
+
+    @discardableResult
+    public func closeWorkspacesBelow(_ workspaceID: WorkspaceID) throws -> Workspace? {
+        try closeWorkspaces(relativeTo: workspaceID) { targetIndex, totalCount in
+            (targetIndex + 1)..<totalCount
+        }
     }
 
     @discardableResult
@@ -489,6 +514,52 @@ public final class WorkspaceController: @unchecked Sendable {
     @discardableResult
     public func focusPaneTab(paneID: PaneID) -> Workspace? {
         focus(paneID: paneID)
+    }
+
+    @discardableResult
+    public func renamePaneTab(_ paneID: PaneID, to proposedName: String) -> Workspace? {
+        let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedName.isEmpty == false else {
+            return nil
+        }
+
+        lock.lock()
+        var updatedWorkspace: Workspace?
+        for workspaceIndex in workspaces.indices {
+            if workspaces[workspaceIndex].updatePane(paneID, transform: { $0.title = trimmedName }) {
+                updatedWorkspace = workspaces[workspaceIndex]
+                break
+            }
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func closeOtherPaneTabs(paneID: PaneID) throws -> Workspace? {
+        try closePaneTabs(relativeTo: paneID) { panes, targetIndex in
+            panes.enumerated().compactMap { index, pane in
+                index == targetIndex ? nil : pane.id
+            }
+        }
+    }
+
+    @discardableResult
+    public func closePaneTabsAbove(paneID: PaneID) throws -> Workspace? {
+        try closePaneTabs(relativeTo: paneID) { panes, targetIndex in
+            panes.prefix(targetIndex).map(\.id)
+        }
+    }
+
+    @discardableResult
+    public func closePaneTabsBelow(paneID: PaneID) throws -> Workspace? {
+        try closePaneTabs(relativeTo: paneID) { panes, targetIndex in
+            panes.suffix(from: targetIndex + 1).map(\.id)
+        }
     }
 
     @discardableResult
@@ -705,7 +776,7 @@ public final class WorkspaceController: @unchecked Sendable {
         return nil
     }
 
-    private func uniqueWorkspaceName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {
+    private func uniqueWorkspaceDisplayName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {
         let existingNames = Set(
             workspaces
                 .filter { $0.id != workspaceID }
@@ -725,14 +796,179 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
+    private func nextGeneratedWorkspaceName() -> String {
+        var suffix = 1
+        while true {
+            let candidate = "Workspace \(suffix)"
+            if workspaces.contains(where: { $0.generatedName.localizedCaseInsensitiveCompare(candidate) == .orderedSame }) == false {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+
     private func makePane(title: String, workingDirectory: String) -> Pane {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let session = SessionDescriptor(shell: shell, workingDirectory: workingDirectory)
         return Pane(title: title, session: session)
     }
 
-    private static func baseWorkspaceName(for path: String) -> String {
+    private static func basePaneTitle(for path: String) -> String {
         let directoryURL = URL(fileURLWithPath: path)
         return directoryURL.lastPathComponent.isEmpty ? "OpenMUX" : directoryURL.lastPathComponent
+    }
+
+    private func closeWorkspaces(
+        relativeTo workspaceID: WorkspaceID,
+        matchingRange: (_ targetIndex: Int, _ totalCount: Int) -> Range<Int>
+    ) throws -> Workspace? {
+        lock.lock()
+        guard let targetIndex = workspaces.firstIndex(where: { $0.id == workspaceID }) else {
+            lock.unlock()
+            return nil
+        }
+        let removableIndexes = Array(matchingRange(targetIndex, workspaces.count))
+        let removableIDs = removableIndexes.map { workspaces[$0].id }
+        lock.unlock()
+
+        guard removableIDs.isEmpty == false else {
+            return activeWorkspace()
+        }
+
+        return try removeWorkspaces(
+            matching: { removableIDs.contains($0.id) },
+            preferredActiveWorkspaceID: workspaceID
+        )
+    }
+
+    private func removeWorkspaces(
+        matching shouldRemove: (Workspace) -> Bool,
+        preferredActiveWorkspaceID: WorkspaceID?
+    ) throws -> Workspace? {
+        var removedWorkspaces: [Workspace] = []
+        var updatedWorkspace: Workspace?
+
+        lock.lock()
+        let survivingWorkspaces = workspaces.filter { workspace in
+            if shouldRemove(workspace) {
+                removedWorkspaces.append(workspace)
+                return false
+            }
+            return true
+        }
+
+        guard removedWorkspaces.isEmpty == false, survivingWorkspaces.isEmpty == false else {
+            lock.unlock()
+            return nil
+        }
+
+        workspaces = survivingWorkspaces
+        if let previousWorkspaceID, removedWorkspaces.contains(where: { $0.id == previousWorkspaceID }) {
+            self.previousWorkspaceID = nil
+        }
+
+        if let preferredActiveWorkspaceID,
+           let preferredIndex = workspaces.firstIndex(where: { $0.id == preferredActiveWorkspaceID }) {
+            setActiveWorkspaceID(workspaces[preferredIndex].id, recordPrevious: false)
+            updatedWorkspace = workspaces[preferredIndex]
+        } else if let activeWorkspaceID,
+                  let existingIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID }) {
+            updatedWorkspace = workspaces[existingIndex]
+        } else if let firstWorkspace = workspaces.first {
+            setActiveWorkspaceID(firstWorkspace.id, recordPrevious: false)
+            updatedWorkspace = firstWorkspace
+        }
+        lock.unlock()
+
+        for removedWorkspace in removedWorkspaces {
+            for pane in removedWorkspace.tabs.flatMap(\.panes) {
+                try bridge.teardown(paneID: pane.id)
+            }
+
+            try hookRunner.emit(
+                HookInvocation(
+                    category: .lifecycle,
+                    name: "workspace-closed",
+                    workspaceID: removedWorkspace.id,
+                    payload: .object(["path": .string(removedWorkspace.rootPath)])
+                )
+            )
+        }
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+        return updatedWorkspace
+    }
+
+    private func closePaneTabs(
+        relativeTo paneID: PaneID,
+        targetIDs: (_ panes: [Pane], _ targetIndex: Int) -> [PaneID]
+    ) throws -> Workspace? {
+        var removedPanes: [Pane] = []
+        var targetStackID: PaneStackID?
+        var updatedWorkspace: Workspace?
+        var updatedWorkspaceID: WorkspaceID?
+        var updatedTabID: TabID?
+
+        lock.lock()
+        for workspaceIndex in workspaces.indices {
+            for tabIndex in workspaces[workspaceIndex].tabs.indices {
+                guard let paneStack = workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: paneID),
+                      let targetIndex = paneStack.panes.firstIndex(where: { $0.id == paneID })
+                else {
+                    continue
+                }
+
+                let removalIDs = targetIDs(paneStack.panes, targetIndex)
+                guard removalIDs.isEmpty == false else {
+                    return workspaces[workspaceIndex]
+                }
+
+                targetStackID = paneStack.id
+                for removalID in removalIDs {
+                    if let removedPane = workspaces[workspaceIndex].closePane(removalID) {
+                        removedPanes.append(removedPane)
+                    }
+                }
+
+                updatedWorkspace = workspaces[workspaceIndex]
+                updatedWorkspaceID = workspaces[workspaceIndex].id
+                updatedTabID = workspaces[workspaceIndex].tabs[tabIndex].id
+                break
+            }
+            if updatedWorkspace != nil {
+                break
+            }
+        }
+
+        guard let updatedWorkspace,
+              let updatedWorkspaceID,
+              let updatedTabID
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        lock.unlock()
+        for removedPane in removedPanes {
+            try bridge.teardown(paneID: removedPane.id)
+            try hookRunner.emit(
+                HookInvocation(
+                    category: .session,
+                    name: "pane-tab-closed",
+                    workspaceID: updatedWorkspaceID,
+                    tabID: updatedTabID,
+                    paneID: removedPane.id,
+                    sessionID: removedPane.session.id,
+                    payload: .object([
+                        "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
+                    ])
+                )
+            )
+        }
+        onChange?(updatedWorkspace)
+
+        return updatedWorkspace
     }
 }

@@ -115,7 +115,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func renameWorkspaceFromMenu(_ sender: Any?) {
         _ = sender
-        presentRenameWorkspacePrompt()
+        windowController?.presentRenameWorkspacePrompt()
     }
 
     @objc private func splitPaneRightFromMenu(_ sender: Any?) {
@@ -306,42 +306,4 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         removePaneMenuItem?.isEnabled = workspaceController.canRemoveActivePane()
     }
 
-    private func presentRenameWorkspacePrompt() {
-        guard let workspace = workspaceController.activeWorkspace() else {
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = "Rename Workspace"
-        alert.informativeText = "Choose a new name for the current workspace."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-
-        let nameField = NSTextField(string: workspace.name)
-        nameField.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-        alert.accessoryView = nameField
-
-        let rename: () -> Void = { [weak self] in
-            guard let self else {
-                return
-            }
-
-            do {
-                _ = try workspaceController.renameWorkspace(workspace.id, to: nameField.stringValue)
-                refreshMenuValidation()
-            } catch {
-                assertionFailure("Failed to rename workspace: \(error)")
-            }
-        }
-
-        if let window = windowController?.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn {
-                    rename()
-                }
-            }
-        } else if alert.runModal() == .alertFirstButtonReturn {
-            rename()
-        }
-    }
 }

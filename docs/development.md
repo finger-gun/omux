@@ -45,7 +45,7 @@ The script expects:
 - Zig 0.15.2, with Homebrew `zig@0.15` preferred when available
 - Xcode's Metal Toolchain component installed for the macOS xcframework build
 
-When `GhosttyKit.xcframework` is present, hosted panes use runtime-owned native Ghostty surfaces by default. When it is absent or runtime attach fails, the bridge falls back to the internal PTY-backed text host so the shell can still render a working pane.
+When `GhosttyKit.xcframework` is present, hosted panes use runtime-owned native Ghostty surfaces by default. When it is absent or runtime attach fails, the bridge falls back to the internal PTY-backed text host so the shell can still render a working pane. Plain `swift build` / `swift test` must continue to work in that no-runtime configuration because CI validates both the vendored-runtime path and the fallback path separately.
 
 ## Commands
 
@@ -91,6 +91,10 @@ The current shell baseline adds:
 - explicit config diagnostics and `omux config doctor` / `omux config reload` support through the same local control plane
 - a second polish pass that tightens shell proportions, makes sidebar navigation visible/useful, and gives shell controls real intrinsic sizing
 - a follow-up navigation pass that moves workspace tabs into the left rail, adds a compact sidebar workspace-creation affordance, supports workspace renaming, and disables destructive workspace/pane commands when they would empty the shell
+- generated workspace labels (`Workspace 1`, `Workspace 2`, ...) with optional custom overrides that can be reset back to their generated names
+- workspace-row and pane-tab context menus for localized rename and close flows
+- sidebar child rows for live terminals, with git-aware repo/branch/path metadata when available and path-only fallbacks otherwise
+- pane chrome that reserves its secondary status row for transient terminal state instead of duplicating cwd identity
 - bridge-provided hosted terminal pane views embedded inside AppKit pane stacks
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions

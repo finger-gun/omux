@@ -58,11 +58,16 @@ final class WorkspaceWindowController: NSWindowController {
     func toggleSidebarVisibility() {
         rootViewController.toggleSidebarVisibility()
     }
+
+    func presentRenameWorkspacePrompt(workspaceID: WorkspaceID? = nil) {
+        rootViewController.presentRenameWorkspacePrompt(workspaceID: workspaceID)
+    }
 }
 
 @MainActor
 final class WorkspaceShellViewController: NSViewController {
     private let controller: WorkspaceController
+    private let metadataResolver = TerminalSidebarMetadataResolver()
     private let sidebarView = WorkspaceSidebarView()
     private let canvasView = WorkspaceCanvasView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
@@ -135,8 +140,8 @@ final class WorkspaceShellViewController: NSViewController {
         apply(theme: currentTheme)
 
         let workspaceItems = makeWorkspaceSidebarItems(
-            summaries: controller.listWorkspaces(),
-            workspace: workspace
+            workspaces: controller.allWorkspaces(),
+            activeWorkspace: workspace
         )
         sidebarView.render(
             workspaceItems: workspaceItems,
@@ -151,8 +156,8 @@ final class WorkspaceShellViewController: NSViewController {
                 _ = try? self?.controller.deleteActiveWorkspace()
             },
             canDeleteWorkspace: controller.canDeleteActiveWorkspace(),
-            onSelectTab: { [weak self] tabID in
-                _ = self?.controller.focus(tabID: tabID)
+            onSelectPane: { [weak self] paneID in
+                _ = self?.controller.focus(paneID: paneID)
             }
         )
 
@@ -201,19 +206,182 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func makeWorkspaceSidebarItems(
-        summaries: [WorkspaceSummary],
-        workspace: Workspace
+        workspaces: [Workspace],
+        activeWorkspace: Workspace
     ) -> [SidebarItem] {
-        summaries.map { summary in
-            SidebarItem(
+        workspaces.flatMap { workspace in
+            let workspaceItem = SidebarItem(
                 kind: .workspace,
-                identifier: summary.id.rawValue,
-                title: summary.name,
-                subtitle: "\(summary.tabCount) tabs · \(summary.paneCount) panes",
-                isActive: summary.id == workspace.id,
-                action: .workspace(summary.id)
+                identifier: workspace.id.rawValue,
+                title: workspace.name,
+                subtitle: nil,
+                isActive: workspace.id == activeWorkspace.id,
+                action: .workspace(workspace.id),
+                contextMenuProvider: { [weak self] in
+                    guard let self else { return NSMenu() }
+                    return makeWorkspaceContextMenu(for: workspace)
+                }
             )
+
+            let terminalItems = workspace.tabs
+                .flatMap(\.panes)
+                .map { pane in
+                    let metadata = metadataResolver.metadata(for: pane)
+                    return SidebarItem(
+                        kind: .terminal,
+                        identifier: pane.id.rawValue,
+                        title: metadata.title,
+                        subtitle: metadata.subtitle,
+                        isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
+                        action: .pane(pane.id),
+                        contextMenuProvider: nil
+                    )
+                }
+
+            return [workspaceItem] + terminalItems
         }
+    }
+
+    func presentRenameWorkspacePrompt(workspaceID: WorkspaceID? = nil) {
+        guard let workspace = workspaceID.flatMap({ id in
+            controller.allWorkspaces().first(where: { $0.id == id })
+        }) ?? controller.activeWorkspace() else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Workspace"
+        alert.informativeText = "Choose a new name for this workspace."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let nameField = NSTextField(string: workspace.customName ?? workspace.name)
+        nameField.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = nameField
+
+        let rename = { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try controller.renameWorkspace(workspace.id, to: nameField.stringValue)
+            } catch {
+                assertionFailure("Failed to rename workspace: \(error)")
+            }
+        }
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    rename()
+                }
+            }
+        } else if alert.runModal() == .alertFirstButtonReturn {
+            rename()
+        }
+    }
+
+    private func presentRenamePanePrompt(paneID: PaneID, currentTitle: String) {
+        let alert = NSAlert()
+        alert.messageText = "Rename Tab"
+        alert.informativeText = "Choose a new name for this terminal tab."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let nameField = NSTextField(string: currentTitle)
+        nameField.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = nameField
+
+        let rename = { [weak self] in
+            guard let self else { return }
+            _ = controller.renamePaneTab(paneID, to: nameField.stringValue)
+        }
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    rename()
+                }
+            }
+        } else if alert.runModal() == .alertFirstButtonReturn {
+            rename()
+        }
+    }
+
+    private func makeWorkspaceContextMenu(for workspace: Workspace) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Rename…", action: nil, keyEquivalent: "").onSelect { [weak self] in
+            self?.presentRenameWorkspacePrompt(workspaceID: workspace.id)
+        }
+        if workspace.hasCustomName {
+            menu.addItem(withTitle: "Remove Custom Name", action: nil, keyEquivalent: "").onSelect { [weak self] in
+                _ = self?.controller.removeCustomWorkspaceName(workspace.id)
+            }
+        }
+        menu.addItem(.separator())
+
+        let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
+        closeItem.isEnabled = controller.allWorkspaces().count > 1
+        closeItem.onSelect { [weak self] in
+            _ = try? self?.controller.closeWorkspace(workspace.id)
+        }
+
+        let index = controller.allWorkspaces().firstIndex(where: { $0.id == workspace.id }) ?? 0
+        let totalCount = controller.allWorkspaces().count
+
+        let closeOthersItem = menu.addItem(withTitle: "Close Others", action: nil, keyEquivalent: "")
+        closeOthersItem.isEnabled = totalCount > 1
+        closeOthersItem.onSelect { [weak self] in
+            _ = try? self?.controller.closeOtherWorkspaces(keeping: workspace.id)
+        }
+
+        let closeAboveItem = menu.addItem(withTitle: "Close Above", action: nil, keyEquivalent: "")
+        closeAboveItem.isEnabled = index > 0
+        closeAboveItem.onSelect { [weak self] in
+            _ = try? self?.controller.closeWorkspacesAbove(workspace.id)
+        }
+
+        let closeBelowItem = menu.addItem(withTitle: "Close Below", action: nil, keyEquivalent: "")
+        closeBelowItem.isEnabled = index < totalCount - 1
+        closeBelowItem.onSelect { [weak self] in
+            _ = try? self?.controller.closeWorkspacesBelow(workspace.id)
+        }
+        return menu
+    }
+
+    private func makePaneTabContextMenu(
+        pane: Pane,
+        paneStack: PaneStack
+    ) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Rename…", action: nil, keyEquivalent: "").onSelect { [weak self] in
+            self?.presentRenamePanePrompt(paneID: pane.id, currentTitle: pane.title)
+        }
+
+        let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
+        closeItem.isEnabled = paneStack.panes.count > 1
+        closeItem.onSelect { [weak self] in
+            _ = try? self?.controller.closePaneTab(paneID: pane.id)
+        }
+
+        let targetIndex = paneStack.panes.firstIndex(where: { $0.id == pane.id }) ?? 0
+
+        let closeOthersItem = menu.addItem(withTitle: "Close Others", action: nil, keyEquivalent: "")
+        closeOthersItem.isEnabled = paneStack.panes.count > 1
+        closeOthersItem.onSelect { [weak self] in
+            _ = try? self?.controller.closeOtherPaneTabs(paneID: pane.id)
+        }
+
+        let closeAboveItem = menu.addItem(withTitle: "Close Above", action: nil, keyEquivalent: "")
+        closeAboveItem.isEnabled = targetIndex > 0
+        closeAboveItem.onSelect { [weak self] in
+            _ = try? self?.controller.closePaneTabsAbove(paneID: pane.id)
+        }
+
+        let closeBelowItem = menu.addItem(withTitle: "Close Below", action: nil, keyEquivalent: "")
+        closeBelowItem.isEnabled = targetIndex < paneStack.panes.count - 1
+        closeBelowItem.onSelect { [weak self] in
+            _ = try? self?.controller.closePaneTabsBelow(paneID: pane.id)
+        }
+        return menu
     }
 
     private func makeLayoutView(
@@ -235,6 +403,10 @@ final class WorkspaceShellViewController: NSViewController {
                 },
                 onClosePaneTab: { [weak self] paneID in
                     _ = try self?.controller.closePaneTab(paneID: paneID)
+                },
+                contextMenuProvider: { [weak self] pane in
+                    guard let self else { return NSMenu() }
+                    return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
                 },
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
@@ -267,20 +439,30 @@ final class WorkspaceShellViewController: NSViewController {
 struct SidebarItem {
     enum Kind {
         case workspace
-        case tab
+        case terminal
     }
 
     enum Action {
         case workspace(WorkspaceID)
-        case tab(TabID)
+        case pane(PaneID)
     }
 
     let kind: Kind
     let identifier: String
     let title: String
-    let subtitle: String
+    let subtitle: String?
     let isActive: Bool
     let action: Action
+    let contextMenuProvider: (() -> NSMenu)?
+
+    var rowHeight: CGFloat {
+        switch kind {
+        case .workspace:
+            return 28
+        case .terminal:
+            return subtitle == nil ? 26 : 34
+        }
+    }
 }
 
 private struct SidebarSectionAccessory {
@@ -340,7 +522,7 @@ final class WorkspaceSidebarView: NSView {
         onCreateWorkspace: @escaping @MainActor () -> Void,
         onDeleteWorkspace: @escaping @MainActor () -> Void,
         canDeleteWorkspace: Bool,
-        onSelectTab: @escaping @MainActor (TabID) -> Void
+        onSelectPane: @escaping @MainActor (PaneID) -> Void
     ) {
         apply(theme: theme)
 
@@ -366,8 +548,8 @@ final class WorkspaceSidebarView: NSView {
                 switch item.action {
                 case .workspace(let workspaceID):
                     onSelectWorkspace(workspaceID)
-                case .tab(let tabID):
-                    onSelectTab(tabID)
+                case .pane(let paneID):
+                    onSelectPane(paneID)
                 }
             }
         )
@@ -481,9 +663,10 @@ private final class WorkspaceSidebarSectionView: NSView {
             button.onPress = {
                 buttonHandler(item)
             }
+            button.contextMenuProvider = item.contextMenuProvider
             itemStack.addArrangedSubview(button)
             button.widthAnchor.constraint(equalTo: itemStack.widthAnchor).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: item.rowHeight).isActive = true
             itemButtons.append(button)
         }
     }
@@ -562,6 +745,7 @@ final class PaneStackView: NSView {
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
@@ -579,7 +763,8 @@ final class PaneStackView: NSView {
             theme: theme,
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
-            onClosePaneTab: onClosePaneTab
+            onClosePaneTab: onClosePaneTab,
+            contextMenuProvider: contextMenuProvider
         )
         paneCardView.configure(
             headerView: headerView,
@@ -687,7 +872,8 @@ final class PaneHeaderView: NSView {
         theme: WorkspaceShellTheme,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
-        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void
+        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu
     ) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -717,6 +903,7 @@ final class PaneHeaderView: NSView {
                 compact: true
             )
             button.onPress = { onSelectPaneTab(pane.id) }
+            button.contextMenuProvider = { contextMenuProvider(pane) }
             tabStrip.addArrangedSubview(button)
         }
 
@@ -757,6 +944,11 @@ final class PaneHeaderView: NSView {
 @MainActor
 private class ChromePillButton: NSControl {
     var onPress: (() -> Void)?
+    var contextMenuProvider: (() -> NSMenu)? {
+        didSet {
+            menu = contextMenuProvider?()
+        }
+    }
     private let titleLabel = NSTextField(labelWithString: "")
     private let imageView = NSImageView()
     private var compact = false
@@ -891,12 +1083,30 @@ private class ChromePillButton: NSControl {
         onPress?()
         super.mouseDown(with: event)
     }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard isEnabled else {
+            return
+        }
+
+        if let menu = menu ?? contextMenuProvider?() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        } else {
+            super.rightMouseDown(with: event)
+        }
+    }
 }
 
 @MainActor
 final class SidebarItemButton: NSView {
     var onPress: (() -> Void)?
+    var contextMenuProvider: (() -> NSMenu?)? {
+        didSet {
+            menu = contextMenuProvider?()
+        }
+    }
     private let titleField = NSTextField(labelWithString: "")
+    private let subtitleField = NSTextField(labelWithString: "")
     private var leadingInset: CGFloat = 12
 
     override init(frame frameRect: NSRect) {
@@ -911,6 +1121,14 @@ final class SidebarItemButton: NSView {
         titleField.isEditable = false
         titleField.isSelectable = false
         addSubview(titleField)
+
+        subtitleField.maximumNumberOfLines = 1
+        subtitleField.lineBreakMode = .byTruncatingMiddle
+        subtitleField.isBezeled = false
+        subtitleField.drawsBackground = false
+        subtitleField.isEditable = false
+        subtitleField.isSelectable = false
+        addSubview(subtitleField)
     }
 
     @available(*, unavailable)
@@ -923,16 +1141,30 @@ final class SidebarItemButton: NSView {
         case .workspace:
             titleField.font = .systemFont(ofSize: 13, weight: .semibold)
             leadingInset = 12
-        case .tab:
-            titleField.font = .systemFont(ofSize: 12, weight: .regular)
-            leadingInset = 12
+            subtitleField.font = .systemFont(ofSize: 11, weight: .regular)
+        case .terminal:
+            titleField.font = .systemFont(ofSize: 10, weight: .regular)
+            subtitleField.font = .systemFont(ofSize: 10, weight: .regular)
+            leadingInset = 22
         }
 
         titleField.stringValue = item.title
-        titleField.textColor = item.isActive ? theme.shell.textPrimary : theme.shell.textSecondary
-        layer?.backgroundColor = item.isActive
-            ? theme.shell.selection.cgColor
-            : NSColor.clear.cgColor
+        titleField.textColor = item.kind == .terminal
+            ? theme.shell.textMuted
+            : (item.isActive ? theme.shell.textPrimary : theme.shell.textSecondary)
+        subtitleField.stringValue = item.subtitle ?? ""
+        subtitleField.textColor = theme.shell.textMuted
+        subtitleField.isHidden = item.subtitle == nil
+        switch item.kind {
+        case .workspace:
+            layer?.backgroundColor = item.isActive
+                ? theme.shell.selection.cgColor
+                : NSColor.clear.cgColor
+        case .terminal:
+            layer?.backgroundColor = item.isActive
+                ? theme.shell.selection.withAlphaComponent(0.28).cgColor
+                : NSColor.clear.cgColor
+        }
         layer?.borderWidth = 0
         layer?.borderColor = nil
         needsLayout = true
@@ -942,18 +1174,71 @@ final class SidebarItemButton: NSView {
         super.layout()
         let trailingInset: CGFloat = 12
         let labelWidth = bounds.width - leadingInset - trailingInset
-        let labelHeight = titleField.intrinsicContentSize.height
-        titleField.frame = NSRect(
-            x: leadingInset,
-            y: (bounds.height - labelHeight) / 2,
-            width: max(labelWidth, 0),
-            height: labelHeight
-        )
+        let titleHeight = titleField.intrinsicContentSize.height
+        if subtitleField.isHidden {
+            titleField.frame = NSRect(
+                x: leadingInset,
+                y: (bounds.height - titleHeight) / 2,
+                width: max(labelWidth, 0),
+                height: titleHeight
+            )
+            subtitleField.frame = .zero
+        } else {
+            let subtitleHeight = subtitleField.intrinsicContentSize.height
+            let totalHeight = titleHeight + subtitleHeight + 2
+            let startY = (bounds.height - totalHeight) / 2
+            titleField.frame = NSRect(
+                x: leadingInset,
+                y: startY + subtitleHeight + 2,
+                width: max(labelWidth, 0),
+                height: titleHeight
+            )
+            subtitleField.frame = NSRect(
+                x: leadingInset,
+                y: startY,
+                width: max(labelWidth, 0),
+                height: subtitleHeight
+            )
+        }
     }
 
     override var acceptsFirstResponder: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         onPress?()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = menu ?? contextMenuProvider?() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        } else {
+            super.rightMouseDown(with: event)
+        }
+    }
+}
+
+@MainActor
+private final class MenuActionTrampoline: NSObject {
+    let handler: () -> Void
+
+    init(handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    @objc func performAction(_ sender: Any?) {
+        _ = sender
+        handler()
+    }
+}
+
+private extension NSMenuItem {
+    @discardableResult
+    @MainActor
+    func onSelect(_ handler: @escaping () -> Void) -> NSMenuItem {
+        let trampoline = MenuActionTrampoline(handler: handler)
+        target = trampoline
+        action = #selector(MenuActionTrampoline.performAction(_:))
+        representedObject = trampoline
+        return self
     }
 }

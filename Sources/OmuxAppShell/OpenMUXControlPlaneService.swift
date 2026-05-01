@@ -164,6 +164,8 @@ private extension Workspace {
         [
             "id": .string(id.rawValue),
             "name": .string(name),
+            "generatedName": .string(generatedName),
+            "customName": customName.map { .string($0) } ?? .null,
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabs.count),
             "paneCount": .integer(tabs.reduce(into: 0) { $0 += $1.panes.count }),
@@ -179,6 +181,8 @@ private extension WorkspaceSummary {
         [
             "id": .string(id.rawValue),
             "name": .string(name),
+            "generatedName": .string(generatedName),
+            "customName": customName.map { .string($0) } ?? .null,
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabCount),
             "paneCount": .integer(paneCount),

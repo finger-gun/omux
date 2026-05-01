@@ -85,9 +85,6 @@ public struct PaneTerminalState: Equatable, Codable, Sendable {
 
     public var statusSummary: String? {
         var parts: [String] = []
-        if let reportedWorkingDirectory {
-            parts.append(reportedWorkingDirectory)
-        }
         if let progress {
             switch progress.state {
             case .active:
@@ -544,10 +541,27 @@ public struct Tab: Equatable, Codable, Sendable {
 
 public struct Workspace: Equatable, Codable, Sendable {
     public let id: WorkspaceID
-    public var name: String
+    public var generatedName: String
+    public var customName: String?
     public var rootPath: String
     public var tabs: [Tab]
     public var focusedTabID: TabID
+
+    public init(
+        id: WorkspaceID = WorkspaceID(),
+        generatedName: String,
+        customName: String? = nil,
+        rootPath: String,
+        tabs: [Tab],
+        focusedTabID: TabID
+    ) {
+        self.id = id
+        self.generatedName = generatedName
+        self.customName = customName
+        self.rootPath = rootPath
+        self.tabs = tabs
+        self.focusedTabID = focusedTabID
+    }
 
     public init(
         id: WorkspaceID = WorkspaceID(),
@@ -556,11 +570,22 @@ public struct Workspace: Equatable, Codable, Sendable {
         tabs: [Tab],
         focusedTabID: TabID
     ) {
-        self.id = id
-        self.name = name
-        self.rootPath = rootPath
-        self.tabs = tabs
-        self.focusedTabID = focusedTabID
+        self.init(
+            id: id,
+            generatedName: name,
+            customName: nil,
+            rootPath: rootPath,
+            tabs: tabs,
+            focusedTabID: focusedTabID
+        )
+    }
+
+    public var name: String {
+        customName ?? generatedName
+    }
+
+    public var hasCustomName: Bool {
+        customName != nil
     }
 
     public var focusedTab: Tab? {
@@ -684,6 +709,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 public struct WorkspaceSummary: Equatable, Codable, Sendable {
     public let id: WorkspaceID
     public let name: String
+    public let generatedName: String
+    public let customName: String?
+    public let hasCustomName: Bool
     public let rootPath: String
     public let tabCount: Int
     public let paneCount: Int
@@ -691,6 +719,9 @@ public struct WorkspaceSummary: Equatable, Codable, Sendable {
     public init(workspace: Workspace) {
         self.id = workspace.id
         self.name = workspace.name
+        self.generatedName = workspace.generatedName
+        self.customName = workspace.customName
+        self.hasCustomName = workspace.hasCustomName
         self.rootPath = workspace.rootPath
         self.tabCount = workspace.tabs.count
         self.paneCount = workspace.tabs.reduce(into: 0) { $0 += $1.panes.count }
