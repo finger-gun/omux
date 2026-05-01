@@ -417,7 +417,10 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
-        let pane = makePane(title: focusedPane.title, workingDirectory: focusedPane.session.workingDirectory)
+        let pane = makePane(
+            title: Self.basePaneTitle(for: focusedPane.session.workingDirectory),
+            workingDirectory: focusedPane.session.workingDirectory
+        )
         let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
         let updatedWorkspace = success ? workspaces[index] : nil
         lock.unlock()
@@ -454,18 +457,35 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
-    public func createPaneTab() throws -> Workspace? {
+    public func createPaneTab(in paneStackID: PaneStackID? = nil) throws -> Workspace? {
         lock.lock()
-        guard let index = activeWorkspaceIndex,
-              let focusedPane = workspaces[index].focusedPane,
-              let focusedStack = workspaces[index].focusedPaneStack
-        else {
+        guard let index = activeWorkspaceIndex else {
             lock.unlock()
             return nil
         }
 
-        let pane = makePane(title: focusedPane.title, workingDirectory: focusedPane.session.workingDirectory)
-        let success = workspaces[index].createPaneInFocusedStack(pane)
+        let targetStack: PaneStack?
+        if let paneStackID {
+            targetStack = paneStack(id: paneStackID, in: workspaces[index])
+        } else {
+            targetStack = workspaces[index].focusedPaneStack
+        }
+
+        guard let targetStack, let sourcePane = targetStack.focusedPane else {
+            lock.unlock()
+            return nil
+        }
+
+        let pane = makePane(
+            title: Self.basePaneTitle(for: sourcePane.session.workingDirectory),
+            workingDirectory: sourcePane.session.workingDirectory
+        )
+        let success: Bool
+        if let paneStackID {
+            success = workspaces[index].createPane(inStack: paneStackID, pane: pane)
+        } else {
+            success = workspaces[index].createPaneInFocusedStack(pane)
+        }
         let updatedWorkspace = success ? workspaces[index] : nil
         lock.unlock()
 
@@ -484,7 +504,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
                 sessionID: pane.session.id,
-                payload: .object(["paneStackID": .string(focusedStack.id.rawValue)])
+                payload: .object(["paneStackID": .string(targetStack.id.rawValue)])
             )
         )
 
@@ -495,7 +515,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
                 sessionID: pane.session.id,
-                payload: .object(["paneStackID": .string(focusedStack.id.rawValue)])
+                payload: .object(["paneStackID": .string(targetStack.id.rawValue)])
             )
         )
         onChange?(updatedWorkspace)
@@ -939,6 +959,12 @@ public final class WorkspaceController: @unchecked Sendable {
     private func paneStackID(for paneID: PaneID, in workspace: Workspace) -> PaneStackID? {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
+            .first
+    }
+
+    private func paneStack(id paneStackID: PaneStackID, in workspace: Workspace) -> PaneStack? {
+        workspace.tabs
+            .compactMap { $0.rootLayout.paneStack(id: paneStackID) }
             .first
     }
 

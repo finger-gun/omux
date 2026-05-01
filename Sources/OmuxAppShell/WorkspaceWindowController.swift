@@ -508,7 +508,7 @@ final class WorkspaceShellViewController: NSViewController {
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
                 onCreatePaneTab: { [weak self] in
-                    _ = try self?.controller.createPaneTab()
+                    _ = try self?.controller.createPaneTab(in: paneStack.id)
                 },
                 onClosePaneTab: { [weak self] paneID in
                     _ = try self?.controller.closePaneTab(paneID: paneID)
@@ -1353,6 +1353,7 @@ final class PaneHeaderView: NSView {
 
         let addButton = ChromePillButton()
         addButton.configure(symbolName: "plus", accessibilityLabel: "Add pane tab", active: false, theme: theme, compact: true)
+        addButton.identifier = NSUserInterfaceItemIdentifier("pane-tab-add-\(paneStack.id.rawValue)")
         addButton.onPress = {
             try? onCreatePaneTab()
         }
@@ -1428,6 +1429,7 @@ private class ChromePillButton: NSControl {
         self.title = title
         symbolName = nil
         accessibilityLabel = title
+        setAccessibilityLabel(title)
         imageView.isHidden = true
         titleLabel.isHidden = false
         titleLabel.stringValue = title
@@ -1444,6 +1446,7 @@ private class ChromePillButton: NSControl {
         title = nil
         self.symbolName = symbolName
         self.accessibilityLabel = accessibilityLabel
+        setAccessibilityLabel(accessibilityLabel)
         titleLabel.isHidden = true
         imageView.isHidden = false
         imageView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)

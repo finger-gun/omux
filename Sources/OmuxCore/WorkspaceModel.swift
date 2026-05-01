@@ -617,6 +617,22 @@ public struct Tab: Equatable, Codable, Sendable {
         return true
     }
 
+    @discardableResult
+    public mutating func createPane(
+        inStack stackID: PaneStackID,
+        pane: Pane,
+        focus: Bool = true
+    ) -> Bool {
+        guard rootLayout.createPane(inStack: stackID, pane: pane, focus: focus) else {
+            return false
+        }
+
+        if focus {
+            focusedPaneID = pane.id
+        }
+        return true
+    }
+
     public mutating func closeFocusedPane() -> Pane? {
         closePane(focusedPaneID)
     }
@@ -812,6 +828,23 @@ public struct Workspace: Equatable, Codable, Sendable {
         }
 
         return tabs[tabIndex].createPaneInFocusedStack(pane)
+    }
+
+    @discardableResult
+    public mutating func createPane(
+        inStack stackID: PaneStackID,
+        pane: Pane
+    ) -> Bool {
+        for tabIndex in tabs.indices {
+            guard tabs[tabIndex].rootLayout.paneStack(id: stackID) != nil else {
+                continue
+            }
+
+            focusedTabID = tabs[tabIndex].id
+            return tabs[tabIndex].createPane(inStack: stackID, pane: pane)
+        }
+
+        return false
     }
 
     public mutating func closeFocusedPane() -> Pane? {
