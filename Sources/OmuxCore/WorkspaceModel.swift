@@ -436,6 +436,18 @@ public struct Tab: Equatable, Codable, Sendable {
         self.focusedPaneID = focusedPaneID
     }
 
+    public init(
+        id: TabID = TabID(),
+        title: String,
+        rootLayout: TabLayoutNode,
+        focusedPaneID: PaneID
+    ) {
+        self.id = id
+        self.title = title
+        self.rootLayout = rootLayout
+        self.focusedPaneID = focusedPaneID
+    }
+
     @discardableResult
     public mutating func focusPane(_ paneID: PaneID) -> Bool {
         guard rootLayout.focusPane(paneID) else {

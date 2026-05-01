@@ -227,6 +227,26 @@ final class OmuxTerminalBridgeTests: XCTestCase {
     }
 
     @MainActor
+    func testRuntimeHostedViewTrackingAreaDoesNotReceiveCrossPaneDragEvents() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        runtimeView.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+
+        runtimeView.updateTrackingAreas()
+
+        let trackingArea = try XCTUnwrap(runtimeView.trackingAreas.first)
+        XCTAssertFalse(trackingArea.options.contains(.enabledDuringMouseDrag))
+        XCTAssertTrue(trackingArea.options.contains(.mouseMoved))
+        XCTAssertTrue(trackingArea.options.contains(.mouseEnteredAndExited))
+    }
+
+    @MainActor
     func testRuntimeHostedViewRoutesStandardEditCommandsThroughRuntimeActions() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)

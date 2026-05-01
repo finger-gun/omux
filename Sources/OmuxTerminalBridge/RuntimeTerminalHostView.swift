@@ -138,7 +138,6 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
             rect: .zero,
             options: [
                 .activeInKeyWindow,
-                .enabledDuringMouseDrag,
                 .inVisibleRect,
                 .mouseEnteredAndExited,
                 .mouseMoved,

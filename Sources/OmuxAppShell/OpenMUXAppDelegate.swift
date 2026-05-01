@@ -12,6 +12,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
+    private let workspacePersistenceStore: any WorkspacePersistenceStoring
     private var windowController: WorkspaceWindowController?
     private weak var newWorkspaceMenuItem: NSMenuItem?
     private weak var renameWorkspaceMenuItem: NSMenuItem?
@@ -42,6 +43,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
             controller: workspaceController,
             configurationCoordinator: configurationCoordinator
         )
+        self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
         super.init()
     }
@@ -53,13 +55,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         configureMenus()
         workspaceController.onChange = { [weak self] workspace in
             Task { @MainActor in
+                self?.persistWorkspaceState()
                 self?.windowController?.update(workspace: workspace)
                 self?.refreshMenuValidation()
             }
         }
 
         do {
-            let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
+            let workspace = try restoreInitialWorkspace()
             let windowController = WorkspaceWindowController(
                 workspace: workspace,
                 controller: workspaceController,
@@ -90,6 +93,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         _ = notification
+        persistWorkspaceState()
         controlPlaneService.stop()
     }
 
@@ -304,6 +308,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         splitRightMenuItem?.isEnabled = hasWorkspace
         splitDownMenuItem?.isEnabled = hasWorkspace
         removePaneMenuItem?.isEnabled = workspaceController.canRemoveActivePane()
+    }
+
+    private func restoreInitialWorkspace() throws -> Workspace {
+        if let snapshot = workspacePersistenceStore.load(),
+           let restoredWorkspace = try workspaceController.restorePersistedState(snapshot) {
+            persistWorkspaceState()
+            return restoredWorkspace
+        }
+
+        let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
+        persistWorkspaceState()
+        return workspace
+    }
+
+    private func persistWorkspaceState() {
+        workspacePersistenceStore.save(workspaceController.persistenceSnapshot())
     }
 
 }

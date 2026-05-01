@@ -224,18 +224,23 @@ final class WorkspaceShellViewController: NSViewController {
             )
 
             let terminalItems = workspace.tabs
-                .flatMap(\.panes)
-                .map { pane in
-                    let metadata = metadataResolver.metadata(for: pane)
-                    return SidebarItem(
-                        kind: .terminal,
-                        identifier: pane.id.rawValue,
-                        title: metadata.title,
-                        subtitle: metadata.subtitle,
-                        isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
-                        action: .pane(pane.id),
-                        contextMenuProvider: nil
-                    )
+                .flatMap { tab in
+                    tab.panes.map { pane -> SidebarItem in
+                        let metadata = metadataResolver.metadata(for: pane)
+                        let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
+                        return SidebarItem(
+                            kind: .terminal,
+                            identifier: pane.id.rawValue,
+                            title: metadata.title,
+                            subtitle: metadata.subtitle,
+                            isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
+                            action: .pane(pane.id),
+                            contextMenuProvider: { [weak self] in
+                                guard let self, let paneStack else { return NSMenu() }
+                                return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
+                            }
+                        )
+                    }
                 }
 
             return [workspaceItem] + terminalItems

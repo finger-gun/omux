@@ -215,6 +215,43 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNil(resetWorkspace.customName)
     }
 
+    func testWorkspaceControllerRestoresPersistedWorkspacesWithFreshTerminalState() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(firstWorkspace.focusedPane)
+        let firstSurfaceID = try XCTUnwrap(bridge.surface(for: firstPane.id)?.runtimeSurfaceID)
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: firstSurfaceID)
+        runtime.emit(.progressReported(state: .active, progress: 42), on: firstSurfaceID)
+
+        _ = try controller.renameWorkspace(firstWorkspace.id, to: "Client Shell")
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondWorkspace = try controller.createWorkspace()
+        _ = controller.focus(paneID: try XCTUnwrap(splitWorkspace.focusedPane?.id))
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
+        let restoredController = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let restoredActiveWorkspace = try XCTUnwrap(restoredController.restorePersistedState(snapshot))
+        let restoredWorkspaces = restoredController.allWorkspaces()
+
+        XCTAssertEqual(restoredWorkspaces.count, 2)
+        XCTAssertEqual(restoredWorkspaces[0].name, "Client Shell")
+        XCTAssertEqual(restoredWorkspaces[0].focusedTab?.panes.count, 2)
+        XCTAssertEqual(restoredWorkspaces[0].focusedPane?.session.workingDirectory, "/var/tmp")
+        XCTAssertNil(restoredWorkspaces[0].focusedPane?.terminalState.statusSummary)
+        XCTAssertEqual(restoredActiveWorkspace.id, secondWorkspace.id)
+        XCTAssertEqual(restoredController.activeWorkspace()?.id, secondWorkspace.id)
+    }
+
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -685,6 +722,33 @@ final class OmuxAppShellTests: XCTestCase {
         let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter { $0.menu != nil }
         XCTAssertEqual(tabButtons.count, 2)
         let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
+
+        XCTAssertTrue(menuTitles.contains("Rename…"))
+        XCTAssertTrue(menuTitles.contains("Close"))
+        XCTAssertTrue(menuTitles.contains("Close Others"))
+        XCTAssertTrue(menuTitles.contains("Close Above"))
+        XCTAssertTrue(menuTitles.contains("Close Below"))
+        XCTAssertEqual(workspace.tabs.count, 1)
+    }
+
+    @MainActor
+    func testSidebarTerminalRowContextMenuExposesRenameAndCloseVariants() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(updatedWorkspace.focusedPane)
+        let renamedWorkspace = try XCTUnwrap(controller.renamePaneTab(secondPane.id, to: "hx"))
+        let windowController = WorkspaceWindowController(workspace: renamedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        let terminalLabel = try XCTUnwrap(findLabelView(withString: "hx", in: sidebar))
+        let terminalButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: terminalLabel))
+        let menuTitles = terminalButton.menu?.items.map(\.title) ?? []
 
         XCTAssertTrue(menuTitles.contains("Rename…"))
         XCTAssertTrue(menuTitles.contains("Close"))

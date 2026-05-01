@@ -81,6 +81,63 @@ public final class WorkspaceController: @unchecked Sendable {
         return workspaces
     }
 
+    func persistenceSnapshot() -> WorkspacePersistenceSnapshot? {
+        lock.lock()
+        let storedWorkspaces = workspaces.map(Self.sanitizedWorkspaceForPersistence)
+        let storedActiveWorkspaceID = activeWorkspaceID
+        lock.unlock()
+
+        guard storedWorkspaces.isEmpty == false else {
+            return nil
+        }
+
+        return WorkspacePersistenceSnapshot(
+            workspaces: storedWorkspaces,
+            activeWorkspaceID: storedActiveWorkspaceID
+        )
+    }
+
+    @discardableResult
+    func restorePersistedState(_ snapshot: WorkspacePersistenceSnapshot) throws -> Workspace? {
+        let restoredWorkspaces = snapshot.workspaces.compactMap(Self.normalizedRestoredWorkspace)
+        guard restoredWorkspaces.isEmpty == false else {
+            return nil
+        }
+
+        let existingPaneIDs = allWorkspaces().flatMap { $0.tabs.flatMap(\.panes) }.map(\.id)
+        for paneID in existingPaneIDs {
+            try? bridge.teardown(paneID: paneID)
+        }
+
+        for workspace in restoredWorkspaces {
+            for pane in workspace.tabs.flatMap(\.panes) {
+                _ = try bridge.createSurface(for: pane)
+                _ = try bridge.attach(session: pane.session, to: pane)
+            }
+        }
+
+        let restoredActiveWorkspaceID = snapshot.activeWorkspaceID.flatMap { activeID in
+            restoredWorkspaces.contains(where: { $0.id == activeID }) ? activeID : nil
+        } ?? restoredWorkspaces.first?.id
+
+        lock.lock()
+        workspaces = restoredWorkspaces
+        previousWorkspaceID = nil
+        if let restoredActiveWorkspaceID {
+            setActiveWorkspaceID(restoredActiveWorkspaceID, recordPrevious: false)
+        }
+        let updatedWorkspace = restoredActiveWorkspaceID.flatMap { activeID in
+            workspaces.first(where: { $0.id == activeID })
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        return updatedWorkspace
+    }
+
     @discardableResult
     public func focus(sessionID: SessionID) throws -> Bool {
         var updatedWorkspace: Workspace?
@@ -811,6 +868,113 @@ public final class WorkspaceController: @unchecked Sendable {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let session = SessionDescriptor(shell: shell, workingDirectory: workingDirectory)
         return Pane(title: title, session: session)
+    }
+
+    private static func sanitizedWorkspaceForPersistence(_ workspace: Workspace) -> Workspace {
+        Workspace(
+            id: workspace.id,
+            generatedName: workspace.generatedName,
+            customName: workspace.customName,
+            rootPath: workspace.rootPath,
+            tabs: workspace.tabs.map(sanitizedTabForPersistence),
+            focusedTabID: workspace.focusedTabID
+        )
+    }
+
+    private static func sanitizedTabForPersistence(_ tab: Tab) -> Tab {
+        Tab(
+            id: tab.id,
+            title: tab.title,
+            rootLayout: sanitizedLayoutNodeForPersistence(tab.rootLayout),
+            focusedPaneID: tab.focusedPaneID
+        )
+    }
+
+    private static func sanitizedLayoutNodeForPersistence(_ node: TabLayoutNode) -> TabLayoutNode {
+        switch node {
+        case .paneStack(let paneStack):
+            let panes = paneStack.panes.map(sanitizedPaneForPersistence)
+            return .paneStack(
+                PaneStack(
+                    id: paneStack.id,
+                    panes: panes,
+                    focusedPaneID: paneStack.focusedPaneID
+                )
+            )
+        case .split(let axis, let children):
+            return .split(
+                axis: axis,
+                children: children.map(sanitizedLayoutNodeForPersistence)
+            )
+        }
+    }
+
+    private static func sanitizedPaneForPersistence(_ pane: Pane) -> Pane {
+        Pane(
+            id: pane.id,
+            title: pane.title,
+            session: pane.session,
+            terminalState: PaneTerminalState()
+        )
+    }
+
+    private static func normalizedRestoredWorkspace(_ workspace: Workspace) -> Workspace? {
+        let normalizedTabs = workspace.tabs.compactMap(normalizedRestoredTab)
+        guard normalizedTabs.isEmpty == false else {
+            return nil
+        }
+
+        let focusedTabID = normalizedTabs.contains(where: { $0.id == workspace.focusedTabID })
+            ? workspace.focusedTabID
+            : normalizedTabs[0].id
+
+        return Workspace(
+            id: workspace.id,
+            generatedName: workspace.generatedName,
+            customName: workspace.customName,
+            rootPath: workspace.rootPath,
+            tabs: normalizedTabs,
+            focusedTabID: focusedTabID
+        )
+    }
+
+    private static func normalizedRestoredTab(_ tab: Tab) -> Tab? {
+        let normalizedLayout = normalizedRestoredLayoutNode(tab.rootLayout)
+        let panes = normalizedLayout.panes
+        guard panes.isEmpty == false else {
+            return nil
+        }
+
+        let focusedPaneID = panes.contains(where: { $0.id == tab.focusedPaneID })
+            ? tab.focusedPaneID
+            : panes[0].id
+
+        return Tab(
+            id: tab.id,
+            title: tab.title,
+            rootLayout: normalizedLayout,
+            focusedPaneID: focusedPaneID
+        )
+    }
+
+    private static func normalizedRestoredLayoutNode(_ node: TabLayoutNode) -> TabLayoutNode {
+        switch node {
+        case .paneStack(let paneStack):
+            let panes = paneStack.panes.map(sanitizedPaneForPersistence)
+            let focusedPaneID = panes.contains(where: { $0.id == paneStack.focusedPaneID })
+                ? paneStack.focusedPaneID
+                : panes[0].id
+            return .paneStack(
+                PaneStack(
+                    id: paneStack.id,
+                    panes: panes,
+                    focusedPaneID: focusedPaneID
+                )
+            )
+        case .split(let axis, let children):
+            let normalizedChildren = children.map(normalizedRestoredLayoutNode)
+            return .split(axis: axis, children: normalizedChildren)
+        }
     }
 
     private static func basePaneTitle(for path: String) -> String {
