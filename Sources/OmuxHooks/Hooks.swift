@@ -224,9 +224,7 @@ public struct ProcessHookLauncher: HookProcessLaunching {
         process.executableURL = executableURL
         process.arguments = arguments
 
-        if environment.isEmpty == false {
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
-        }
+        process.environment = HookProcessEnvironment.merged(with: environment)
 
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
@@ -241,6 +239,48 @@ public struct ProcessHookLauncher: HookProcessLaunching {
                 status: process.terminationStatus
             )
         }
+    }
+}
+
+private enum HookProcessEnvironment {
+    static func merged(with environment: [String: String]) -> [String: String] {
+        var mergedEnvironment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+        mergedEnvironment["PATH"] = enrichedPath(from: mergedEnvironment["PATH"])
+        return mergedEnvironment
+    }
+
+    private static func enrichedPath(from inheritedPath: String?) -> String {
+        let inheritedComponents = inheritedPath?
+            .split(separator: ":")
+            .map(String.init) ?? []
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let appExecutableDirectory = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .path(percentEncoded: false)
+
+        let preferredComponents = [
+            appExecutableDirectory,
+            homeDirectory
+                .appendingPathComponent(".local", isDirectory: true)
+                .appendingPathComponent("bin", isDirectory: true)
+                .path(percentEncoded: false),
+            homeDirectory
+                .appendingPathComponent("bin", isDirectory: true)
+                .path(percentEncoded: false),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ].compactMap { $0 }
+
+        var seen = Set<String>()
+        return (preferredComponents + inheritedComponents)
+            .filter { component in
+                seen.insert(component).inserted
+            }
+            .joined(separator: ":")
     }
 }
 

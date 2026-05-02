@@ -96,6 +96,43 @@ final class OmuxHooksTests: XCTestCase {
         XCTAssertEqual(invocation.payload.objectValue?["path"], .string("/tmp/project"))
     }
 
+    func testProcessHookLauncherProvidesDeveloperPathForGuiLaunchedApps() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let outputURL = tempDirectory.appending(path: "path.txt")
+        let scriptURL = tempDirectory.appending(path: "capture-path.sh")
+        try """
+        #!/bin/sh
+        printf '%s' "$PATH" > "$1"
+        """.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: scriptURL.path(percentEncoded: false)
+        )
+
+        try ProcessHookLauncher().launch(
+            executableURL: scriptURL,
+            arguments: [outputURL.path(percentEncoded: false)],
+            environment: ["PATH": "/usr/bin:/bin"],
+            input: Data()
+        )
+
+        let path = try String(contentsOf: outputURL, encoding: .utf8)
+        let components = Set(path.split(separator: ":").map(String.init))
+        let homeLocalBin = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+            .standardizedFileURL
+            .path(percentEncoded: false)
+        XCTAssertTrue(components.contains(homeLocalBin), path)
+        XCTAssertTrue(components.contains("/opt/homebrew/bin"), path)
+        XCTAssertTrue(components.contains("/usr/local/bin"), path)
+        XCTAssertTrue(components.contains("/usr/bin"), path)
+        XCTAssertTrue(components.contains("/bin"), path)
+    }
+
     func testExternalHookRunnerContinuesAfterHookFailure() throws {
         let registry = HookRegistry(
             descriptors: [

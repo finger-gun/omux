@@ -40,6 +40,8 @@ If one handler fails to launch or exits nonzero, OpenMUX reports a warning and c
 
 In the production app, hook handlers run asynchronously on a background queue. OpenMUX does not block workspace creation, pane actions, or terminal events while waiting for hook processes to finish. Handlers for the same invocation still run in lexicographic order.
 
+OpenMUX also enriches hook `PATH` before launch so hooks work when the app is started from Finder or `/Applications`, where macOS provides a minimal GUI environment. The hook path includes the app bundle executable directory, `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and the standard system paths. This lets hooks call installed tools such as `omux`, `jq`, `deno`, or `python3` without hardcoding absolute paths in most setups.
+
 ## Handler format
 
 A handler can be any executable file. OpenMUX launches the handler directly.
