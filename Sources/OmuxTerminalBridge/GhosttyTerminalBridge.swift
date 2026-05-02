@@ -433,8 +433,19 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     }
 
     public func run(command: String, inPane paneID: PaneID) throws {
-        guard snapshot(for: paneID) != nil else {
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+
+        guard let state else {
             throw TerminalBridgeError.missingSession(paneID)
+        }
+
+        if state.runtimeOwned {
+            try runtime.send(text: command, to: state.runtimeSurfaceID)
+            try runtime.handle(Self.returnKeyEvent(), on: state.runtimeSurfaceID)
+            publishSnapshot(for: paneID)
+            return
         }
 
         var commandData = Data(command.utf8)
@@ -652,6 +663,18 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         default:
             return nil
         }
+    }
+
+    private static func returnKeyEvent() -> NormalizedKeyEvent {
+        NormalizedKeyEvent(
+            keyCode: 36,
+            key: "\r",
+            text: "\r",
+            modifiers: [],
+            phase: .keyDown,
+            isRepeat: false,
+            route: .terminal
+        )
     }
 
     @MainActor

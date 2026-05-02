@@ -142,32 +142,85 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             let workspace = try controller.openWorkspace(at: path)
             return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
         case .listWorkspaces:
-            let workspaces = controller.listWorkspaces()
-            return JSONRPCResponse(
-                id: request.id,
-                result: .array(workspaces.map { .object($0.rpcObject) })
-            )
+            if request.params?.objectValue?["full"]?.boolValue == true {
+                let workspaces = controller.allWorkspaces()
+                return JSONRPCResponse(id: request.id, result: .array(workspaces.map { .object($0.rpcObject) }))
+            } else {
+                let workspaces = controller.listWorkspaces()
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: .array(workspaces.map { .object($0.rpcObject) })
+                )
+            }
         case .createTab:
             if let workspace = try controller.createTab() {
-                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+                let created = workspace.focusedPane.map {
+                    ControlPlaneTerminalContext(
+                        workspaceID: workspace.id,
+                        tabID: workspace.focusedTabID,
+                        paneStackID: workspace.focusedPaneStack?.id,
+                        paneID: $0.id,
+                        sessionID: $0.session.id
+                    )
+                }
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: ControlPlaneActionResult(
+                        target: created,
+                        created: created,
+                        workspace: .object(workspace.rpcObject)
+                    ).rpcValue
+                )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active workspace"))
         case .splitPane:
             let axisRawValue = request.params?.objectValue?["axis"]?.stringValue
             let axis = axisRawValue.flatMap(PaneSplitAxis.init(rawValue:)) ?? .columns
-            if let workspace = try controller.splitFocusedPane(axis: axis) {
-                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+            let target = ControlPlaneTerminalTarget(rpcValue: request.params)
+            if let result = try controller.splitPane(target: target, axis: axis) {
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: ControlPlaneActionResult(
+                        target: result.created,
+                        created: result.created,
+                        workspace: .object(result.workspace.rpcObject),
+                        extra: ["axis": .string(axis.rawValue)]
+                    ).rpcValue
+                )
             }
-            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane"))
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
         case .createPaneTab:
             if let workspace = try controller.createPaneTab() {
-                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+                let created = workspace.focusedPane.map {
+                    ControlPlaneTerminalContext(
+                        workspaceID: workspace.id,
+                        tabID: workspace.focusedTabID,
+                        paneStackID: workspace.focusedPaneStack?.id,
+                        paneID: $0.id,
+                        sessionID: $0.session.id
+                    )
+                }
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: ControlPlaneActionResult(
+                        target: created,
+                        created: created,
+                        workspace: .object(workspace.rpcObject)
+                    ).rpcValue
+                )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active pane stack"))
         case .focusPaneTab:
             let paneID = request.params?.objectValue?["paneID"]?.stringValue ?? ""
             if let workspace = controller.focusPaneTab(paneID: PaneID(rawValue: paneID)) {
-                return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+                let context = controller.resolveTerminalTarget(.pane(PaneID(rawValue: paneID)))
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: ControlPlaneActionResult(
+                        target: context,
+                        workspace: .object(workspace.rpcObject)
+                    ).rpcValue
+                )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane tab not found"))
         case .closePaneTab:
@@ -177,14 +230,35 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane tab cannot be closed"))
         case .focusSession:
-            let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? ""
-            let focused = try controller.focus(sessionID: SessionID(rawValue: sessionID))
-            return JSONRPCResponse(id: request.id, result: .bool(focused))
+            guard let target = ControlPlaneTerminalTarget(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target"))
+            }
+            guard let context = try controller.focus(target: target) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: ControlPlaneActionResult(target: context).rpcValue)
         case .runCommand:
-            let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? ""
             let command = request.params?.objectValue?["command"]?.stringValue ?? ""
-            let didRun = try controller.runCommand(in: SessionID(rawValue: sessionID), command: command)
-            return JSONRPCResponse(id: request.id, result: .bool(didRun))
+            guard let target = ControlPlaneTerminalTarget(rpcValue: request.params), command.isEmpty == false else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target or command"))
+            }
+            guard let result = try controller.runCommand(target: target, command: command) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .sendText:
+            let text = request.params?.objectValue?["text"]?.stringValue ?? ""
+            guard let target = ControlPlaneTerminalTarget(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target"))
+            }
+            guard let result = try controller.sendText(target: target, text: text) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .listSessions:
+            return JSONRPCResponse(id: request.id, result: .array(controller.allWorkspaces().flatMap(\.sessionRPCObjects).map(RPCValue.object)))
+        case .listPanes:
+            return JSONRPCResponse(id: request.id, result: .array(controller.allWorkspaces().flatMap(\.paneRPCObjects).map(RPCValue.object)))
         case .sendNotification:
             let title = request.params?.objectValue?["title"]?.stringValue ?? "OpenMUX"
             let body = request.params?.objectValue?["body"]?.stringValue ?? ""
@@ -277,6 +351,13 @@ private extension RPCValue {
         }
         return nil
     }
+
+    var boolValue: Bool? {
+        if case .bool(let value) = self {
+            return value
+        }
+        return nil
+    }
 }
 
 private extension OmuxConfigDiagnostic {
@@ -300,10 +381,45 @@ private extension Workspace {
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabs.count),
             "paneCount": .integer(tabs.reduce(into: 0) { $0 += $1.panes.count }),
+            "focusedTabID": .string(focusedTabID.rawValue),
             "focusedPaneID": focusedPane.map { .string($0.id.rawValue) } ?? .null,
             "focusedPaneStackID": focusedPaneStack.map { .string($0.id.rawValue) } ?? .null,
             "focusedSessionID": focusedPane.map { .string($0.session.id.rawValue) } ?? .null,
+            "tabs": .array(tabs.map { .object($0.rpcObject(workspaceID: id)) }),
         ]
+    }
+
+    var sessionRPCObjects: [[String: RPCValue]] {
+        tabs.flatMap { tab in
+            tab.panes.map { pane in
+                [
+                    "workspaceID": .string(id.rawValue),
+                    "tabID": .string(tab.id.rawValue),
+                    "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
+                    "paneID": .string(pane.id.rawValue),
+                    "sessionID": .string(pane.session.id.rawValue),
+                    "workingDirectory": .string(pane.session.workingDirectory),
+                    "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                ]
+            }
+        }
+    }
+
+    var paneRPCObjects: [[String: RPCValue]] {
+        tabs.flatMap { tab in
+            tab.panes.map { pane in
+                [
+                    "workspaceID": .string(id.rawValue),
+                    "tabID": .string(tab.id.rawValue),
+                    "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
+                    "paneID": .string(pane.id.rawValue),
+                    "sessionID": .string(pane.session.id.rawValue),
+                    "title": .string(pane.title),
+                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                ]
+            }
+        }
     }
 }
 
@@ -317,6 +433,48 @@ private extension WorkspaceSummary {
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabCount),
             "paneCount": .integer(paneCount),
+        ]
+    }
+}
+
+private extension Tab {
+    func rpcObject(workspaceID: WorkspaceID) -> [String: RPCValue] {
+        [
+            "id": .string(id.rawValue),
+            "workspaceID": .string(workspaceID.rawValue),
+            "title": .string(title),
+            "focusedPaneID": .string(focusedPaneID.rawValue),
+            "focusedPaneStackID": focusedPaneStack.map { .string($0.id.rawValue) } ?? .null,
+            "paneStacks": .array(paneStacks.map { .object($0.rpcObject(workspaceID: workspaceID, tabID: id)) }),
+            "panes": .array(panes.map { .object($0.rpcObject(workspaceID: workspaceID, tabID: id, paneStackID: rootLayout.paneStack(containingPaneID: $0.id)?.id, focused: focusedPaneID == $0.id)) }),
+        ]
+    }
+}
+
+private extension PaneStack {
+    func rpcObject(workspaceID: WorkspaceID, tabID: TabID) -> [String: RPCValue] {
+        [
+            "id": .string(id.rawValue),
+            "workspaceID": .string(workspaceID.rawValue),
+            "tabID": .string(tabID.rawValue),
+            "focusedPaneID": .string(focusedPaneID.rawValue),
+            "paneIDs": .array(panes.map { .string($0.id.rawValue) }),
+        ]
+    }
+}
+
+private extension Pane {
+    func rpcObject(workspaceID: WorkspaceID, tabID: TabID, paneStackID: PaneStackID?, focused: Bool) -> [String: RPCValue] {
+        [
+            "id": .string(id.rawValue),
+            "workspaceID": .string(workspaceID.rawValue),
+            "tabID": .string(tabID.rawValue),
+            "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+            "sessionID": .string(session.id.rawValue),
+            "title": .string(title),
+            "workingDirectory": .string(session.workingDirectory),
+            "reportedWorkingDirectory": terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+            "focused": .bool(focused),
         ]
     }
 }

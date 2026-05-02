@@ -60,7 +60,16 @@ public struct OmuxCLICommand {
             case "theme":
                 return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
             case "list":
-                let response = try client.request(method: .listWorkspaces)
+                let params: RPCValue? = commandArguments.dropFirst().contains("--full")
+                    ? .object(["full": .bool(true)])
+                    : nil
+                let response = try client.request(method: .listWorkspaces, params: params)
+                writeLine(response.result?.prettyPrinted ?? "[]")
+            case "session", "sessions":
+                let response = try client.request(method: .listSessions)
+                writeLine(response.result?.prettyPrinted ?? "[]")
+            case "pane", "panes":
+                let response = try client.request(method: .listPanes)
                 writeLine(response.result?.prettyPrinted ?? "[]")
             case "events":
                 try client.streamTerminalEvents { event in
@@ -70,10 +79,13 @@ public struct OmuxCLICommand {
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
             case "split":
-                let axis = splitAxis(from: commandArguments.dropFirst())
+                let parsed = parseTargetPrefix(Array(commandArguments.dropFirst()))
+                let axis = splitAxis(from: parsed.remaining[...])
+                var params = targetParams(parsed.target)
+                params["axis"] = .string(axis.rawValue)
                 let response = try client.request(
                     method: .splitPane,
-                    params: .object(["axis": .string(axis.rawValue)])
+                    params: .object(params)
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "pane-tab":
@@ -113,29 +125,42 @@ public struct OmuxCLICommand {
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "focus":
-                guard commandArguments.count >= 2 else {
-                    writeLine("usage: omux focus <session-id>")
+                guard let target = parseFocusTarget(Array(commandArguments.dropFirst())) else {
+                    writeLine("usage: omux focus <session-id>|--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused")
                     return 1
                 }
 
                 let response = try client.request(
                     method: .focusSession,
-                    params: .object(["sessionID": .string(commandArguments[1])])
+                    params: .object(["target": target.rpcValue])
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "run":
-                guard commandArguments.count >= 3 else {
-                    writeLine("usage: omux run <session-id> <command>")
+                guard let runRequest = parseRunRequest(Array(commandArguments.dropFirst())) else {
+                    writeLine("usage: omux run <session-id> <command> | omux run --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <command>")
                     return 1
                 }
 
-                let sessionID = commandArguments[1]
-                let command = commandArguments.dropFirst(2).joined(separator: " ")
                 let response = try client.request(
                     method: .runCommand,
                     params: .object([
-                        "sessionID": .string(sessionID),
-                        "command": .string(command),
+                        "target": runRequest.target.rpcValue,
+                        "command": .string(runRequest.command),
+                    ])
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "send-text":
+                let parsed = parseTargetPrefix(Array(commandArguments.dropFirst()))
+                guard let target = parsed.target, parsed.remaining.isEmpty == false else {
+                    writeLine("usage: omux send-text --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <text>")
+                    return 1
+                }
+
+                let response = try client.request(
+                    method: .sendText,
+                    params: .object([
+                        "target": target.rpcValue,
+                        "text": .string(parsed.remaining.joined(separator: " ")),
                     ])
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
@@ -191,16 +216,20 @@ public struct OmuxCLICommand {
       omux theme
       omux theme <name>
       omux theme list
-      omux list
+      omux list [--full]
+      omux sessions
+      omux panes
       omux events
       omux open <path>
       omux tab
-      omux split [right|down]
+      omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [right|down]
       omux pane-tab
       omux pane-tab-focus <pane-id>
       omux pane-tab-close [pane-id]
-      omux focus <session-id>
+      omux focus <session-id>|--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused
       omux run <session-id> <command>
+      omux run --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <command>
+      omux send-text --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <text>
       omux notify <title> [body]
       omux restore <workspace-id>
       omux install-cli [destination]
@@ -217,6 +246,88 @@ public struct OmuxCLICommand {
         default:
             return .columns
         }
+    }
+
+    private func parseFocusTarget(_ arguments: [String]) -> ControlPlaneTerminalTarget? {
+        let parsed = parseTargetPrefix(arguments)
+        if let target = parsed.target, parsed.remaining.isEmpty {
+            return target
+        }
+
+        guard arguments.count == 1 else {
+            return nil
+        }
+
+        return .session(SessionID(rawValue: arguments[0]))
+    }
+
+    private func parseRunRequest(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget, command: String)? {
+        guard arguments.isEmpty == false else {
+            return nil
+        }
+
+        if arguments[0].hasPrefix("--") {
+            let parsed = parseTargetPrefix(arguments)
+            guard let target = parsed.target, parsed.remaining.isEmpty == false else {
+                return nil
+            }
+            return (target, parsed.remaining.joined(separator: " "))
+        }
+
+        guard arguments.count >= 2 else {
+            return nil
+        }
+
+        return (
+            .session(SessionID(rawValue: arguments[0])),
+            arguments.dropFirst().joined(separator: " ")
+        )
+    }
+
+    private func parseTargetPrefix(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, remaining: [String]) {
+        var index = 0
+        var target: ControlPlaneTerminalTarget?
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument == "--" {
+                return (target, Array(arguments.dropFirst(index + 1)))
+            }
+
+            switch argument {
+            case "--session":
+                guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
+                target = .session(SessionID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--pane":
+                guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
+                target = .pane(PaneID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--tab":
+                guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
+                target = .tab(TabID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--workspace":
+                guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
+                target = .workspace(WorkspaceID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--focused":
+                target = .focused
+                index += 1
+            default:
+                return (target, Array(arguments.dropFirst(index)))
+            }
+        }
+
+        return (target, [])
+    }
+
+    private func targetParams(_ target: ControlPlaneTerminalTarget?) -> [String: RPCValue] {
+        guard let target else {
+            return [:]
+        }
+
+        return ["target": target.rpcValue]
     }
 
     private func runConfigCommand(arguments: [String]) -> Int32 {

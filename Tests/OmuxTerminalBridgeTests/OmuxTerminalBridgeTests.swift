@@ -1030,6 +1030,24 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         waitForExpectations(timeout: 3)
         bridge.removeObserver(for: pane.id, token: token)
     }
+
+    func testRuntimeOwnedRunSubmitsReturnButSendTextDoesNot() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+
+        try bridge.run(command: "echo hello", inPane: pane.id)
+        try bridge.send(text: "draft text", toPane: pane.id)
+
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        XCTAssertEqual(runtime.sentTexts[runtimeSurfaceID], ["echo hello", "draft text"])
+        XCTAssertEqual(runtime.handledEvents[runtimeSurfaceID]?.count, 1)
+        XCTAssertEqual(runtime.handledEvents[runtimeSurfaceID]?.first?.keyCode, 36)
+        XCTAssertEqual(runtime.handledEvents[runtimeSurfaceID]?.first?.text, "\r")
+    }
 }
 
 private final class InspectableGhosttyRuntime: GhosttyRuntime {
@@ -1042,6 +1060,8 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var committedTexts: [String] = []
     private(set) var preeditUpdates: [String?] = []
     private(set) var accumulatedEvents: [NormalizedKeyEvent] = []
+    private(set) var sentTexts: [String: [String]] = [:]
+    private(set) var handledEvents: [String: [NormalizedKeyEvent]] = [:]
     private(set) var bindingActions: [String] = []
     private(set) var mouseButtons: [(state: ghostty_input_mouse_state_e, buttonNumber: Int, modifiers: KeyModifiers)] = []
     private(set) var mousePositions: [(point: CGPoint?, modifiers: KeyModifiers)] = []
@@ -1122,13 +1142,11 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     }
 
     func send(text: String, to runtimeSurfaceID: String) throws {
-        _ = text
-        _ = runtimeSurfaceID
+        sentTexts[runtimeSurfaceID, default: []].append(text)
     }
 
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
-        _ = event
-        _ = runtimeSurfaceID
+        handledEvents[runtimeSurfaceID, default: []].append(event)
     }
 
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {

@@ -262,6 +262,10 @@ public enum OmuxConfigPaths {
         baseDirectoryURL.appendingPathComponent("themes", isDirectory: true)
     }
 
+    public static var hooksDirectoryURL: URL {
+        baseDirectoryURL.appendingPathComponent("hooks", isDirectory: true)
+    }
+
     public static var generatedDirectoryURL: URL {
         baseDirectoryURL.appendingPathComponent("generated", isDirectory: true)
     }

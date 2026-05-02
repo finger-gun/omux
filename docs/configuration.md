@@ -137,4 +137,13 @@ omux config init
 omux theme
 omux theme <name>
 omux theme list
+omux list --full
+omux sessions
+omux panes
+omux run --session <session-id> -- pwd
+omux send-text --pane <pane-id> -- "hello"
 ```
+
+## Hooks
+
+OpenMUX discovers executable user hooks under **`~/.omux/hooks/`**. See [Hooks](./hooks.md) for the full hook layout, payload contract, hook list, and examples.

@@ -9,14 +9,7 @@ protocol TerminalActionHostHandling {
     func openURL(_ url: String)
     func presentNotification(_ request: NotificationRequest)
     func ringBell()
-    func handleCommandFinished(_ event: TerminalActionEvent, context: WorkspaceTerminalActionContext)
-}
-
-struct WorkspaceTerminalActionContext: Sendable {
-    let workspaceID: WorkspaceID
-    let tabID: TabID
-    let paneID: PaneID
-    let sessionID: SessionID
+    func handleCommandFinished(_ event: TerminalActionEvent, context: ControlPlaneTerminalContext)
 }
 
 struct DefaultTerminalActionHostHandler: TerminalActionHostHandling {
@@ -39,7 +32,7 @@ struct DefaultTerminalActionHostHandler: TerminalActionHostHandling {
         }
     }
 
-    func handleCommandFinished(_ event: TerminalActionEvent, context: WorkspaceTerminalActionContext) {
+    func handleCommandFinished(_ event: TerminalActionEvent, context: ControlPlaneTerminalContext) {
         guard case .commandFinished(let exitCode, _) = event.action else {
             return
         }
@@ -81,6 +74,7 @@ final class TerminalActionCoordinator {
             return
         }
 
+        let payload = controller.enrichedCommandCompletionPayload(for: event, context: context)
         do {
             try hookRunner.emit(
                 HookInvocation(
@@ -90,14 +84,29 @@ final class TerminalActionCoordinator {
                     tabID: context.tabID,
                     paneID: context.paneID,
                     sessionID: context.sessionID,
-                    payload: event.payload
+                    payload: payload
                 )
             )
+            if case .commandFinished(let exitCode, _) = event.action,
+               let exitCode,
+               exitCode != 0 {
+                try hookRunner.emit(
+                    HookInvocation(
+                        category: .command,
+                        name: "command-failed",
+                        workspaceID: context.workspaceID,
+                        tabID: context.tabID,
+                        paneID: context.paneID,
+                        sessionID: context.sessionID,
+                        payload: payload
+                    )
+                )
+            }
         } catch {
             fputs("warning: failed to emit terminal action hook \(event.action.hookName): \(error)\n", stderr)
         }
 
-        controller.publishTerminalEvent(makeControlPlaneEvent(from: event, context: context))
+        controller.publishTerminalEvent(makeControlPlaneEvent(from: event, context: context, payload: payload))
 
         switch event.action {
         case .openURL(let url, _):
@@ -126,7 +135,8 @@ final class TerminalActionCoordinator {
 
     private func makeControlPlaneEvent(
         from event: TerminalActionEvent,
-        context: WorkspaceTerminalActionContext
+        context: ControlPlaneTerminalContext,
+        payload: OmuxValue
     ) -> ControlPlaneTerminalEvent {
         let name: ControlPlaneTerminalEventName
         switch event.action {
@@ -158,7 +168,7 @@ final class TerminalActionCoordinator {
             tabID: context.tabID,
             paneID: context.paneID,
             sessionID: context.sessionID,
-            payload: event.payload
+            payload: payload
         )
     }
 }

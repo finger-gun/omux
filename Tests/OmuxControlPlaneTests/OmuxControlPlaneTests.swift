@@ -60,6 +60,12 @@ final class OmuxControlPlaneTests: XCTestCase {
             "sessionID": .string("session-1"),
             "command": .string("pwd"),
         ]))
+        let sendText = try client.request(method: .sendText, params: .object([
+            "target": .object(["type": .string("pane"), "id": .string("pane-1")]),
+            "text": .string("hello"),
+        ]))
+        let sessions = try client.request(method: .listSessions)
+        let panes = try client.request(method: .listPanes)
 
         XCTAssertEqual(createTab.result, .object(["method": .string(ControlMethod.createTab.rawValue)]))
         XCTAssertEqual(split.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
@@ -68,6 +74,32 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(focusPaneTab.result, .object(["method": .string(ControlMethod.focusPaneTab.rawValue)]))
         XCTAssertEqual(closePaneTab.result, .object(["method": .string(ControlMethod.closePaneTab.rawValue)]))
         XCTAssertEqual(run.result, .object(["method": .string(ControlMethod.runCommand.rawValue)]))
+        XCTAssertEqual(sendText.result, .object(["method": .string(ControlMethod.sendText.rawValue)]))
+        XCTAssertEqual(sessions.result, .object(["method": .string(ControlMethod.listSessions.rawValue)]))
+        XCTAssertEqual(panes.result, .object(["method": .string(ControlMethod.listPanes.rawValue)]))
+    }
+
+    func testTerminalTargetSelectorsRoundTripFromRPCValues() {
+        XCTAssertEqual(
+            ControlPlaneTerminalTarget(rpcValue: .object(["sessionID": .string("session-1")])),
+            .session(SessionID(rawValue: "session-1"))
+        )
+        XCTAssertEqual(
+            ControlPlaneTerminalTarget(rpcValue: .object(["target": .object(["type": .string("pane"), "id": .string("pane-1")])])),
+            .pane(PaneID(rawValue: "pane-1"))
+        )
+        XCTAssertEqual(
+            ControlPlaneTerminalTarget(rpcValue: .object(["target": .object(["type": .string("tab"), "id": .string("tab-1")])])),
+            .tab(TabID(rawValue: "tab-1"))
+        )
+        XCTAssertEqual(
+            ControlPlaneTerminalTarget(rpcValue: .object(["target": .object(["type": .string("workspace"), "id": .string("workspace-1")])])),
+            .workspace(WorkspaceID(rawValue: "workspace-1"))
+        )
+        XCTAssertEqual(
+            ControlPlaneTerminalTarget(rpcValue: .object(["focused": .bool(true)])),
+            .focused
+        )
     }
 
     func testConfigCommandsRoundTrip() throws {
@@ -209,6 +241,48 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(receivedEvents.count, 2)
         XCTAssertEqual(receivedEvents[0].objectValue?["name"], .string("terminal.cwdChanged"))
         XCTAssertEqual(receivedEvents[1].objectValue?["name"], .string("workspace.opened"))
+    }
+
+    func testLongLivedEventStreamDoesNotBlockRequests() throws {
+        let socketPath = "/tmp/omux-\(UUID().uuidString.prefix(8)).sock"
+
+        let encoder = JSONEncoder()
+        let streamConnected = DispatchSemaphore(value: 0)
+        let releaseStream = DispatchSemaphore(value: 0)
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start(
+            handler: { request in
+                JSONRPCResponse(id: request.id, result: .object(["method": .string(request.method)]))
+            },
+            streamHandler: { descriptor, request in
+                guard request.method == ControlMethod.terminalEvents.rawValue else {
+                    return false
+                }
+
+                let ack = JSONRPCResponse(id: request.id, result: .string("subscribed"))
+                try UnixSocketIO.writeLine(try encoder.encode(ack), to: descriptor)
+                streamConnected.signal()
+                _ = releaseStream.wait(timeout: .now() + 2)
+                return true
+            }
+        )
+        defer { server.stop() }
+
+        let streamFinished = expectation(description: "stream exits")
+        DispatchQueue.global().async {
+            let client = OmuxControlClient(socketPath: socketPath)
+            try? client.streamTerminalEvents { _ in }
+            streamFinished.fulfill()
+        }
+
+        XCTAssertEqual(streamConnected.wait(timeout: .now() + 2), .success)
+
+        let client = OmuxControlClient(socketPath: socketPath)
+        let response = try client.request(method: .listWorkspaces)
+
+        XCTAssertEqual(response.result, .object(["method": .string(ControlMethod.listWorkspaces.rawValue)]))
+        releaseStream.signal()
+        wait(for: [streamFinished], timeout: 2)
     }
 }
 

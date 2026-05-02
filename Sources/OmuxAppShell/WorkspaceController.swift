@@ -5,6 +5,11 @@ import OmuxCore
 import OmuxHooks
 import OmuxTerminalBridge
 
+private struct CommandAutomationContext: Sendable {
+    let command: String
+    let cwd: String?
+}
+
 public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
@@ -13,6 +18,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
+    private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
@@ -63,16 +69,6 @@ public final class WorkspaceController: @unchecked Sendable {
         setActiveWorkspaceID(workspace.id)
         lock.unlock()
 
-        try hookRunner.emit(
-            HookInvocation(
-                category: .lifecycle,
-                name: "workspace-opened",
-                workspaceID: workspace.id,
-                sessionID: pane.session.id,
-                payload: .object(["path": .string(path)])
-            )
-        )
-
         publishControlPlaneEvent(
             ControlPlaneEvent(
                 name: .workspaceOpened,
@@ -84,6 +80,17 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
         onChange?(workspace)
+        try hookRunner.emit(
+            HookInvocation(
+                category: .lifecycle,
+                name: "workspace-opened",
+                workspaceID: workspace.id,
+                tabID: tab.id,
+                paneID: pane.id,
+                sessionID: pane.session.id,
+                payload: .object(["path": .string(path)])
+            )
+        )
         return workspace
     }
 
@@ -97,6 +104,12 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return workspaces
+    }
+
+    public func resolveTerminalTarget(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        return resolveTerminalTargetLocked(target)
     }
 
     func persistenceSnapshot() -> WorkspacePersistenceSnapshot? {
@@ -195,6 +208,19 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(updatedWorkspace)
         return true
+    }
+
+    @discardableResult
+    public func focus(target: ControlPlaneTerminalTarget) throws -> ControlPlaneTerminalContext? {
+        guard let context = resolveTerminalTarget(target) else {
+            return nil
+        }
+
+        if try focus(sessionID: context.sessionID) {
+            return resolveTerminalTarget(.session(context.sessionID)) ?? context
+        }
+
+        return nil
     }
 
     public func restore(workspaceID: WorkspaceID) -> Workspace? {
@@ -451,6 +477,35 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(updatedWorkspace)
         return updatedWorkspace
+    }
+
+    @discardableResult
+    public func splitPane(
+        target: ControlPlaneTerminalTarget?,
+        axis: PaneSplitAxis = .columns
+    ) throws -> (workspace: Workspace, created: ControlPlaneTerminalContext)? {
+        if let target {
+            guard try focus(target: target) != nil else {
+                return nil
+            }
+        }
+
+        guard let workspace = try splitFocusedPane(axis: axis),
+              let createdPane = workspace.focusedPane
+        else {
+            return nil
+        }
+
+        return (
+            workspace,
+            ControlPlaneTerminalContext(
+                workspaceID: workspace.id,
+                tabID: workspace.focusedTabID,
+                paneStackID: workspace.focusedPaneStack?.id,
+                paneID: createdPane.id,
+                sessionID: createdPane.session.id
+            )
+        )
     }
 
     @discardableResult
@@ -741,9 +796,28 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func runCommand(in sessionID: SessionID, command: String) throws -> Bool {
-        guard let context = controlPlaneContext(for: sessionID) else {
-            return false
+        try runCommand(target: .session(sessionID), command: command) != nil
+    }
+
+    @discardableResult
+    public func runCommand(
+        target: ControlPlaneTerminalTarget,
+        command: String
+    ) throws -> ControlPlaneActionResult? {
+        guard let context = resolveTerminalTarget(target) else {
+            return nil
         }
+
+        let cwd = workingDirectory(for: context.paneID)
+        let payload: OmuxValue = .object([
+            "command": .string(command),
+            "cwd": cwd.map(OmuxValue.string) ?? .null,
+            "outputContext": .object(["kind": .string("unavailable")]),
+        ])
+
+        lock.lock()
+        commandContextBySession[context.sessionID] = CommandAutomationContext(command: command, cwd: cwd)
+        lock.unlock()
 
         try hookRunner.emit(
             HookInvocation(
@@ -752,23 +826,49 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: context.workspaceID,
                 tabID: context.tabID,
                 paneID: context.paneID,
-                sessionID: sessionID,
-                payload: .object(["command": .string(command)])
+                sessionID: context.sessionID,
+                payload: payload
             )
         )
 
-        try bridge.run(command: command, inPane: context.paneID)
+        do {
+            try bridge.run(command: command, inPane: context.paneID)
+        } catch {
+            lock.lock()
+            commandContextBySession.removeValue(forKey: context.sessionID)
+            lock.unlock()
+            throw error
+        }
         publishControlPlaneEvent(
             ControlPlaneEvent(
                 name: .commandStarted,
                 workspaceID: context.workspaceID,
                 tabID: context.tabID,
                 paneID: context.paneID,
-                sessionID: sessionID,
-                payload: .object(["command": .string(command)])
+                sessionID: context.sessionID,
+                payload: payload
             )
         )
-        return true
+        return ControlPlaneActionResult(
+            target: context,
+            extra: ["command": .string(command)]
+        )
+    }
+
+    @discardableResult
+    public func sendText(
+        target: ControlPlaneTerminalTarget,
+        text: String
+    ) throws -> ControlPlaneActionResult? {
+        guard let context = resolveTerminalTarget(target) else {
+            return nil
+        }
+
+        try bridge.send(text: text, toPane: context.paneID)
+        return ControlPlaneActionResult(
+            target: context,
+            extra: ["textLength": .integer(text.count)]
+        )
     }
 
     public func handleInput(_ event: NormalizedKeyEvent, in paneID: PaneID) throws {
@@ -936,6 +1036,114 @@ public final class WorkspaceController: @unchecked Sendable {
         return nil
     }
 
+    private func resolveTerminalTargetLocked(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
+        switch target {
+        case .session(let sessionID):
+            for workspace in workspaces {
+                for tab in workspace.tabs {
+                    if let pane = tab.panes.first(where: { $0.session.id == sessionID }) {
+                        return terminalContext(workspace: workspace, tab: tab, pane: pane)
+                    }
+                }
+            }
+        case .pane(let paneID):
+            for workspace in workspaces {
+                for tab in workspace.tabs {
+                    if let pane = tab.panes.first(where: { $0.id == paneID }) {
+                        return terminalContext(workspace: workspace, tab: tab, pane: pane)
+                    }
+                }
+            }
+        case .tab(let tabID):
+            for workspace in workspaces {
+                if let tab = workspace.tabs.first(where: { $0.id == tabID }),
+                   let pane = tab.focusedPane {
+                    return terminalContext(workspace: workspace, tab: tab, pane: pane)
+                }
+            }
+        case .workspace(let workspaceID):
+            guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
+                  let tab = workspace.focusedTab,
+                  let pane = tab.focusedPane
+            else {
+                return nil
+            }
+            return terminalContext(workspace: workspace, tab: tab, pane: pane)
+        case .focused:
+            guard let activeWorkspaceID,
+                  let workspace = workspaces.first(where: { $0.id == activeWorkspaceID }),
+                  let tab = workspace.focusedTab,
+                  let pane = tab.focusedPane
+            else {
+                return nil
+            }
+            return terminalContext(workspace: workspace, tab: tab, pane: pane)
+        }
+
+        return nil
+    }
+
+    private func terminalContext(workspace: Workspace, tab: Tab, pane: Pane) -> ControlPlaneTerminalContext {
+        ControlPlaneTerminalContext(
+            workspaceID: workspace.id,
+            tabID: tab.id,
+            paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+            paneID: pane.id,
+            sessionID: pane.session.id
+        )
+    }
+
+    private func workingDirectory(for paneID: PaneID) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for pane in workspaces.flatMap(\.tabs).flatMap(\.panes) where pane.id == paneID {
+            return pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+        }
+
+        return nil
+    }
+
+    func enrichedCommandCompletionPayload(
+        for event: TerminalActionEvent,
+        context: ControlPlaneTerminalContext
+    ) -> OmuxValue {
+        guard case .commandFinished = event.action else {
+            return event.payload
+        }
+
+        var object = event.payload.objectValue ?? [:]
+
+        lock.lock()
+        let commandContext = commandContextBySession.removeValue(forKey: context.sessionID)
+        lock.unlock()
+
+        object["command"] = commandContext.map { .string($0.command) } ?? .null
+        if let cwd = commandContext?.cwd ?? workingDirectory(for: context.paneID) {
+            object["cwd"] = .string(cwd)
+        } else {
+            object["cwd"] = .null
+        }
+        object["outputContext"] = outputContext(for: context.paneID)
+        return .object(object)
+    }
+
+    private func outputContext(for paneID: PaneID) -> OmuxValue {
+        guard let snapshot = bridge.snapshot(for: paneID) else {
+            return .object(["kind": .string("unavailable")])
+        }
+
+        let renderedText = snapshot.renderedText
+        guard renderedText.isEmpty == false else {
+            return .object(["kind": .string("unavailable")])
+        }
+
+        return .object([
+            "kind": .string("tail"),
+            "tail": .string(String(renderedText.suffix(4_000))),
+        ])
+    }
+
     private func paneStackID(for paneID: PaneID, in workspace: Workspace) -> PaneStackID? {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
@@ -964,9 +1172,9 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
-    func applyTerminalActionState(_ event: TerminalActionEvent) -> WorkspaceTerminalActionContext? {
+    func applyTerminalActionState(_ event: TerminalActionEvent) -> ControlPlaneTerminalContext? {
         var updatedWorkspace: Workspace?
-        var context: WorkspaceTerminalActionContext?
+        var context: ControlPlaneTerminalContext?
 
         lock.lock()
         for workspaceIndex in workspaces.indices {
@@ -977,9 +1185,10 @@ public final class WorkspaceController: @unchecked Sendable {
 
                 let workspaceID = workspaces[workspaceIndex].id
                 let tabID = workspaces[workspaceIndex].tabs[tabIndex].id
-                context = WorkspaceTerminalActionContext(
+                context = ControlPlaneTerminalContext(
                     workspaceID: workspaceID,
                     tabID: tabID,
+                    paneStackID: workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: event.paneID)?.id,
                     paneID: event.paneID,
                     sessionID: event.sessionID
                 )

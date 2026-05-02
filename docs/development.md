@@ -68,11 +68,17 @@ swift run omux theme list
 swift run omux tab
 swift run omux split
 swift run omux split down
+swift run omux split --focused right
 swift run omux pane-tab
 swift run omux pane-tab-focus <pane-id>
 swift run omux pane-tab-close [pane-id]
 swift run omux events
+swift run omux list --full
+swift run omux sessions
+swift run omux panes
 swift run omux run <session-id> "pwd"
+swift run omux run --pane <pane-id> -- "pwd"
+swift run omux send-text --session <session-id> -- "hello"
 swift run omux install-cli [destination]
 swift run omux help
 swift run OpenMUXApp
@@ -174,6 +180,10 @@ Key boundary rules:
 - Control-plane event names are OpenMUX-native (`terminal.cwdChanged`, `workspace.opened`, `command.started`, and so on) and are defined without committing to a long-lived streaming transport.
 - Unsupported and app-shell ownership actions remain rejected by default.
 - The fallback runtime stays silent for terminal-action events unless it gains equivalent native signals later.
+
+## User hook directories
+
+The production app initializes `ExternalHookRunner` from `~/.omux/hooks/`. Each direct child directory name is a hook name, and executable regular files inside that directory are registered as handlers. Handlers remain external processes and receive the structured `HookInvocation` JSON on stdin. The discovery layer lives in `OmuxHooks`; `OmuxAppShell` only provides the `OmuxConfigPaths.hooksDirectoryURL` path during startup. See [Hooks](./hooks.md) for the user-facing reference.
 
 ## Current limitations
 

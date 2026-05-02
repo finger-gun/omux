@@ -72,6 +72,12 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-focus", "pane-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-close", "pane-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "run", "--pane", "pane-1", "--", "echo", "hello"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "send-text", "--session", "session-1", "--", "hello", "world"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "sessions"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "session"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "panes"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane"]), 0)
 
         XCTAssertEqual(output, [
             "\(ControlMethod.createTab.rawValue):none",
@@ -81,7 +87,42 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.focusPaneTab.rawValue):none",
             "\(ControlMethod.closePaneTab.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
+            "\(ControlMethod.runCommand.rawValue):none",
+            "\(ControlMethod.sendText.rawValue):none",
+            "\(ControlMethod.listSessions.rawValue):none",
+            "\(ControlMethod.listSessions.rawValue):none",
+            "\(ControlMethod.listPanes.rawValue):none",
+            "\(ControlMethod.listPanes.rawValue):none",
         ])
+    }
+
+    func testCLIListFullRequestsDetailedWorkspaceTopology() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "list-full.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            let full: Bool
+            if case .object(let params)? = request.params,
+               case .bool(true)? = params["full"] {
+                full = true
+            } else {
+                full = false
+            }
+            return JSONRPCResponse(id: request.id, result: .string("\(request.method):\(full)"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "list", "--full"]), 0)
+        XCTAssertEqual(output, ["\(ControlMethod.listWorkspaces.rawValue):true"])
     }
 
     func testCLIPrintsControlPlaneEventsUntilStreamCloses() throws {
