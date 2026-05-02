@@ -11,11 +11,17 @@ VERSION="${RELEASE_VERSION:-}"
 BUILD_NUMBER="${BUNDLE_VERSION:-${BUILD_NUMBER:-1}}"
 
 if [ -z "$VERSION" ]; then
-  echo "error: RELEASE_VERSION is required" >&2
-  exit 1
+  if [ -f "$ROOT_DIR/VERSION" ]; then
+    VERSION="$(sed -n '1p' "$ROOT_DIR/VERSION")"
+  fi
 fi
 
 VERSION="${VERSION#v}"
+if ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "error: release version must be MAJOR.MINOR.PATCH; set RELEASE_VERSION or update VERSION" >&2
+  exit 1
+fi
+
 APP_ARCHIVE_NAME="${APP_ARCHIVE_NAME:-OpenMUX-$VERSION-macos-unsigned.zip}"
 CLI_ARCHIVE_NAME="${CLI_ARCHIVE_NAME:-omux-$VERSION-macos.tar.gz}"
 CHECKSUM_FILE_NAME="${CHECKSUM_FILE_NAME:-checksums.txt}"

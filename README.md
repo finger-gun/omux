@@ -166,7 +166,8 @@ If you want the current module boundaries, runtime build notes, and command list
 
 OpenMUX has an early GitHub Release flow for downloadable macOS artifacts.
 
-- local packaging: `make package-release RELEASE_VERSION=0.1.0`
+- local packaging: `make package-release` using the root `VERSION`
+- release prep: `Scripts/check-changes-since-release.sh` then `Scripts/prepare-release.sh <version>`
 - tag-driven GitHub Releases on `v*`
 - unsigned macOS app and CLI archives plus checksums
 

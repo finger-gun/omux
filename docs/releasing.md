@@ -1,10 +1,44 @@
 # Releasing OpenMUX
 
-OpenMUX now has a first-pass release flow built around generated GitHub Releases and downloadable archives.
+OpenMUX has a native macOS-style release flow built around a committed product version, agent-authored changelog entries, generated GitHub Releases, and downloadable archives.
+
+## Version and changelog model
+
+OpenMUX uses a single product version:
+
+- `VERSION` contains the current semantic version without a leading `v`
+- `CHANGELOG.md` contains committed release notes
+- Git tags use `v<version>`, such as `v0.1.0`
+- `CFBundleShortVersionString` receives the release semver
+- `CFBundleVersion` receives the build number from `BUNDLE_VERSION`, `BUILD_NUMBER`, or CI
+
+Before tagging a release, inspect changes since the latest release:
+
+```bash
+Scripts/check-changes-since-release.sh
+```
+
+Then prepare the reviewed changelog and version update:
+
+```bash
+Scripts/prepare-release.sh 0.2.0 <<'EOF'
+### Added
+
+- Added ...
+EOF
+```
+
+Agents can use the `create-release-notes` skill to analyze changes since the latest `v*` tag, recommend the semver bump, draft the changelog body, and ask before writing `VERSION` and `CHANGELOG.md`.
 
 ## Local packaging
 
 Build release artifacts locally with:
+
+```bash
+make package-release
+```
+
+By default, local packaging reads the version from `VERSION`. You can override it for one-off checks:
 
 ```bash
 make package-release RELEASE_VERSION=0.1.0
@@ -42,11 +76,11 @@ The workflow:
 
 1. builds the vendored Ghostty runtime
 2. verifies the repository
-3. runs `make package-release`
+3. runs `make package-release RELEASE_VERSION=<tag-version>`
 4. publishes a GitHub Release with the packaged artifacts attached
 5. lets GitHub generate release notes automatically
 
-Generated release notes are configured through [`.github/release.yml`](../.github/release.yml). Categorization depends on pull request labels, so the changelog improves as labels are used consistently.
+Generated release notes are configured through [`.github/release.yml`](../.github/release.yml). `CHANGELOG.md` remains the committed release-note source of truth; GitHub's generated notes are useful as supplemental release-page context.
 
 ## Current distribution status
 

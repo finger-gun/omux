@@ -10,7 +10,7 @@ help:
 	@printf "  make smoke         Launch and sample OpenMUXApp as a smoke test\n"
 	@printf "  make import-themes Import selected iTerm2 Color Schemes into bundled themes\n"
 	@printf "  make publish-unsigned Build dist/OpenMUX.app (unsigned)\n"
-	@printf "  make package-release RELEASE_VERSION=X.Y.Z Build GitHub Release assets under dist/release/\n"
+	@printf "  make package-release Build GitHub Release assets under dist/release/ using VERSION\n"
 	@printf "  make dev           Launch OpenMUXApp\n"
 	@printf "  make app           Launch OpenMUXApp\n"
 	@printf "  make cli-help      Show omux CLI help\n"
@@ -38,10 +38,6 @@ publish-unsigned:
 	./Scripts/publish-unsigned.sh
 
 package-release:
-	@if [ -z "$(RELEASE_VERSION)" ]; then \
-		printf 'error: RELEASE_VERSION is required\n' >&2; \
-		exit 1; \
-	fi
 	./Scripts/package-release.sh
 
 dev:
