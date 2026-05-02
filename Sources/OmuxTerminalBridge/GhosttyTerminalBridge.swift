@@ -265,18 +265,26 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     @discardableResult
     public func createSurface(for pane: Pane) throws -> TerminalSurfaceDescriptor {
         lock.lock()
-        defer { lock.unlock() }
-
         if let existing = surfaces[pane.id] {
+            lock.unlock()
             return existing
         }
+        lock.unlock()
 
         let runtimeSurfaceID = try runtime.createSurface(for: pane.id)
         let descriptor = TerminalSurfaceDescriptor(
             paneID: pane.id,
             runtimeSurfaceID: runtimeSurfaceID
         )
+
+        lock.lock()
+        if let existing = surfaces[pane.id] {
+            lock.unlock()
+            try? runtime.destroySurface(runtimeSurfaceID: runtimeSurfaceID)
+            return existing
+        }
         surfaces[pane.id] = descriptor
+        lock.unlock()
         return descriptor
     }
 

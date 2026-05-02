@@ -30,6 +30,38 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertNil(bridge.surface(for: pane.id))
     }
 
+    func testSurfaceCreationDoesNotHoldBridgeLockWhileRuntimeCreatesSurface() throws {
+        let runtime = BlockingCreateSurfaceRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let existingPane = Pane(title: "Existing", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp"))
+        let newPane = Pane(title: "New", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp"))
+
+        _ = try bridge.createSurface(for: existingPane)
+        runtime.blockingPaneID = newPane.id
+
+        let createFinished = expectation(description: "surface creation finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                _ = try bridge.createSurface(for: newPane)
+            } catch {
+                XCTFail("surface creation failed: \(error)")
+            }
+            createFinished.fulfill()
+        }
+
+        XCTAssertTrue(runtime.waitForBlockedCreate(timeout: .now() + 1))
+
+        let lookupFinished = expectation(description: "existing surface lookup finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertNotNil(bridge.surface(for: existingPane.id))
+            lookupFinished.fulfill()
+        }
+        wait(for: [lookupFinished], timeout: 0.25)
+
+        runtime.releaseBlockedCreate()
+        wait(for: [createFinished], timeout: 1)
+    }
+
     @MainActor
     func testBridgeCreatesHostedPaneViewForAttachedPane() throws {
         let runtime = InspectableGhosttyRuntime()
@@ -1214,6 +1246,58 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 }
 
 private final class InspectableRuntimeSurfaceView: RuntimeTerminalHostView {}
+
+private final class BlockingCreateSurfaceRuntime: GhosttyRuntime {
+    private let lock = NSLock()
+    private let blockedCreateStarted = DispatchSemaphore(value: 0)
+    private let blockedCreateRelease = DispatchSemaphore(value: 0)
+    private var storedBlockingPaneID: PaneID?
+
+    var blockingPaneID: PaneID? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedBlockingPaneID
+        }
+        set {
+            lock.lock()
+            storedBlockingPaneID = newValue
+            lock.unlock()
+        }
+    }
+
+    func waitForBlockedCreate(timeout: DispatchTime) -> Bool {
+        blockedCreateStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseBlockedCreate() {
+        blockedCreateRelease.signal()
+    }
+
+    func createSurface(for paneID: PaneID) throws -> String {
+        if paneID == blockingPaneID {
+            blockedCreateStarted.signal()
+            _ = blockedCreateRelease.wait(timeout: .now() + 2)
+        }
+        return "blocking:\(paneID.rawValue)"
+    }
+
+    func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
+        _ = session
+        _ = runtimeSurfaceID
+    }
+
+    func destroySurface(runtimeSurfaceID: String) throws {
+        _ = runtimeSurfaceID
+    }
+
+    @MainActor
+    func makeHostedSurfaceView(for paneID: PaneID, runtimeSurfaceID: String) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return nil
+    }
+}
 
 private final class LockedValue<Value>: @unchecked Sendable {
     private let lock = NSLock()
