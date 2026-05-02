@@ -86,6 +86,36 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testWorkspaceAutomationCanChainSplitFocusAndRunByReturnedIDs() throws {
+        let bridge = GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime())
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let lower = try XCTUnwrap(controller.splitPane(target: .workspace(workspace.id), axis: .rows))
+        let lowerLeft = try XCTUnwrap(controller.splitPane(target: .pane(lower.created.paneID), axis: .columns))
+
+        let expectation = expectation(description: "targeted command executes in selected pane")
+        expectation.assertForOverFulfill = false
+        let token = bridge.addObserver(for: lowerLeft.created.paneID) { snapshot in
+            if snapshot.renderedText.contains("automation-dev\n") {
+                expectation.fulfill()
+            }
+        }
+
+        let runResult = try XCTUnwrap(controller.runCommand(
+            target: .pane(lowerLeft.created.paneID),
+            command: "printf 'automation-dev' && printf '\\n'"
+        ))
+
+        XCTAssertEqual(runResult.target?.paneID, lowerLeft.created.paneID)
+        waitForExpectations(timeout: 3)
+        bridge.removeObserver(for: lowerLeft.created.paneID, token: token)
+    }
+
     func testWorkspaceControllerCreatesAndClosesPaneTabsInFocusedStack() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
@@ -1272,6 +1302,146 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.latestNotification()?.title, "Command finished")
     }
 
+    func testCommandFailureHookReceivesCommandContextAndOutputState() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = "runtime output tail"
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        for hookName in ["command-started", "terminal-command-finished", "command-failed"] {
+            registry.register(
+                HookDescriptor(
+                    category: .command,
+                    name: hookName,
+                    executableURL: URL(fileURLWithPath: "/usr/bin/true")
+                )
+            )
+        }
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        _ = try controller.runCommand(target: .session(pane.session.id), command: "pnpm test")
+        runtime.emit(.commandFinished(exitCode: 1, durationNanoseconds: 456), on: runtimeSurfaceID)
+
+        XCTAssertEqual(launcher.invocations.map(\.name), [
+            "command-started",
+            "terminal-command-finished",
+            "command-failed",
+        ])
+        let failed = try XCTUnwrap(launcher.invocations.last)
+        XCTAssertEqual(failed.workspaceID, workspace.id)
+        XCTAssertEqual(failed.paneID, pane.id)
+        XCTAssertEqual(failed.sessionID, pane.session.id)
+        XCTAssertEqual(failed.payload.objectValue?["command"], .string("pnpm test"))
+        XCTAssertEqual(failed.payload.objectValue?["cwd"], .string("/tmp"))
+        XCTAssertEqual(failed.payload.objectValue?["exitCode"], .integer(1))
+        XCTAssertEqual(failed.payload.objectValue?["durationNanoseconds"], .integer(456))
+        XCTAssertEqual(failed.payload.objectValue?["outputContext"]?.objectValue?["kind"], .string("tail"))
+        XCTAssertEqual(launcher.invocations[0].payload.objectValue?["outputContext"]?.objectValue?["kind"], .string("unavailable"))
+    }
+
+    func testSuccessfulCommandCompletionDoesNotEmitCommandFailedHook() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        for hookName in ["terminal-command-finished", "command-failed"] {
+            registry.register(
+                HookDescriptor(
+                    category: .command,
+                    name: hookName,
+                    executableURL: URL(fileURLWithPath: "/usr/bin/true")
+                )
+            )
+        }
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.commandFinished(exitCode: 0, durationNanoseconds: 1), on: runtimeSurfaceID)
+
+        XCTAssertEqual(launcher.invocations.map(\.name), ["terminal-command-finished"])
+    }
+
+    func testDiscoveredUserHookReceivesWorkspaceInvocation() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let workspaceHooksDirectory = tempDirectory
+            .appending(path: "hooks")
+            .appending(path: "workspace-opened")
+        try FileManager.default.createDirectory(at: workspaceHooksDirectory, withIntermediateDirectories: true)
+
+        let hookURL = workspaceHooksDirectory.appending(path: "10-capture")
+        try """
+        #!/bin/sh
+        exit 0
+        """.write(to: hookURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: hookURL.path(percentEncoded: false)
+        )
+
+        let launcher = CapturingHookLauncher()
+        let runner = ExternalHookRunner(
+            registry: UserHookDirectoryDiscovery.registry(in: tempDirectory.appending(path: "hooks")),
+            launcher: launcher
+        )
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: runner
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+
+        let invocation = try XCTUnwrap(launcher.invocations.first)
+        XCTAssertEqual(invocation.name, "workspace-opened")
+        XCTAssertEqual(invocation.category, .lifecycle)
+        XCTAssertEqual(invocation.workspaceID, workspace.id)
+        XCTAssertEqual(invocation.payload.objectValue?["path"], .string("/tmp"))
+    }
+
+    func testWorkspaceOpenedHookMutationsAreNotOverwrittenByStaleOpenUpdate() throws {
+        var controller: WorkspaceController!
+        var changedPaneCounts: [Int] = []
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .lifecycle,
+                name: "workspace-opened",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let launcher = ClosureHookLauncher {
+            _ = try controller.splitPane(target: .focused, axis: .rows)
+        }
+        controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: UnavailableGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+        controller.onChange = { workspace in
+            changedPaneCounts.append(workspace.focusedTab?.panes.count ?? 0)
+        }
+
+        let opened = try controller.openWorkspace(at: "/tmp")
+
+        XCTAssertEqual(opened.focusedTab?.panes.count, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedTab?.panes.count, 2)
+        XCTAssertEqual(changedPaneCounts.first, 1)
+        XCTAssertEqual(changedPaneCounts.last, 2)
+    }
+
     @MainActor
     private func findHostedTerminalPaneView(in view: NSView) -> HostedTerminalPaneView? {
         if let hosted = view as? HostedTerminalPaneView {
@@ -1394,6 +1564,7 @@ final class OmuxAppShellTests: XCTestCase {
 private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private var sessions: [String: SessionDescriptor] = [:]
     private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    var transcript = ""
 
     func createSurface(for paneID: PaneID) throws -> String {
         "action:\(paneID.rawValue)"
@@ -1439,7 +1610,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
             paneID: paneID,
             sessionID: sessionID,
             runtimeSurfaceID: runtimeSurfaceID,
-            transcript: "",
+            transcript: transcript,
             currentInput: "",
             shell: descriptor.shell,
             workingDirectory: descriptor.workingDirectory,
@@ -1453,7 +1624,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     }
 }
 
-private final class CapturingHookLauncher: HookProcessLaunching {
+private final class CapturingHookLauncher: HookProcessLaunching, @unchecked Sendable {
     private(set) var invocations: [HookInvocation] = []
 
     func launch(executableURL: URL, arguments: [String], environment: [String: String], input: Data) throws {
@@ -1461,5 +1632,21 @@ private final class CapturingHookLauncher: HookProcessLaunching {
         _ = arguments
         _ = environment
         invocations.append(try JSONDecoder().decode(HookInvocation.self, from: input))
+    }
+}
+
+private final class ClosureHookLauncher: HookProcessLaunching, @unchecked Sendable {
+    private let body: () throws -> Void
+
+    init(body: @escaping () throws -> Void) {
+        self.body = body
+    }
+
+    func launch(executableURL: URL, arguments: [String], environment: [String: String], input: Data) throws {
+        _ = executableURL
+        _ = arguments
+        _ = environment
+        _ = input
+        try body()
     }
 }

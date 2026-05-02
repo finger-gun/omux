@@ -30,6 +30,38 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertNil(bridge.surface(for: pane.id))
     }
 
+    func testSurfaceCreationDoesNotHoldBridgeLockWhileRuntimeCreatesSurface() throws {
+        let runtime = BlockingCreateSurfaceRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let existingPane = Pane(title: "Existing", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp"))
+        let newPane = Pane(title: "New", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp"))
+
+        _ = try bridge.createSurface(for: existingPane)
+        runtime.blockingPaneID = newPane.id
+
+        let createFinished = expectation(description: "surface creation finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                _ = try bridge.createSurface(for: newPane)
+            } catch {
+                XCTFail("surface creation failed: \(error)")
+            }
+            createFinished.fulfill()
+        }
+
+        XCTAssertTrue(runtime.waitForBlockedCreate(timeout: .now() + 1))
+
+        let lookupFinished = expectation(description: "existing surface lookup finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertNotNil(bridge.surface(for: existingPane.id))
+            lookupFinished.fulfill()
+        }
+        wait(for: [lookupFinished], timeout: 0.25)
+
+        runtime.releaseBlockedCreate()
+        wait(for: [createFinished], timeout: 1)
+    }
+
     @MainActor
     func testBridgeCreatesHostedPaneViewForAttachedPane() throws {
         let runtime = InspectableGhosttyRuntime()
@@ -1155,6 +1187,24 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             )
         )
     }
+
+    func testRuntimeOwnedRunSubmitsReturnButSendTextDoesNot() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+
+        try bridge.run(command: "echo hello", inPane: pane.id)
+        try bridge.send(text: "draft text", toPane: pane.id)
+
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        XCTAssertEqual(runtime.sentTextsBySurface[runtimeSurfaceID], ["echo hello", "draft text"])
+        XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.count, 1)
+        XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.first?.keyCode, 36)
+        XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.first?.text, "\r")
+    }
 }
 
 private final class InspectableGhosttyRuntime: GhosttyRuntime {
@@ -1169,6 +1219,8 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var handledEvents: [NormalizedKeyEvent] = []
     private(set) var preeditUpdates: [String?] = []
     private(set) var accumulatedEvents: [NormalizedKeyEvent] = []
+    private(set) var sentTextsBySurface: [String: [String]] = [:]
+    private(set) var handledEventsBySurface: [String: [NormalizedKeyEvent]] = [:]
     private(set) var bindingActions: [String] = []
     private(set) var mouseButtons: [(state: ghostty_input_mouse_state_e, buttonNumber: Int, modifiers: KeyModifiers)] = []
     private(set) var mousePositions: [(point: CGPoint?, modifiers: KeyModifiers)] = []
@@ -1253,12 +1305,12 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 
     func send(text: String, to runtimeSurfaceID: String) throws {
         sentTexts.append(text)
-        _ = runtimeSurfaceID
+        sentTextsBySurface[runtimeSurfaceID, default: []].append(text)
     }
 
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         handledEvents.append(event)
-        _ = runtimeSurfaceID
+        handledEventsBySurface[runtimeSurfaceID, default: []].append(event)
     }
 
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {
@@ -1326,6 +1378,58 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 }
 
 private final class InspectableRuntimeSurfaceView: RuntimeTerminalHostView {}
+
+private final class BlockingCreateSurfaceRuntime: GhosttyRuntime {
+    private let lock = NSLock()
+    private let blockedCreateStarted = DispatchSemaphore(value: 0)
+    private let blockedCreateRelease = DispatchSemaphore(value: 0)
+    private var storedBlockingPaneID: PaneID?
+
+    var blockingPaneID: PaneID? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedBlockingPaneID
+        }
+        set {
+            lock.lock()
+            storedBlockingPaneID = newValue
+            lock.unlock()
+        }
+    }
+
+    func waitForBlockedCreate(timeout: DispatchTime) -> Bool {
+        blockedCreateStarted.wait(timeout: timeout) == .success
+    }
+
+    func releaseBlockedCreate() {
+        blockedCreateRelease.signal()
+    }
+
+    func createSurface(for paneID: PaneID) throws -> String {
+        if paneID == blockingPaneID {
+            blockedCreateStarted.signal()
+            _ = blockedCreateRelease.wait(timeout: .now() + 2)
+        }
+        return "blocking:\(paneID.rawValue)"
+    }
+
+    func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
+        _ = session
+        _ = runtimeSurfaceID
+    }
+
+    func destroySurface(runtimeSurfaceID: String) throws {
+        _ = runtimeSurfaceID
+    }
+
+    @MainActor
+    func makeHostedSurfaceView(for paneID: PaneID, runtimeSurfaceID: String) -> NSView? {
+        _ = paneID
+        _ = runtimeSurfaceID
+        return nil
+    }
+}
 
 private final class LockedValue<Value>: @unchecked Sendable {
     private let lock = NSLock()

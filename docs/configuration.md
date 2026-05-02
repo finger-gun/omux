@@ -159,6 +159,15 @@ omux config init
 omux theme
 omux theme <name>
 omux theme list
+omux list --full
+omux sessions
+omux panes
+omux run --session <session-id> -- pwd
+omux send-text --pane <pane-id> -- "hello"
 ```
 
 When attached to an interactive terminal, `omux theme` opens a keyboard picker: use Up/Down to move, Enter to apply the highlighted theme, and `q` or Escape to cancel. In non-interactive contexts it keeps the scriptable prompt that accepts a typed theme number or name.
+
+## Hooks
+
+OpenMUX discovers executable user hooks under **`~/.omux/hooks/`**. See [Hooks](./hooks.md) for the full hook layout, payload contract, hook list, and examples.

@@ -35,7 +35,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let bridge = GhosttyTerminalBridge(compiledConfigPath: preparedConfiguration.compiledConfigURL)
-        let hookRunner = ExternalHookRunner()
+        let hookRunner = ExternalHookRunner(
+            registry: UserHookDirectoryDiscovery.registry(in: OmuxConfigPaths.hooksDirectoryURL),
+            executionMode: .asynchronous
+        )
         let workspaceController = WorkspaceController(bridge: bridge, hookRunner: hookRunner)
         self.workspaceController = workspaceController
         self.configurationCoordinator = OpenMUXConfigurationCoordinator(

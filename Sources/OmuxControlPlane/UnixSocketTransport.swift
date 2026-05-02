@@ -213,6 +213,7 @@ public final class LocalControlServer: @unchecked Sendable {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let queue = DispatchQueue(label: "dev.fingergun.omux.control-plane")
+    private let connectionQueue = DispatchQueue(label: "dev.fingergun.omux.control-plane.connections", attributes: .concurrent)
     private var listeningDescriptor: Int32 = -1
     private var isRunning = false
 
@@ -286,7 +287,9 @@ public final class LocalControlServer: @unchecked Sendable {
                 break
             }
 
-            handleConnection(clientDescriptor, handler: handler, streamHandler: streamHandler)
+            connectionQueue.async { [weak self] in
+                self?.handleConnection(clientDescriptor, handler: handler, streamHandler: streamHandler)
+            }
         }
     }
 
