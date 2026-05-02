@@ -305,7 +305,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
     }
 
     @MainActor
-    func testRuntimeHostedViewRoutesCommandArrowAsTerminalNavigationKeyEvents() throws {
+    func testRuntimeHostedViewForwardsCommandArrowToGhosttySemantics() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
@@ -318,14 +318,14 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         runtimeView.keyDown(with: try makeKeyEvent(keyCode: 123, characters: "", modifiers: .command))
         runtimeView.keyDown(with: try makeKeyEvent(keyCode: 124, characters: "", modifiers: .command))
 
-        XCTAssertEqual(runtime.handledEvents.map(\.key), ["a", "e"])
-        XCTAssertEqual(runtime.handledEvents.map(\.modifiers), [[.leftControl], [.leftControl]])
+        XCTAssertEqual(runtime.handledEvents.map(\.keyCode), [123, 124])
+        XCTAssertEqual(runtime.handledEvents.map(\.modifiers), [[.leftCommand], [.leftCommand]])
         XCTAssertTrue(runtime.committedTexts.isEmpty)
         XCTAssertTrue(runtime.accumulatedEvents.isEmpty)
     }
 
     @MainActor
-    func testRuntimeHostedViewKeepsOtherCommandShortcutsOutOfTerminalInput() throws {
+    func testRuntimeHostedViewKeepsExplicitOpenMUXShortcutsOutOfTerminalInput() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
@@ -335,13 +335,115 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
         let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
 
-        runtimeView.keyDown(with: try makeKeyEvent(keyCode: 9, characters: "v", modifiers: .command))
+        runtimeView.keyDown(with: try makeKeyEvent(keyCode: 2, characters: "d", modifiers: .command))
 
         XCTAssertTrue(runtime.committedTexts.isEmpty)
+        XCTAssertTrue(runtime.handledEvents.isEmpty)
         XCTAssertTrue(runtime.accumulatedEvents.isEmpty)
     }
 
-    func testBridgeHandlesCommandArrowShortcutAsNavigationKeyEventForRuntime() throws {
+    @MainActor
+    func testRuntimeHostedViewForwardsUnknownCommandChordToGhosttySemantics() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+
+        runtimeView.keyDown(with: try makeKeyEvent(keyCode: 0, characters: "a", modifiers: .command))
+
+        let event = try XCTUnwrap(runtime.handledEvents.last)
+        XCTAssertEqual(event.keyCode, 0)
+        XCTAssertTrue(event.modifiers.contains(.leftCommand))
+        XCTAssertEqual(event.route, .terminal)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewForwardsModifiedBackspaceToGhosttySemantics() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+
+        runtimeView.keyDown(
+            with: try makeKeyEvent(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: .command
+            )
+        )
+        runtimeView.keyDown(
+            with: try makeKeyEvent(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: .option
+            )
+        )
+
+        XCTAssertEqual(runtime.handledEvents.map(\.keyCode), [51, 51])
+        XCTAssertTrue(runtime.handledEvents[0].modifiers.contains(.leftCommand))
+        XCTAssertTrue(runtime.handledEvents[1].modifiers.contains(.leftOption))
+        XCTAssertTrue(runtime.committedTexts.isEmpty)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewForwardsTextCommandSelectorDuringInterpretation() throws {
+        let runtimeView = TextCommandRuntimeSurfaceView(
+            selector: #selector(NSResponder.deleteWordBackward(_:))
+        )
+        var handledEvents: [NormalizedKeyEvent] = []
+        runtimeView.normalizedKeyHandler = { event in
+            handledEvents.append(event)
+        }
+
+        runtimeView.keyDown(
+            with: try makeKeyEvent(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: .option
+            )
+        )
+
+        XCTAssertEqual(handledEvents.count, 1)
+        XCTAssertEqual(handledEvents.first?.keyCode, 51)
+        XCTAssertTrue(handledEvents.first?.modifiers.contains(.leftOption) == true)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewDoesNotDuplicateTextCommandFallbackEvents() throws {
+        let runtimeView = TextCommandRuntimeSurfaceView(
+            selector: #selector(NSResponder.deleteToBeginningOfLine(_:))
+        )
+        var handledEvents: [NormalizedKeyEvent] = []
+        runtimeView.normalizedKeyHandler = { event in
+            handledEvents.append(event)
+        }
+
+        runtimeView.keyDown(
+            with: try makeKeyEvent(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: .command
+            )
+        )
+
+        XCTAssertEqual(handledEvents.count, 1)
+        XCTAssertEqual(handledEvents.first?.keyCode, 51)
+        XCTAssertTrue(handledEvents.first?.modifiers.contains(.leftCommand) == true)
+    }
+
+    func testBridgeIgnoresExplicitOpenMUXShortcutsRatherThanSynthesizingTerminalInput() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
@@ -351,9 +453,9 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         try bridge.handle(
             NormalizedKeyEvent(
-                keyCode: 123,
-                key: "",
-                text: nil,
+                keyCode: 2,
+                key: "d",
+                text: "d",
                 modifiers: [.leftCommand],
                 phase: .keyDown,
                 isRepeat: false,
@@ -362,23 +464,8 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             inPane: pane.id
         )
 
-        XCTAssertEqual(runtime.handledEvents.map(\.key), ["a"])
-        XCTAssertEqual(runtime.handledEvents.map(\.modifiers), [[.leftControl]])
+        XCTAssertTrue(runtime.handledEvents.isEmpty)
         XCTAssertTrue(runtime.sentTexts.isEmpty)
-    }
-
-    func testCommandArrowNavigationUsesControlTextForRuntime() {
-        let event = NormalizedKeyEvent(
-            keyCode: 124,
-            key: "",
-            text: nil,
-            modifiers: [.leftCommand],
-            phase: .keyDown,
-            isRepeat: false,
-            route: .shortcut
-        )
-
-        XCTAssertEqual(TerminalCommandArrowNavigation.controlText(for: event), "\u{5}")
     }
 
     @MainActor
@@ -512,6 +599,35 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         XCTAssertEqual(runtime.preeditUpdates, ["¨", nil])
         XCTAssertEqual(runtime.committedTexts, ["é"])
+    }
+
+    @MainActor
+    func testRuntimeHostedViewExposesRuntimeSelectionToAppKitQueries() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        let runtimeView = try XCTUnwrap(runtime.hostedViews[runtimeSurfaceID])
+        runtime.selectionsBySurface[runtimeSurfaceID] = RuntimeTerminalSelection(
+            text: "selected terminal text",
+            offset: 4,
+            length: 22
+        )
+
+        var actualRange = NSRange()
+        let attributed = runtimeView.attributedSubstring(
+            forProposedRange: NSRange(location: 4, length: 22),
+            actualRange: &actualRange
+        )
+
+        XCTAssertEqual(runtimeView.selectedRange(), NSRange(location: 4, length: 22))
+        XCTAssertEqual(attributed?.string, "selected terminal text")
+        XCTAssertEqual(actualRange, NSRange(location: 4, length: 22))
+        XCTAssertEqual(bridge.selection(forPane: pane.id)?.text, "selected terminal text")
     }
 
     @MainActor
@@ -925,6 +1041,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
     private func makeKeyEvent(
         keyCode: UInt16,
         characters: String,
+        charactersIgnoringModifiers: String? = nil,
         modifiers: NSEvent.ModifierFlags
     ) throws -> NSEvent {
         try XCTUnwrap(
@@ -936,7 +1053,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
                 windowNumber: 0,
                 context: nil,
                 characters: characters,
-                charactersIgnoringModifiers: characters,
+                charactersIgnoringModifiers: charactersIgnoringModifiers ?? characters,
                 isARepeat: false,
                 keyCode: keyCode
             )
@@ -987,6 +1104,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var mousePositions: [(point: CGPoint?, modifiers: KeyModifiers)] = []
     private(set) var mouseScrolls: [(x: Double, y: Double, precise: Bool, momentum: NSEvent.Phase)] = []
     private(set) var mousePressures: [(stage: Int, pressure: Double)] = []
+    var selectionsBySurface: [String: RuntimeTerminalSelection] = [:]
 
     func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
         try loadVisibleState(from: path)
@@ -1062,6 +1180,9 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
         view.mousePressureHandler = { [weak self] stage, pressure in
             self?.mousePressures.append((stage: stage, pressure: pressure))
         }
+        view.selectionProvider = { [weak self] in
+            self?.selectionsBySurface[runtimeSurfaceID]
+        }
         hostedViews[runtimeSurfaceID] = view
         return view
     }
@@ -1078,6 +1199,10 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         handledEvents.append(event)
         handledEventsBySurface[runtimeSurfaceID, default: []].append(event)
+    }
+
+    func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection? {
+        selectionsBySurface[runtimeSurfaceID]
     }
 
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {
@@ -1145,6 +1270,25 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 }
 
 private final class InspectableRuntimeSurfaceView: RuntimeTerminalHostView {}
+
+private final class TextCommandRuntimeSurfaceView: RuntimeTerminalHostView {
+    private let selector: Selector
+
+    init(selector: Selector) {
+        self.selector = selector
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func interpretKeyEvents(_ eventArray: [NSEvent]) {
+        _ = eventArray
+        doCommand(by: selector)
+    }
+}
 
 private final class BlockingCreateSurfaceRuntime: GhosttyRuntime {
     private let lock = NSLock()

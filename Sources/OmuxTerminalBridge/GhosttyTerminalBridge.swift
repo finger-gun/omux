@@ -39,6 +39,7 @@ public protocol GhosttyRuntime {
     func ownsSession(for runtimeSurfaceID: String) -> Bool
     func send(text: String, to runtimeSurfaceID: String) throws
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws
+    func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection?
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
     func setTerminalActionHandler(
@@ -77,6 +78,11 @@ public extension GhosttyRuntime {
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         _ = event
         _ = runtimeSurfaceID
+    }
+
+    func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection? {
+        _ = runtimeSurfaceID
+        return nil
     }
 
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {
@@ -153,6 +159,22 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
 
     public var renderedText: String {
         transcript + currentInput
+    }
+}
+
+public struct RuntimeTerminalSelection: Equatable, Sendable {
+    public let text: String
+    public let offset: Int
+    public let length: Int
+
+    public init(text: String, offset: Int, length: Int) {
+        self.text = text
+        self.offset = max(offset, 0)
+        self.length = max(length, 0)
+    }
+
+    public var range: NSRange {
+        NSRange(location: offset, length: length)
     }
 }
 
@@ -305,6 +327,16 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         return makeSnapshot(for: paneID)
     }
 
+    public func selection(forPane paneID: PaneID) -> RuntimeTerminalSelection? {
+        lock.lock()
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let runtimeSurfaceID else {
+            return nil
+        }
+        return runtime.selection(for: runtimeSurfaceID)
+    }
+
     @discardableResult
     public func addObserver(
         for paneID: PaneID,
@@ -356,12 +388,6 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
         guard let state else {
             throw TerminalBridgeError.missingSession(paneID)
-        }
-
-        if let navigationEvent = TerminalCommandArrowNavigation.controlEvent(for: event) {
-            try runtime.handle(navigationEvent, on: state.runtimeSurfaceID)
-            publishSnapshot(for: paneID)
-            return
         }
 
         guard event.route != .shortcut else {

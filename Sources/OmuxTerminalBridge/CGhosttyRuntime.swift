@@ -62,6 +62,10 @@ private final class GhosttyHostedSurfaceView: RuntimeTerminalHostView {
                 runtimeSurfaceID: self.runtimeSurfaceID
             ) ?? event
         }
+        selectionProvider = { [weak self] in
+            guard let self else { return nil }
+            return self.runtime?.hostedSurfaceSelection(runtimeSurfaceID: self.runtimeSurfaceID)
+        }
         copyHandler = { [weak self] in
             guard let self else { return }
             self.runtime?.performHostedSurfaceBindingAction(
@@ -542,6 +546,50 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         scheduleTick()
     }
 
+    public func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection? {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return nil
+        }
+
+        return mainActorValue {
+            guard ghostty_surface_has_selection(surface) else {
+                return nil
+            }
+
+            var selectedText = ghostty_text_s(
+                tl_px_x: 0,
+                tl_px_y: 0,
+                offset_start: 0,
+                offset_len: 0,
+                text: nil,
+                text_len: 0
+            )
+            guard ghostty_surface_read_selection(surface, &selectedText) else {
+                return nil
+            }
+            defer {
+                ghostty_surface_free_text(surface, &selectedText)
+            }
+
+            guard let pointer = selectedText.text, selectedText.text_len > 0 else {
+                return nil
+            }
+
+            let bytes = UnsafeBufferPointer(
+                start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
+                count: Int(selectedText.text_len)
+            )
+            let text = String(decoding: bytes, as: UTF8.self)
+            return RuntimeTerminalSelection(
+                text: text,
+                offset: Int(selectedText.offset_start),
+                length: selectedText.offset_len > 0 ? Int(selectedText.offset_len) : text.count
+            )
+        }
+    }
+
     @MainActor
     fileprivate func handleHostedSurfaceKeyEvent(
         _ event: NormalizedKeyEvent,
@@ -552,6 +600,11 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         } catch {
             NSSound.beep()
         }
+    }
+
+    @MainActor
+    fileprivate func hostedSurfaceSelection(runtimeSurfaceID: String) -> RuntimeTerminalSelection? {
+        selection(for: runtimeSurfaceID)
     }
 
     @MainActor

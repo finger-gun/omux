@@ -20,7 +20,7 @@ The config/theme foundation now lives on top of **`~/.omux/config.toml`**, **`~/
 ## Key rules
 
 1. Keep `libghostty` behind `OmuxTerminalBridge`.
-2. Normalize keyboard input before terminal or shortcut dispatch.
+2. Normalize keyboard input before dispatch, but only claim explicit OpenMUX shortcuts; runtime terminal semantics belong to Ghostty.
 3. Add automation through `omux`, JSON-RPC, hooks, and external plugins before adding embedded runtimes.
 4. Preserve native macOS behavior in the shell where precision matters.
 
@@ -32,6 +32,8 @@ The config/theme foundation now lives on top of **`~/.omux/config.toml`**, **`~/
 - Built runtime artifact: `Vendor/ghostty/macos/GhosttyKit.xcframework`
 
 OpenMUX now vendors a pinned Ghostty snapshot and builds the internal `GhosttyKit` xcframework locally. `OmuxTerminalBridge` is still the only package target allowed to import `CGhostty`; the rest of the app continues to consume bridge-owned pane views and session snapshots.
+
+Runtime-backed input follows an OpenMUX-gate/Ghostty-semantics rule: the shell may intercept documented workspace, split, sidebar, focus, and native menu commands, but unclaimed terminal input is forwarded to Ghostty with original key and modifier facts preserved. OpenMUX should not synthesize shell-editing behavior for modified Backspace, Command-arrow, Option/Alt, dead-key, or IME flows when Ghostty can represent the original event.
 
 To rebuild the runtime artifact locally:
 

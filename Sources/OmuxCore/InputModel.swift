@@ -117,15 +117,10 @@ public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
             text = raw.characters
         }
 
-        let hasShortcutModifier = raw.modifiers.intersection([
-            .leftCommand,
-            .rightCommand,
-        ]).isEmpty == false
-
         let route: NormalizedInputRoute
         if raw.isComposing {
             route = .composition
-        } else if hasShortcutModifier {
+        } else if OpenMUXShortcutClassifier.isOpenMUXShortcut(raw) {
             route = .shortcut
         } else {
             route = .terminal
@@ -140,6 +135,48 @@ public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
             isRepeat: raw.isRepeat,
             route: route
         )
+    }
+}
+
+public struct OpenMUXShortcutClassifier: Sendable {
+    public init() {}
+
+    public static func isOpenMUXShortcut(_ raw: RawKeyInput) -> Bool {
+        guard raw.modifiers.containsCommand,
+              raw.modifiers.containsOptionOrControl == false
+        else {
+            return false
+        }
+
+        let key = (raw.charactersIgnoringModifiers.isEmpty ? raw.characters : raw.charactersIgnoringModifiers)
+            .lowercased()
+
+        switch key {
+        case "d":
+            return raw.modifiers.containsOnlyCommandOrShift
+        case "b", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            return raw.modifiers.containsOnlyCommand
+        default:
+            return false
+        }
+    }
+}
+
+public extension KeyModifiers {
+    var containsCommand: Bool {
+        intersection([.leftCommand, .rightCommand]).isEmpty == false
+    }
+
+    var containsOptionOrControl: Bool {
+        intersection([.leftOption, .rightOption, .leftControl, .rightControl]).isEmpty == false
+    }
+
+    var containsOnlyCommand: Bool {
+        containsCommand && subtracting([.leftCommand, .rightCommand, .capsLock]).isEmpty
+    }
+
+    var containsOnlyCommandOrShift: Bool {
+        containsCommand && subtracting([.leftCommand, .rightCommand, .leftShift, .rightShift, .capsLock]).isEmpty
     }
 }
 

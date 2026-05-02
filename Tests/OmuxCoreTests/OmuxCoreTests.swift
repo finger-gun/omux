@@ -34,7 +34,20 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(event.route, .composition)
     }
 
-    func testCommandChordRoutesToShortcut() {
+    func testExplicitOpenMUXCommandChordRoutesToShortcut() {
+        let raw = RawKeyInput(
+            keyCode: 2,
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            modifiers: [.leftCommand]
+        )
+
+        let event = DefaultKeyEventNormalizer().normalize(raw)
+
+        XCTAssertEqual(event.route, .shortcut)
+    }
+
+    func testUnknownCommandChordRemainsTerminalInput() {
         let raw = RawKeyInput(
             keyCode: 0,
             characters: "a",
@@ -44,7 +57,30 @@ final class OmuxCoreTests: XCTestCase {
 
         let event = DefaultKeyEventNormalizer().normalize(raw)
 
-        XCTAssertEqual(event.route, .shortcut)
+        XCTAssertEqual(event.route, .terminal)
+        XCTAssertTrue(event.modifiers.contains(.leftCommand))
+    }
+
+    func testModifiedBackspaceRemainsTerminalInput() {
+        let commandBackspace = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: [.leftCommand]
+            )
+        )
+        let optionBackspace = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 51,
+                characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}",
+                modifiers: [.leftOption]
+            )
+        )
+
+        XCTAssertEqual(commandBackspace.route, .terminal)
+        XCTAssertEqual(optionBackspace.route, .terminal)
     }
 
     func testControlChordRemainsTerminalInput() {
