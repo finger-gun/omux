@@ -64,10 +64,12 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         if isFocusedPane == false, let paneID {
             onFocus?(paneID)
         }
+        handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_PRESS, buttonNumber: 0)
     }
 
     override func mouseUp(with event: NSEvent) {
+        handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, buttonNumber: 0)
     }
 
@@ -76,6 +78,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         if isFocusedPane == false, let paneID {
             onFocus?(paneID)
         }
+        handleMousePosition(event)
         let handled = handleMouseButton(event, state: GHOSTTY_MOUSE_PRESS, buttonNumber: 1)
         if handled == false {
             super.rightMouseDown(with: event)
@@ -83,6 +86,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     }
 
     override func rightMouseUp(with event: NSEvent) {
+        handleMousePosition(event)
         let handled = handleMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, buttonNumber: 1)
         if handled == false {
             super.rightMouseUp(with: event)
@@ -94,26 +98,30 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         if isFocusedPane == false, let paneID {
             onFocus?(paneID)
         }
+        handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_PRESS, buttonNumber: Int(event.buttonNumber))
     }
 
     override func otherMouseUp(with event: NSEvent) {
+        handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, buttonNumber: Int(event.buttonNumber))
     }
 
     override func mouseEntered(with event: NSEvent) {
-        reconcilePressedMouseButtons(modifiers: KeyModifiers.appKitModifierFlags(event.modifierFlags))
-        mousePositionHandler?(convert(event.locationInWindow, from: nil), KeyModifiers.appKitModifierFlags(event.modifierFlags))
+        handleMousePosition(event)
     }
 
     override func mouseExited(with event: NSEvent) {
-        reconcilePressedMouseButtons(modifiers: KeyModifiers.appKitModifierFlags(event.modifierFlags))
-        mousePositionHandler?(nil, KeyModifiers.appKitModifierFlags(event.modifierFlags))
+        let modifiers = KeyModifiers.appKitModifierFlags(event.modifierFlags)
+        reconcilePressedMouseButtons(modifiers: modifiers)
+        guard pressedMouseButtons.isEmpty, pressedMouseButtonsProvider() == 0 else {
+            return
+        }
+        mousePositionHandler?(nil, modifiers)
     }
 
     override func mouseMoved(with event: NSEvent) {
-        reconcilePressedMouseButtons(modifiers: KeyModifiers.appKitModifierFlags(event.modifierFlags))
-        mousePositionHandler?(convert(event.locationInWindow, from: nil), KeyModifiers.appKitModifierFlags(event.modifierFlags))
+        handleMousePosition(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -373,6 +381,12 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
             pressedMouseButtons.remove(buttonNumber)
         }
         return mouseButtonHandler?(state, buttonNumber, KeyModifiers.appKitModifierFlags(event.modifierFlags)) ?? false
+    }
+
+    private func handleMousePosition(_ event: NSEvent) {
+        let modifiers = KeyModifiers.appKitModifierFlags(event.modifierFlags)
+        reconcilePressedMouseButtons(modifiers: modifiers)
+        mousePositionHandler?(convert(event.locationInWindow, from: nil), modifiers)
     }
 
     private func reconcilePressedMouseButtons(modifiers: KeyModifiers) {

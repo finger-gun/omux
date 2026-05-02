@@ -1052,7 +1052,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
         return (
             Double(point.x),
-            Double(max(hostView.bounds.height - point.y, 0))
+            Double(hostView.bounds.height - point.y)
         )
     }
 

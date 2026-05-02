@@ -20,3 +20,9 @@
 - [x] 4.2 Add tests for AppKit text-command fallback and runtime selection query behavior.
 - [x] 4.3 Update development/input documentation to record the OpenMUX-gate/Ghostty-semantics ownership rule.
 - [x] 4.4 Run targeted tests, `make verify`, and `openspec validate align-runtime-input-with-ghostty --strict`.
+
+## 5. Selection Follow-up
+
+- [x] 5.1 Refresh runtime pointer position before mouse button transitions so selection anchors use the current click location.
+- [x] 5.2 Preserve drag-selection state when the pointer exits the runtime view while a button is still pressed.
+- [x] 5.3 Run targeted pointer-selection tests, `make verify`, and `openspec validate align-runtime-input-with-ghostty --strict`.

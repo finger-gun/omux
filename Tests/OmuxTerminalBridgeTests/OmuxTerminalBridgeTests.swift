@@ -181,6 +181,8 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         runtimeView.mouseDown(with: event)
 
         XCTAssertEqual(focusedPaneID, pane.id)
+        XCTAssertEqual(runtime.mouseEventOrder, ["pos", "button"])
+        XCTAssertEqual(runtime.mousePositions.first?.point, CGPoint(x: 24, y: 32))
         XCTAssertEqual(runtime.mouseButtons.count, 1)
         XCTAssertEqual(runtime.mouseButtons.first?.state, GHOSTTY_MOUSE_PRESS)
         XCTAssertEqual(runtime.mouseButtons.first?.buttonNumber, 0)
@@ -234,6 +236,52 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.mouseButtons.last?.state, GHOSTTY_MOUSE_RELEASE)
         XCTAssertEqual(runtime.mouseButtons.last?.buttonNumber, 0)
         XCTAssertEqual(runtime.mousePositions.last?.point, CGPoint(x: 40, y: 60))
+    }
+
+    @MainActor
+    func testRuntimeHostedViewDoesNotClearMousePositionWhenDragExitsViewport() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        runtimeView.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        runtimeView.pressedMouseButtonsProvider = { 1 }
+
+        let mouseDown = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 24, y: 32),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+        runtimeView.mouseDown(with: mouseDown)
+
+        let exited = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .mouseMoved,
+                location: NSPoint(x: 400, y: 260),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 2,
+                clickCount: 0,
+                pressure: 0
+            )
+        )
+        runtimeView.mouseExited(with: exited)
+
+        XCTAssertFalse(runtime.mousePositions.contains { $0.point == nil })
     }
 
     @MainActor
@@ -1102,6 +1150,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var bindingActions: [String] = []
     private(set) var mouseButtons: [(state: ghostty_input_mouse_state_e, buttonNumber: Int, modifiers: KeyModifiers)] = []
     private(set) var mousePositions: [(point: CGPoint?, modifiers: KeyModifiers)] = []
+    private(set) var mouseEventOrder: [String] = []
     private(set) var mouseScrolls: [(x: Double, y: Double, precise: Bool, momentum: NSEvent.Phase)] = []
     private(set) var mousePressures: [(stage: Int, pressure: Double)] = []
     var selectionsBySurface: [String: RuntimeTerminalSelection] = [:]
@@ -1168,10 +1217,12 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
             self?.bindingActions.append("select_all")
         }
         view.mouseButtonHandler = { [weak self] state, buttonNumber, modifiers in
+            self?.mouseEventOrder.append("button")
             self?.mouseButtons.append((state: state, buttonNumber: buttonNumber, modifiers: modifiers))
             return true
         }
         view.mousePositionHandler = { [weak self] point, modifiers in
+            self?.mouseEventOrder.append("pos")
             self?.mousePositions.append((point: point, modifiers: modifiers))
         }
         view.mouseScrollHandler = { [weak self] x, y, precise, momentum in
