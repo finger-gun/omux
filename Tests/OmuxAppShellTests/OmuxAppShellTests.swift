@@ -150,7 +150,6 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         let workspace = try controller.openWorkspace(at: "/tmp")
-        let originalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
         let originalSessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
 
         _ = try XCTUnwrap(controller.createTab())
