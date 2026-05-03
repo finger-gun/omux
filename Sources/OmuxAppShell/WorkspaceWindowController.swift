@@ -1310,7 +1310,6 @@ final class PaneCardView: NSView {
 @MainActor
 final class PaneHeaderView: NSView {
     private let tabStrip = NSStackView()
-    private let controls = NSStackView()
 
     init(
         paneStack: PaneStack,
@@ -1334,18 +1333,17 @@ final class PaneHeaderView: NSView {
         tabStrip.orientation = .horizontal
         tabStrip.alignment = .centerY
         tabStrip.spacing = 6
-
-        controls.orientation = .horizontal
-        controls.alignment = .centerY
-        controls.spacing = 6
+        tabStrip.identifier = NSUserInterfaceItemIdentifier("pane-tab-strip-\(paneStack.id.rawValue)")
 
         for pane in paneStack.panes {
-            let button = ChromePillButton()
-            button.configure(
-                title: pane.title,
+            let button = PaneTabButton(
+                pane: pane,
                 active: pane.id == paneStack.focusedPaneID,
                 theme: theme,
-                compact: true
+                showsClose: paneStack.panes.count > 1,
+                onClose: {
+                    try? onClosePaneTab(pane.id)
+                }
             )
             button.onPress = { onSelectPaneTab(pane.id) }
             button.contextMenuProvider = { contextMenuProvider(pane) }
@@ -1358,19 +1356,10 @@ final class PaneHeaderView: NSView {
         addButton.onPress = {
             try? onCreatePaneTab()
         }
-        controls.addArrangedSubview(addButton)
-
-        let closeButton = ChromePillButton()
-        closeButton.configure(symbolName: "xmark", accessibilityLabel: "Close pane tab", active: false, theme: theme, compact: true)
-        closeButton.isEnabled = paneStack.panes.count > 1
-        closeButton.onPress = {
-            try? onClosePaneTab(paneStack.focusedPaneID)
-        }
-        controls.addArrangedSubview(closeButton)
+        tabStrip.addArrangedSubview(addButton)
 
         content.addArrangedSubview(tabStrip)
         content.addArrangedSubview(NSView())
-        content.addArrangedSubview(controls)
         addSubview(content)
 
         NSLayoutConstraint.activate([
@@ -1384,6 +1373,145 @@ final class PaneHeaderView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+}
+
+@MainActor
+private final class PaneTabButton: NSControl {
+    var onPress: (() -> Void)?
+    var contextMenuProvider: (() -> NSMenu)? {
+        didSet {
+            menu = contextMenuProvider?()
+        }
+    }
+
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let closeButton = ChromePillButton()
+    private let contentInsets = NSEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
+    private let interItemSpacing = CGFloat(4)
+    private let showsClose: Bool
+    private let currentTheme: WorkspaceShellTheme
+    private let isActiveTab: Bool
+
+    init(
+        pane: Pane,
+        active: Bool,
+        theme: WorkspaceShellTheme,
+        showsClose: Bool,
+        onClose: @escaping () -> Void
+    ) {
+        self.showsClose = showsClose
+        self.currentTheme = theme
+        self.isActiveTab = active
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.cornerRadius = 3
+        identifier = NSUserInterfaceItemIdentifier("pane-tab-\(pane.id.rawValue)")
+        setAccessibilityLabel(pane.title)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.stringValue = pane.title
+        titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addSubview(titleLabel)
+
+        if showsClose {
+            closeButton.configure(
+                symbolName: "xmark",
+                accessibilityLabel: "Close \(pane.title)",
+                active: false,
+                theme: theme,
+                compact: true
+            )
+            closeButton.identifier = NSUserInterfaceItemIdentifier("pane-tab-close-\(pane.id.rawValue)")
+            closeButton.onPress = onClose
+            addSubview(closeButton)
+        }
+
+        updateVisualState()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override var isEnabled: Bool {
+        didSet {
+            updateVisualState()
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let titleSize = titleLabel.intrinsicContentSize
+        let closeSize = showsClose ? closeButton.intrinsicContentSize : .zero
+        let closeWidth = showsClose ? interItemSpacing + closeSize.width : 0
+        return NSSize(
+            width: titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
+            height: max(titleSize.height, closeSize.height) + contentInsets.top + contentInsets.bottom
+        )
+    }
+
+    override func layout() {
+        super.layout()
+        let contentBounds = bounds.insetBy(
+            dx: contentInsets.left,
+            dy: contentInsets.top
+        )
+
+        if showsClose {
+            let closeSize = closeButton.intrinsicContentSize
+            closeButton.frame = NSRect(
+                x: bounds.width - contentInsets.right - closeSize.width,
+                y: round((bounds.height - closeSize.height) / 2),
+                width: closeSize.width,
+                height: closeSize.height
+            )
+            titleLabel.frame = NSRect(
+                x: contentBounds.minX,
+                y: contentBounds.minY,
+                width: max(0, closeButton.frame.minX - interItemSpacing - contentBounds.minX),
+                height: contentBounds.height
+            )
+        } else {
+            titleLabel.frame = contentBounds
+            closeButton.frame = .zero
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else {
+            return
+        }
+
+        onPress?()
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard isEnabled else {
+            return
+        }
+
+        if let menu = menu ?? contextMenuProvider?() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        } else {
+            super.rightMouseDown(with: event)
+        }
+    }
+
+    private func updateVisualState() {
+        titleLabel.textColor = isActiveTab ? currentTheme.shell.textPrimary : currentTheme.shell.textSecondary
+        layer?.backgroundColor = (isActiveTab ? currentTheme.shell.selection : NSColor.clear).cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
+        alphaValue = isEnabled ? 1 : 0.4
     }
 }
 

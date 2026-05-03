@@ -1432,6 +1432,104 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testPaneTabAddButtonIsInlineAfterLastPaneTab() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let workspace = try XCTUnwrap(controller.createPaneTab())
+        let paneStack = try XCTUnwrap(workspace.focusedPaneStack)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let tabStrip = try XCTUnwrap(
+            findViews(ofType: NSStackView.self, in: rootView)
+                .first { $0.identifier?.rawValue == "pane-tab-strip-\(paneStack.id.rawValue)" }
+        )
+
+        let arrangedIdentifiers = tabStrip.arrangedSubviews.compactMap { $0.identifier?.rawValue }
+
+        XCTAssertEqual(
+            arrangedIdentifiers,
+            paneStack.panes.map { "pane-tab-\($0.id.rawValue)" } + ["pane-tab-add-\(paneStack.id.rawValue)"]
+        )
+    }
+
+    @MainActor
+    func testPaneTabInlineCloseTargetsSpecificPaneTab() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPaneID = try XCTUnwrap(updatedWorkspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        let firstCloseButton = try XCTUnwrap(
+            findViews(ofType: NSControl.self, in: rootView)
+                .first { $0.identifier?.rawValue == "pane-tab-close-\(firstPaneID.rawValue)" }
+        )
+
+        firstCloseButton.mouseDown(with: makeMouseEvent(window: window))
+
+        let paneIDs = controller.activeWorkspace()?.focusedPaneStack?.panes.map(\.id)
+        XCTAssertEqual(paneIDs, [secondPaneID])
+    }
+
+    @MainActor
+    func testSinglePaneTabDoesNotRenderInlineCloseOrGenericCloseControl() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let paneHeader = try XCTUnwrap(findView(ofType: PaneHeaderView.self, in: rootView))
+        let closeControls = findViews(ofType: NSControl.self, in: paneHeader).filter {
+            $0.identifier?.rawValue.hasPrefix("pane-tab-close-") == true
+        }
+        let genericCloseControls = findViews(ofType: NSControl.self, in: paneHeader).filter {
+            $0.accessibilityLabel() == "Close pane tab"
+        }
+
+        XCTAssertEqual(closeControls.count, 0)
+        XCTAssertEqual(genericCloseControls.count, 0)
+    }
+
+    @MainActor
+    func testPaneTabsKeepContextMenusWithInlineCloseControls() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let workspace = try XCTUnwrap(controller.createPaneTab())
+        let paneStack = try XCTUnwrap(workspace.focusedPaneStack)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter { control in
+            guard let identifier = control.identifier?.rawValue else {
+                return false
+            }
+            return identifier.hasPrefix("pane-tab-")
+                && identifier.hasPrefix("pane-tab-close-") == false
+                && identifier.hasPrefix("pane-tab-add-") == false
+        }
+
+        XCTAssertEqual(tabButtons.count, paneStack.panes.count)
+        XCTAssertTrue(tabButtons.allSatisfy { $0.menu != nil })
+    }
+
+    @MainActor
     func testPaneTabContextMenuExposesRenameAndCloseVariants() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
