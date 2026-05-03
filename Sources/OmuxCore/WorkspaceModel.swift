@@ -65,22 +65,76 @@ public struct PaneExitStatus: Equatable, Codable, Sendable {
     }
 }
 
+public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
+    public static let defaultMaxBytes = 16_384
+    public static let defaultMaxLines = 400
+
+    public var text: String
+    public var truncated: Bool
+
+    public init(text: String, truncated: Bool = false) {
+        self.text = text
+        self.truncated = truncated
+    }
+
+    public static func bounded(
+        text: String,
+        maxBytes: Int = defaultMaxBytes,
+        maxLines: Int = defaultMaxLines
+    ) -> PaneScrollbackSnapshot? {
+        let sanitizedText = text.trimmingCharacters(in: .newlines)
+        guard sanitizedText.isEmpty == false else {
+            return nil
+        }
+
+        var boundedText = sanitizedText
+        var truncated = false
+
+        if maxLines > 0 {
+            let lines = boundedText.split(separator: "\n", omittingEmptySubsequences: false)
+            if lines.count > maxLines {
+                boundedText = lines.suffix(maxLines).joined(separator: "\n")
+                truncated = true
+            }
+        }
+
+        if maxBytes > 0 {
+            let utf8 = Array(boundedText.utf8)
+            if utf8.count > maxBytes {
+                let suffix = utf8.suffix(maxBytes)
+                boundedText = String(decoding: suffix, as: UTF8.self)
+                truncated = true
+            }
+        }
+
+        let finalText = boundedText.trimmingCharacters(in: .newlines)
+        guard finalText.isEmpty == false else {
+            return nil
+        }
+
+        return PaneScrollbackSnapshot(text: finalText, truncated: truncated)
+    }
+}
+
 public struct PaneTerminalState: Equatable, Codable, Sendable {
     public var reportedWorkingDirectory: String?
     public var progress: PaneProgress?
     public var lastExit: PaneExitStatus?
     public var rendererHealthy: Bool?
+    public var restoredScrollback: PaneScrollbackSnapshot?
 
     public init(
         reportedWorkingDirectory: String? = nil,
         progress: PaneProgress? = nil,
         lastExit: PaneExitStatus? = nil,
-        rendererHealthy: Bool? = nil
+        rendererHealthy: Bool? = nil,
+        restoredScrollback: PaneScrollbackSnapshot? = nil
     ) {
         self.reportedWorkingDirectory = reportedWorkingDirectory
         self.progress = progress
         self.lastExit = lastExit
         self.rendererHealthy = rendererHealthy
+        self.restoredScrollback = restoredScrollback
     }
 
     public var statusSummary: String? {

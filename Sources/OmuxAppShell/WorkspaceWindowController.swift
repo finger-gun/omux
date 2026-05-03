@@ -1214,6 +1214,7 @@ final class PaneStackView: NSView {
         paneCardView.configure(
             headerView: headerView,
             statusText: activePane.terminalState.statusSummary,
+            restoredScrollback: activePane.terminalState.restoredScrollback,
             terminalPaneView: terminalPaneView,
             theme: theme,
             focused: activePane.id == focusedPaneID
@@ -1275,6 +1276,7 @@ final class PaneCardView: NSView {
     func configure(
         headerView: PaneHeaderView,
         statusText: String?,
+        restoredScrollback: PaneScrollbackSnapshot?,
         terminalPaneView: HostedTerminalPaneView,
         theme: WorkspaceShellTheme,
         focused: Bool
@@ -1298,12 +1300,66 @@ final class PaneCardView: NSView {
             container.addArrangedSubview(statusLabel)
             statusLabel.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
         }
+        if let restoredScrollback {
+            let restoredView = RestoredScrollbackView(snapshot: restoredScrollback, theme: theme)
+            container.addArrangedSubview(restoredView)
+            restoredView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        }
         container.addArrangedSubview(terminalPaneView)
         terminalPaneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
 
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
+    }
+}
+
+@MainActor
+private final class RestoredScrollbackView: NSView {
+    init(snapshot: PaneScrollbackSnapshot, theme: WorkspaceShellTheme) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
+
+        let label = NSTextField(labelWithString: snapshot.truncated ? "Restored scrollback (truncated)" : "Restored scrollback")
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = theme.shell.textMuted
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let textView = NSTextView()
+        textView.string = snapshot.text
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textColor = theme.shell.textMuted
+        textView.textContainerInset = NSSize(width: 8, height: 6)
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(label)
+        addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(lessThanOrEqualToConstant: 160),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            scrollView.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 4),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
     }
 }
 

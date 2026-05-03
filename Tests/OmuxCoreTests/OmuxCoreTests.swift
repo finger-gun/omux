@@ -246,6 +246,25 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(proportions[1], 0.35, accuracy: 0.0001)
     }
 
+    func testPaneScrollbackSnapshotBoundsByLinesAndBytes() throws {
+        let lineBounded = try XCTUnwrap(PaneScrollbackSnapshot.bounded(
+            text: "one\ntwo\nthree",
+            maxBytes: 1_000,
+            maxLines: 2
+        ))
+        XCTAssertEqual(lineBounded.text, "two\nthree")
+        XCTAssertTrue(lineBounded.truncated)
+
+        let byteBounded = try XCTUnwrap(PaneScrollbackSnapshot.bounded(
+            text: "abcdef",
+            maxBytes: 3,
+            maxLines: 10
+        ))
+        XCTAssertEqual(byteBounded.text, "def")
+        XCTAssertTrue(byteBounded.truncated)
+        XCTAssertNil(PaneScrollbackSnapshot.bounded(text: "\n\n"))
+    }
+
     func testOmuxValuePreservesStructuredPayloadShape() throws {
         let value: OmuxValue = .object([
             "path": .string("/tmp/project"),

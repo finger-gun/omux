@@ -145,6 +145,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         let hostView: GhosttyHostedSurfaceView
         var surface: ghostty_surface_t?
         var descriptor: SessionDescriptor?
+        var reportedWorkingDirectory: String?
         var retainedCStringPointers: [UnsafeMutablePointer<CChar>] = []
         var size: TerminalSize = .default
 
@@ -359,6 +360,11 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
 
         lock.lock()
+        if case .workingDirectoryChanged(let path) = terminalAction,
+           let state = surfaces[runtimeSurfaceID] {
+            state.reportedWorkingDirectory = path
+            state.descriptor?.workingDirectory = path
+        }
         let handler = terminalActionHandler
         lock.unlock()
         return handler?(RuntimeTerminalActionRecord(runtimeSurfaceID: runtimeSurfaceID, action: terminalAction)) ?? false
@@ -890,6 +896,11 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
 
         let size = ghostty_surface_size(surface)
+        let inheritedConfig = ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_SPLIT)
+        let inheritedWorkingDirectory = inheritedConfig.working_directory.map(String.init(cString:))
+        let workingDirectory = state.reportedWorkingDirectory
+            ?? inheritedWorkingDirectory
+            ?? descriptor.workingDirectory
         return TerminalSessionSnapshot(
             paneID: paneID,
             sessionID: sessionID,
@@ -897,10 +908,59 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             transcript: "",
             currentInput: "",
             shell: descriptor.shell,
-            workingDirectory: descriptor.workingDirectory,
+            workingDirectory: workingDirectory,
             columns: size.columns > 0 ? Int(size.columns) : defaultSize.columns,
             rows: size.rows > 0 ? Int(size.rows) : defaultSize.rows
         )
+    }
+
+    public func scrollbackSnapshot(
+        runtimeSurfaceID: String,
+        maxBytes: Int,
+        maxLines: Int
+    ) -> PaneScrollbackSnapshot? {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return nil
+        }
+
+        return mainActorValue {
+            var text = ghostty_text_s()
+            let selection = ghostty_selection_s(
+                top_left: ghostty_point_s(
+                    tag: GHOSTTY_POINT_SURFACE,
+                    coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                    x: 0,
+                    y: 0
+                ),
+                bottom_right: ghostty_point_s(
+                    tag: GHOSTTY_POINT_SURFACE,
+                    coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                    x: 0,
+                    y: 0
+                ),
+                rectangle: false
+            )
+            guard ghostty_surface_read_text(surface, selection, &text) else {
+                return nil
+            }
+            defer {
+                ghostty_surface_free_text(surface, &text)
+            }
+            guard let pointer = text.text, text.text_len > 0 else {
+                return nil
+            }
+            let bytes = UnsafeBufferPointer(
+                start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
+                count: Int(text.text_len)
+            )
+            return PaneScrollbackSnapshot.bounded(
+                text: String(decoding: bytes, as: UTF8.self),
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+        }
     }
 
     @MainActor

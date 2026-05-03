@@ -114,9 +114,11 @@ public final class WorkspaceController: @unchecked Sendable {
 
     func persistenceSnapshot() -> WorkspacePersistenceSnapshot? {
         lock.lock()
-        let storedWorkspaces = workspaces.map(Self.sanitizedWorkspaceForPersistence)
+        let currentWorkspaces = workspaces
         let storedActiveWorkspaceID = activeWorkspaceID
         lock.unlock()
+
+        let storedWorkspaces = currentWorkspaces.map(sanitizedWorkspaceForPersistence)
 
         guard storedWorkspaces.isEmpty == false else {
             return nil
@@ -1315,7 +1317,7 @@ public final class WorkspaceController: @unchecked Sendable {
         return Pane(title: title, session: session)
     }
 
-    private static func sanitizedWorkspaceForPersistence(_ workspace: Workspace) -> Workspace {
+    private func sanitizedWorkspaceForPersistence(_ workspace: Workspace) -> Workspace {
         Workspace(
             id: workspace.id,
             generatedName: workspace.generatedName,
@@ -1326,7 +1328,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
-    private static func sanitizedTabForPersistence(_ tab: Tab) -> Tab {
+    private func sanitizedTabForPersistence(_ tab: Tab) -> Tab {
         Tab(
             id: tab.id,
             title: tab.title,
@@ -1335,7 +1337,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
-    private static func sanitizedLayoutNodeForPersistence(_ node: TabLayoutNode) -> TabLayoutNode {
+    private func sanitizedLayoutNodeForPersistence(_ node: TabLayoutNode) -> TabLayoutNode {
         switch node {
         case .paneStack(let paneStack):
             let panes = paneStack.panes.map(sanitizedPaneForPersistence)
@@ -1355,12 +1357,29 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
-    private static func sanitizedPaneForPersistence(_ pane: Pane) -> Pane {
+    private func sanitizedPaneForPersistence(_ pane: Pane) -> Pane {
+        let liveSnapshot = bridge.snapshot(for: pane.id)
+        let scrollback = bridge.scrollbackSnapshot(for: pane.id) ?? pane.terminalState.restoredScrollback
+        var session = pane.session
+        if let workingDirectory = pane.terminalState.reportedWorkingDirectory, workingDirectory.isEmpty == false {
+            session.workingDirectory = workingDirectory
+        } else if let workingDirectory = liveSnapshot?.workingDirectory, workingDirectory.isEmpty == false {
+            session.workingDirectory = workingDirectory
+        }
+        return Pane(
+            id: pane.id,
+            title: pane.title,
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+    }
+
+    private static func sanitizedPaneForRestore(_ pane: Pane) -> Pane {
         Pane(
             id: pane.id,
             title: pane.title,
             session: pane.session,
-            terminalState: PaneTerminalState()
+            terminalState: PaneTerminalState(restoredScrollback: pane.terminalState.restoredScrollback)
         )
     }
 
@@ -1406,7 +1425,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private static func normalizedRestoredLayoutNode(_ node: TabLayoutNode) -> TabLayoutNode {
         switch node {
         case .paneStack(let paneStack):
-            let panes = paneStack.panes.map(sanitizedPaneForPersistence)
+            let panes = paneStack.panes.map(sanitizedPaneForRestore)
             let focusedPaneID = panes.contains(where: { $0.id == paneStack.focusedPaneID })
                 ? paneStack.focusedPaneID
                 : panes[0].id

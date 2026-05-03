@@ -163,6 +163,30 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotEqual(updatedWorkspace.focusedPane?.id, originalPaneID)
     }
 
+    func testPaneCreationInheritsLatestKnownWorkingDirectory() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let originalPane = try XCTUnwrap(workspace.focusedPane)
+        let originalSurfaceID = try XCTUnwrap(bridge.surface(for: originalPane.id)?.runtimeSurfaceID)
+        runtime.emit(.workingDirectoryChanged("/tmp/project/packages/api"), on: originalSurfaceID)
+
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let splitPane = try XCTUnwrap(splitWorkspace.focusedPane)
+        XCTAssertEqual(splitPane.session.workingDirectory, "/tmp/project/packages/api")
+
+        let splitSurfaceID = try XCTUnwrap(bridge.surface(for: splitPane.id)?.runtimeSurfaceID)
+        runtime.emit(.workingDirectoryChanged("/tmp/project/packages/web"), on: splitSurfaceID)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+
+        XCTAssertEqual(paneTabWorkspace.focusedPane?.session.workingDirectory, "/tmp/project/packages/web")
+    }
+
     func testNewPanesDoNotInheritTerminalReportedTitleFromFocusedPane() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -428,6 +452,93 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(restoredProportions[1], 0.3, accuracy: 0.0001)
         XCTAssertEqual(restoredActiveWorkspace.id, secondWorkspace.id)
         XCTAssertEqual(restoredController.activeWorkspace()?.id, secondWorkspace.id)
+    }
+
+    func testWorkspaceControllerPersistsDistinctPaneWorkingDirectoriesAcrossWorkspaces() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let omuxWorkspace = try controller.openWorkspace(at: "/Users/example/projects/omux")
+        let omuxPane = try XCTUnwrap(omuxWorkspace.focusedPane)
+        runtime.emit(
+            .workingDirectoryChanged("/Users/example/projects/omux/Sources"),
+            on: try XCTUnwrap(bridge.surface(for: omuxPane.id)?.runtimeSurfaceID)
+        )
+
+        let dungeonWorkspace = try controller.createWorkspace()
+        let dungeonPane = try XCTUnwrap(dungeonWorkspace.focusedPane)
+        runtime.emit(
+            .workingDirectoryChanged("/Users/example/projects/DungeonPlanner"),
+            on: try XCTUnwrap(bridge.surface(for: dungeonPane.id)?.runtimeSurfaceID)
+        )
+        let dungeonSplit = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
+        let dungeonSplitPane = try XCTUnwrap(dungeonSplit.focusedPane)
+        runtime.emit(
+            .workingDirectoryChanged("/Users/example/projects/DungeonPlanner/App"),
+            on: try XCTUnwrap(bridge.surface(for: dungeonSplitPane.id)?.runtimeSurfaceID)
+        )
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
+        let restoredController = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try XCTUnwrap(restoredController.restorePersistedState(snapshot))
+
+        let restoredDirectories = restoredController.allWorkspaces()
+            .flatMap(\.tabs)
+            .flatMap(\.panes)
+            .map(\.session.workingDirectory)
+
+        XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/omux/Sources"))
+        XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/DungeonPlanner"))
+        XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/DungeonPlanner/App"))
+    }
+
+    func testWorkspacePersistenceIncludesBoundedPaneScrollback() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = (1...500).map { "line-\($0)" }.joined(separator: "\n")
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
+        let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.truncated, true)
+        XCTAssertTrue(persistedPane.terminalState.restoredScrollback?.text.contains("line-500") == true)
+        XCTAssertNotEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").first, "line-1")
+    }
+
+    func testWorkspaceRestorePreservesScrollbackAsHistoricalContext() throws {
+        let scrollback = PaneScrollbackSnapshot(text: "previous output", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(
+            title: "project",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.restoredScrollback, scrollback)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.workingDirectory, "/tmp/project")
     }
 
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
@@ -1624,6 +1735,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private var transcriptBySurface: [String: String] = [:]
     private var inputBySurface: [String: String] = [:]
     private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
 
     func createSurface(for paneID: PaneID) throws -> String {
@@ -1704,7 +1816,20 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
         )
     }
 
+    func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
+        PaneScrollbackSnapshot.bounded(
+            text: scrollbackBySurface[runtimeSurfaceID] ?? "",
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
+    }
+
     func emit(_ action: TerminalAction, on runtimeSurfaceID: String) {
+        if case .workingDirectoryChanged(let path) = action,
+           var session = sessions[runtimeSurfaceID] {
+            session.workingDirectory = path
+            sessions[runtimeSurfaceID] = session
+        }
         _ = terminalActionHandler?(RuntimeTerminalActionRecord(runtimeSurfaceID: runtimeSurfaceID, action: action))
     }
 
@@ -1746,6 +1871,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
                 .path
         }
         sessions[runtimeSurfaceID] = session
+        emit(.workingDirectoryChanged(session.workingDirectory), on: runtimeSurfaceID)
     }
 
     private func printfOutput(from command: String) -> String? {

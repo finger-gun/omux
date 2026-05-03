@@ -1064,6 +1064,31 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(snapshot.rows, 40)
     }
 
+    func testBridgeReturnsBoundedScrollbackSnapshot() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = "one\ntwo\nthree"
+
+        let snapshot = try XCTUnwrap(bridge.scrollbackSnapshot(for: pane.id, maxBytes: 1_000, maxLines: 2))
+        XCTAssertEqual(snapshot.text, "two\nthree")
+        XCTAssertTrue(snapshot.truncated)
+    }
+
+    func testBridgeReturnsNilWhenScrollbackUnavailable() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+
+        XCTAssertNil(bridge.scrollbackSnapshot(for: pane.id))
+    }
+
     func testBridgePublishesTypedTerminalActionEvents() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1154,6 +1179,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var mouseScrolls: [(x: Double, y: Double, precise: Bool, momentum: NSEvent.Phase)] = []
     private(set) var mousePressures: [(stage: Int, pressure: Double)] = []
     var selectionsBySurface: [String: RuntimeTerminalSelection] = [:]
+    var scrollbackBySurface: [String: String] = [:]
 
     func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
         try loadVisibleState(from: path)
@@ -1254,6 +1280,14 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
 
     func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection? {
         selectionsBySurface[runtimeSurfaceID]
+    }
+
+    func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
+        PaneScrollbackSnapshot.bounded(
+            text: scrollbackBySurface[runtimeSurfaceID] ?? "",
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
     }
 
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws {

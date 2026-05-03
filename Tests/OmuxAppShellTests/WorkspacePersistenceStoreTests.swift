@@ -32,6 +32,50 @@ final class WorkspacePersistenceStoreTests: XCTestCase {
         XCTAssertEqual(store.load(), snapshot)
     }
 
+    func testWorkspacePersistenceStoreMigratesFallbackSnapshot() throws {
+        let primarySuiteName = "WorkspacePersistenceStoreTests-primary-\(UUID().uuidString)"
+        let fallbackSuiteName = "WorkspacePersistenceStoreTests-fallback-\(UUID().uuidString)"
+        let primaryDefaults = try XCTUnwrap(UserDefaults(suiteName: primarySuiteName))
+        let fallbackDefaults = try XCTUnwrap(UserDefaults(suiteName: fallbackSuiteName))
+        primaryDefaults.removePersistentDomain(forName: primarySuiteName)
+        fallbackDefaults.removePersistentDomain(forName: fallbackSuiteName)
+        defer {
+            primaryDefaults.removePersistentDomain(forName: primarySuiteName)
+            fallbackDefaults.removePersistentDomain(forName: fallbackSuiteName)
+        }
+
+        let fallbackStore = WorkspacePersistenceStore(defaults: fallbackDefaults)
+        let primaryStore = WorkspacePersistenceStore(
+            defaults: primaryDefaults,
+            fallbackDefaults: fallbackDefaults
+        )
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let scrollback = PaneScrollbackSnapshot(text: "restored output", truncated: false)
+        let pane = Pane(
+            title: "hx",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            customName: "Client Shell",
+            rootPath: "/tmp/project",
+            tabs: [tab],
+            focusedTabID: tab.id
+        )
+        let snapshot = WorkspacePersistenceSnapshot(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+
+        fallbackStore.save(snapshot)
+
+        XCTAssertEqual(primaryStore.load(), snapshot)
+        XCTAssertEqual(WorkspacePersistenceStore(defaults: primaryDefaults).load(), snapshot)
+        XCTAssertNil(fallbackStore.load())
+    }
+
     func testWorkspacePersistenceStoreClearsSavedSnapshot() throws {
         let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

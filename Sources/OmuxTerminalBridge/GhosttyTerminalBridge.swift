@@ -52,6 +52,7 @@ public protocol GhosttyRuntime {
         runtimeSurfaceID: String,
         defaultSize: TerminalSize
     ) -> TerminalSessionSnapshot?
+    func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot?
 }
 
 public extension GhosttyRuntime {
@@ -114,6 +115,13 @@ public extension GhosttyRuntime {
         _ = descriptor
         _ = runtimeSurfaceID
         _ = defaultSize
+        return nil
+    }
+
+    func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
+        _ = runtimeSurfaceID
+        _ = maxBytes
+        _ = maxLines
         return nil
     }
 }
@@ -180,7 +188,7 @@ public struct RuntimeTerminalSelection: Equatable, Sendable {
 
 public final class GhosttyTerminalBridge: @unchecked Sendable {
     private final class SessionState {
-        let descriptor: SessionDescriptor
+        var descriptor: SessionDescriptor
         let runtimeSurfaceID: String
         var size: TerminalSize
 
@@ -325,6 +333,24 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return makeSnapshot(for: paneID)
+    }
+
+    public func scrollbackSnapshot(
+        for paneID: PaneID,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> PaneScrollbackSnapshot? {
+        lock.lock()
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let runtimeSurfaceID else {
+            return nil
+        }
+        return runtime.scrollbackSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
     }
 
     public func selection(forPane paneID: PaneID) -> RuntimeTerminalSelection? {
@@ -493,6 +519,11 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         if let surface = surfaces.values.first(where: { $0.runtimeSurfaceID == record.runtimeSurfaceID }),
            let sessionID = sessionsByPane[surface.paneID]
         {
+            if case .workingDirectoryChanged(let path) = record.action,
+               var descriptor = sessionStateByPane[surface.paneID]?.descriptor {
+                descriptor.workingDirectory = path
+                sessionStateByPane[surface.paneID]?.descriptor = descriptor
+            }
             event = TerminalActionEvent(
                 paneID: surface.paneID,
                 sessionID: sessionID,
