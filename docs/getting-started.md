@@ -112,6 +112,9 @@ name = "monokai-soda"
 # font_size = 13
 # scrollback_lines = 100000
 # option_as_alt = "right"
+
+[workspace]
+# default_root_path = "~"
 ```
 
 List and switch themes:
@@ -128,7 +131,7 @@ omux config doctor
 omux config reload
 ```
 
-For all supported keys, theme tokens, built-in themes, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
+For all supported keys, default workspace root behavior, theme tokens, built-in themes, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
 
 ## 6. Add a simple hook
 

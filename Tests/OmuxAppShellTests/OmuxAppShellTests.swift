@@ -19,6 +19,39 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
+    private func requestControlMethod(_ method: ControlMethod, socketPath: String) throws -> JSONRPCResponse {
+        let requestFinished = expectation(description: "control-plane \(method.rawValue) request finished")
+        let responseBox = LockedBox<JSONRPCResponse?>(nil)
+        let errorBox = LockedBox<Error?>(nil)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketPath)
+                responseBox.value = try client.request(method: method, params: nil)
+            } catch {
+                errorBox.value = error
+            }
+            requestFinished.fulfill()
+        }
+
+        wait(for: [requestFinished], timeout: 3)
+
+        if let error = errorBox.value {
+            throw error
+        }
+        return try XCTUnwrap(responseBox.value)
+    }
+
+    private func targetPaneID(in response: JSONRPCResponse) -> PaneID? {
+        guard case .object(let object)? = response.result,
+              case .object(let target)? = object["target"],
+              case .string(let paneID)? = target["paneID"]
+        else {
+            return nil
+        }
+
+        return PaneID(rawValue: paneID)
+    }
+
     func testWorkspaceControllerCreatesTabsAndSplits() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -36,6 +69,18 @@ final class OmuxAppShellTests: XCTestCase {
         let withSplit = try XCTUnwrap(controller.splitFocusedPane())
         XCTAssertEqual(withSplit.focusedTab?.panes.count, 2)
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
+    }
+
+    func testWorkspaceControllerUsesConfiguredDefaultRootForNewWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+
+        let workspace = try controller.createWorkspace()
+
+        XCTAssertEqual(workspace.rootPath, "/tmp")
     }
 
     func testWorkspaceControllerCanSplitDown() throws {
@@ -84,6 +129,25 @@ final class OmuxAppShellTests: XCTestCase {
         guard case .paneStack = nestedChildren[1] else {
             return XCTFail("expected nested children to be pane stacks")
         }
+    }
+
+    func testWorkspaceControllerCyclesPanesInVisibleLayoutOrder() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondPaneID = try XCTUnwrap(splitWorkspace.focusedPane?.id)
+        XCTAssertEqual(splitWorkspace.focusedTab?.visiblePaneIDs, [firstPaneID, secondPaneID])
+
+        let next = try XCTUnwrap(controller.focusNextPane())
+        XCTAssertEqual(next.focusedPane?.id, firstPaneID)
+
+        let previous = try XCTUnwrap(controller.focusPreviousPane())
+        XCTAssertEqual(previous.focusedPane?.id, secondPaneID)
     }
 
     @MainActor
@@ -137,6 +201,53 @@ final class OmuxAppShellTests: XCTestCase {
         let closed = try XCTUnwrap(controller.closePaneTab(paneID: focusedPaneTabID))
         XCTAssertEqual(closed.focusedTab?.panes.count, 1)
         XCTAssertEqual(closed.focusedTab?.focusedPaneID, originalPaneID)
+    }
+
+    func testWorkspaceControllerCyclesPaneTabsInFocusedStack() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var focusEvents = [ControlPlaneEvent]()
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneTabFocused.rawValue {
+                focusEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let withPaneTab = try XCTUnwrap(controller.createPaneTab())
+        let secondPaneID = try XCTUnwrap(withPaneTab.focusedPane?.id)
+
+        let next = try XCTUnwrap(controller.focusNextPaneTab())
+        XCTAssertEqual(next.focusedPane?.id, firstPaneID)
+
+        let previous = try XCTUnwrap(controller.focusPreviousPaneTab())
+        XCTAssertEqual(previous.focusedPane?.id, secondPaneID)
+        XCTAssertEqual(focusEvents.map(\.paneID), [firstPaneID, secondPaneID])
+        XCTAssertNil(controller.focusNextPane())
+    }
+
+    func testWorkspaceControllerKeepsSinglePaneTabNavigationInert() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var focusEventCount = 0
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneTabFocused.rawValue {
+                focusEventCount += 1
+            }
+        }
+
+        _ = try controller.openWorkspace(at: "/tmp")
+
+        XCTAssertNil(controller.focusNextPaneTab())
+        XCTAssertNil(controller.focusPreviousPaneTab())
+        XCTAssertNil(controller.focusNextPane())
+        XCTAssertNil(controller.focusPreviousPane())
+        XCTAssertEqual(focusEventCount, 0)
     }
 
     func testWorkspaceControllerCreatesPaneTabInExplicitStack() throws {
@@ -1623,6 +1734,120 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testControlPlaneOpenWorkspaceWithoutPathUsesConfiguredDefaultRoot() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "open.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+
+        let requestFinished = expectation(description: "control-plane open request finished")
+        let responseBox = LockedBox<JSONRPCResponse?>(nil)
+        let errorBox = LockedBox<Error?>(nil)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketURL.path(percentEncoded: false))
+                responseBox.value = try client.request(method: .openWorkspace, params: nil)
+            } catch {
+                errorBox.value = error
+            }
+            requestFinished.fulfill()
+        }
+
+        wait(for: [requestFinished], timeout: 3)
+
+        XCTAssertNil(errorBox.value)
+        XCTAssertNil(responseBox.value?.error)
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/tmp")
+    }
+
+    @MainActor
+    func testControlPlaneNavigationMethodsReturnFocusedTerminalContext() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "navigation.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let withPaneTab = try XCTUnwrap(controller.createPaneTab())
+        let secondPaneID = try XCTUnwrap(withPaneTab.focusedPane?.id)
+
+        let nextTabResponse = try requestControlMethod(.focusNextPaneTab, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertNil(nextTabResponse.error)
+        XCTAssertEqual(targetPaneID(in: nextTabResponse), firstPaneID)
+
+        let previousTabResponse = try requestControlMethod(.focusPreviousPaneTab, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertNil(previousTabResponse.error)
+        XCTAssertEqual(targetPaneID(in: previousTabResponse), secondPaneID)
+
+        let singleVisiblePaneResponse = try requestControlMethod(.focusNextPane, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertEqual(singleVisiblePaneResponse.error?.code, 409)
+
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let splitPaneID = try XCTUnwrap(splitWorkspace.focusedPane?.id)
+        let nextPaneResponse = try requestControlMethod(.focusNextPane, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertNil(nextPaneResponse.error)
+        XCTAssertEqual(targetPaneID(in: nextPaneResponse), secondPaneID)
+
+        let previousPaneResponse = try requestControlMethod(.focusPreviousPane, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertNil(previousPaneResponse.error)
+        XCTAssertEqual(targetPaneID(in: previousPaneResponse), splitPaneID)
+    }
+
+    @MainActor
     func testControlPlaneWorkspaceMutationsRunOnMainThreadForHookDrivenRequests() throws {
         let runtime = MainThreadRecordingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1634,6 +1859,7 @@ final class OmuxAppShellTests: XCTestCase {
             bridge: bridge,
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []
@@ -1692,6 +1918,7 @@ final class OmuxAppShellTests: XCTestCase {
             bridge: bridge,
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []

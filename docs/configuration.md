@@ -20,6 +20,9 @@ name = "monokai-soda"
 # scrollback_lines = 100000
 # option_as_alt = "right"
 
+[workspace]
+# default_root_path = "~"
+
 [ghostty]
 # "copy-on-select" = false
 ```
@@ -132,6 +135,27 @@ Notes:
 1. OpenMUX owns the user-facing setting, but the behavior is intentionally Ghostty-compatible.
 2. OpenMUX does not hardcode Swedish, German, US, or other layout-specific Option character maps; text comes from AppKit for the active keyboard layout.
 3. For manual verification of international layouts and IME workflows, see the contributor guidance in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+## `[workspace]` settings
+
+OpenMUX currently models these workspace settings directly:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `default_root_path` | string | Default workspace root used when OpenMUX opens a workspace without an explicit path. |
+
+### `workspace.default_root_path`
+
+`default_root_path` controls the root path used for first launch, new workspaces created from the app shell, and `omux open` when no path is provided.
+
+Example:
+
+```toml
+[workspace]
+default_root_path = "~/projects"
+```
+
+The path must resolve to an existing directory. `~` and `~/...` expand to the current user's home directory. If unset, OpenMUX uses the current user's home directory.
 
 ## `[ghostty]` pass-through
 

@@ -106,6 +106,12 @@ public struct OmuxCLICommand {
             case "pane-tab":
                 let response = try client.request(method: .createPaneTab)
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-tab-next":
+                let response = try client.request(method: .focusNextPaneTab)
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-tab-prev":
+                let response = try client.request(method: .focusPreviousPaneTab)
+                writeLine(response.result?.prettyPrinted ?? "")
             case "pane-tab-focus":
                 guard commandArguments.count >= 2 else {
                     writeLine("usage: omux pane-tab-focus <pane-id>")
@@ -127,16 +133,27 @@ public struct OmuxCLICommand {
 
                 let response = try client.request(method: .closePaneTab, params: params)
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-next":
+                let response = try client.request(method: .focusNextPane)
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-prev":
+                let response = try client.request(method: .focusPreviousPane)
+                writeLine(response.result?.prettyPrinted ?? "")
             case "open":
-                guard commandArguments.count >= 2 else {
-                    writeLine("usage: omux open <path>")
+                guard commandArguments.count <= 2 else {
+                    writeLine("usage: omux open [path]")
                     return 1
                 }
 
-                let path = commandArguments[1]
+                let params: RPCValue?
+                if commandArguments.count == 2 {
+                    params = .object(["path": .string(resolveCLIPath(commandArguments[1]))])
+                } else {
+                    params = nil
+                }
                 let response = try client.request(
                     method: .openWorkspace,
-                    params: .object(["path": .string(path)])
+                    params: params
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
             case "focus":
@@ -236,12 +253,16 @@ public struct OmuxCLICommand {
       omux panes
       omux events
       omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
-      omux open <path>
+      omux open [path]
       omux tab
       omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]
       omux pane-tab
+      omux pane-tab-next
+      omux pane-tab-prev
       omux pane-tab-focus <pane-id>
       omux pane-tab-close [pane-id]
+      omux pane-next
+      omux pane-prev
       omux focus <session-id>|--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused
       omux run <session-id> <command>
       omux run --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <command>
@@ -250,6 +271,19 @@ public struct OmuxCLICommand {
       omux restore <workspace-id>
       omux install-cli [destination]
     """
+
+    private func resolveCLIPath(_ path: String) -> String {
+        if let resolved = OmuxWorkspacePathResolver.resolve(path) {
+            return resolved
+        }
+
+        return URL(
+            fileURLWithPath: path,
+            relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        )
+        .standardizedFileURL
+        .path
+    }
 
     private func parseSplitRequest(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, axis: PaneSplitAxis)? {
         var remaining = arguments
@@ -660,6 +694,7 @@ public struct OmuxCLICommand {
             schema: current.schema,
             theme: OmuxConfigTheme(name: theme.name),
             terminal: current.terminal,
+            workspace: current.workspace,
             ghostty: current.ghostty,
             sourceURL: configURL
         )
@@ -724,6 +759,10 @@ public struct OmuxCLICommand {
                 lines.append("option_as_alt = \"right\"")
             }
         }
+
+        lines.append("")
+        lines.append("[workspace]")
+        lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
 
         lines.append("")
         lines.append("[ghostty]")

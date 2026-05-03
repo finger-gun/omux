@@ -187,6 +187,14 @@ public struct OmuxConfigTerminal: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigWorkspace: Equatable, Sendable {
+    public let defaultRootPath: String
+
+    public init(defaultRootPath: String = OmuxWorkspacePathResolver.defaultRootPath) {
+        self.defaultRootPath = defaultRootPath
+    }
+}
+
 public struct OmuxGhosttyConfigEntry: Equatable, Sendable {
     public let key: String
     public let value: OmuxTOMLValue
@@ -203,6 +211,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
     public let theme: OmuxConfigTheme
     public let terminal: OmuxConfigTerminal
+    public let workspace: OmuxConfigWorkspace
     public let ghostty: [OmuxGhosttyConfigEntry]
     public let sourceURL: URL?
 
@@ -210,12 +219,14 @@ public struct OmuxConfig: Equatable, Sendable {
         schema: Int,
         theme: OmuxConfigTheme,
         terminal: OmuxConfigTerminal,
+        workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ghostty: [OmuxGhosttyConfigEntry],
         sourceURL: URL? = nil
     ) {
         self.schema = schema
         self.theme = theme
         self.terminal = terminal
+        self.workspace = workspace
         self.ghostty = ghostty
         self.sourceURL = sourceURL
     }
@@ -224,8 +235,39 @@ public struct OmuxConfig: Equatable, Sendable {
         schema: OmuxConfigSchemaVersion,
         theme: OmuxConfigTheme(name: "monokai-soda"),
         terminal: OmuxConfigTerminal(),
+        workspace: OmuxConfigWorkspace(),
         ghostty: []
     )
+}
+
+public enum OmuxWorkspacePathResolver {
+    public static var defaultRootPath: String {
+        FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+    }
+
+    public static func resolve(_ rawPath: String) -> String? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+
+        let expanded = expandHome(in: trimmed)
+        guard expanded.hasPrefix("/") else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL.path
+    }
+
+    private static func expandHome(in path: String) -> String {
+        if path == "~" {
+            return defaultRootPath
+        }
+        if path.hasPrefix("~/") {
+            return defaultRootPath + String(path.dropFirst())
+        }
+        return path
+    }
 }
 
 public struct OmuxConfigLoadResult: Equatable, Sendable {
@@ -288,6 +330,9 @@ public enum OmuxConfigTemplate {
         # font_size = 13
         # scrollback_lines = 100000
         # option_as_alt = "right"
+
+        [workspace]
+        # default_root_path = "~"
 
         [ghostty]
         # "copy-on-select" = false
@@ -643,7 +688,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -707,6 +752,7 @@ public struct OmuxConfigLoader {
                 schema: config.schema,
                 theme: OmuxConfigTheme(name: themeName),
                 terminal: config.terminal,
+                workspace: config.workspace,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
             )
@@ -715,6 +761,7 @@ public struct OmuxConfigLoader {
                 schema: config.schema,
                 theme: config.theme,
                 terminal: config.terminal,
+                workspace: config.workspace,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
             )
@@ -832,6 +879,63 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let workspaceAllowedKeys: Set<String> = ["default_root_path"]
+        var defaultRootPath = config.workspace.defaultRootPath
+        for entry in document.entries(in: "workspace") {
+            guard workspaceAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [workspace] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "default_root_path":
+                guard let value = entry.value.stringValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "workspace.default_root_path must be a string.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard let resolvedPath = OmuxWorkspacePathResolver.resolve(value) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "workspace.default_root_path must be an absolute path or start with '~'.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                var isDirectory: ObjCBool = false
+                guard fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "workspace.default_root_path must point to an existing directory.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                defaultRootPath = resolvedPath
+            default:
+                break
+            }
+        }
+
         let ghosttyEntries = document.entries(in: "ghostty").map {
             OmuxGhosttyConfigEntry(key: $0.key, value: $0.value, line: $0.line)
         }
@@ -845,6 +949,7 @@ public struct OmuxConfigLoader {
                 scrollbackLines: scrollbackLines,
                 optionAsAlt: optionAsAlt
             ),
+            workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
             ghostty: ghosttyEntries,
             sourceURL: sourceURL
         )

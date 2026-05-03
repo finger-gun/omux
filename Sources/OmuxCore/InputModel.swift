@@ -142,19 +142,23 @@ public struct OpenMUXShortcutClassifier: Sendable {
     public init() {}
 
     public static func isOpenMUXShortcut(_ raw: RawKeyInput) -> Bool {
+        let key = (raw.charactersIgnoringModifiers.isEmpty ? raw.characters : raw.charactersIgnoringModifiers)
+            .lowercased()
+
+        if key == "\t" {
+            return raw.modifiers.containsOnlyControl || raw.modifiers.containsOnlyControlOrShift
+        }
+
         guard raw.modifiers.containsCommand,
               raw.modifiers.containsOptionOrControl == false
         else {
             return false
         }
 
-        let key = (raw.charactersIgnoringModifiers.isEmpty ? raw.characters : raw.charactersIgnoringModifiers)
-            .lowercased()
-
         switch key {
         case "d":
             return raw.modifiers.containsOnlyCommandOrShift
-        case "b", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+        case "b", "t", "w", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
             return raw.modifiers.containsOnlyCommand
         default:
             return false
@@ -177,6 +181,16 @@ public extension KeyModifiers {
 
     var containsOnlyCommandOrShift: Bool {
         containsCommand && subtracting([.leftCommand, .rightCommand, .leftShift, .rightShift, .capsLock]).isEmpty
+    }
+
+    var containsOnlyControl: Bool {
+        intersection([.leftControl, .rightControl]).isEmpty == false
+            && subtracting([.leftControl, .rightControl, .capsLock]).isEmpty
+    }
+
+    var containsOnlyControlOrShift: Bool {
+        intersection([.leftControl, .rightControl]).isEmpty == false
+            && subtracting([.leftControl, .rightControl, .leftShift, .rightShift, .capsLock]).isEmpty
     }
 }
 

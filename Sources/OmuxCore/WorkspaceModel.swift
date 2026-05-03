@@ -214,6 +214,14 @@ public struct PaneStack: Equatable, Codable, Sendable {
         panes.first(where: { $0.id == focusedPaneID })
     }
 
+    public func nextPaneID(after paneID: PaneID? = nil) -> PaneID? {
+        adjacentPaneID(from: paneID ?? focusedPaneID, offset: 1)
+    }
+
+    public func previousPaneID(before paneID: PaneID? = nil) -> PaneID? {
+        adjacentPaneID(from: paneID ?? focusedPaneID, offset: -1)
+    }
+
     @discardableResult
     public mutating func focusPane(_ paneID: PaneID) -> Bool {
         guard panes.contains(where: { $0.id == paneID }) else {
@@ -244,6 +252,17 @@ public struct PaneStack: Equatable, Codable, Sendable {
             focusedPaneID = panes[nextIndex].id
         }
         return removedPane
+    }
+
+    private func adjacentPaneID(from paneID: PaneID, offset: Int) -> PaneID? {
+        guard panes.count > 1,
+              let index = panes.firstIndex(where: { $0.id == paneID })
+        else {
+            return nil
+        }
+
+        let nextIndex = (index + offset + panes.count) % panes.count
+        return panes[nextIndex].id
     }
 }
 
@@ -312,6 +331,17 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
             return paneStack.panes
         case .split(_, _, let children):
             return children.flatMap(\.panes)
+        }
+    }
+
+    public var visiblePaneIDs: [PaneID] {
+        switch self {
+        case .paneStack(let paneStack):
+            return paneStack.panes.contains(where: { $0.id == paneStack.focusedPaneID })
+                ? [paneStack.focusedPaneID]
+                : []
+        case .split(_, _, let children):
+            return children.flatMap(\.visiblePaneIDs)
         }
     }
 
@@ -671,6 +701,10 @@ public struct Tab: Equatable, Codable, Sendable {
         rootLayout.panes
     }
 
+    public var visiblePaneIDs: [PaneID] {
+        rootLayout.visiblePaneIDs
+    }
+
     public var paneStacks: [PaneStack] {
         rootLayout.paneStacks
     }
@@ -681,6 +715,22 @@ public struct Tab: Equatable, Codable, Sendable {
 
     public var focusedPaneStack: PaneStack? {
         rootLayout.paneStack(containingPaneID: focusedPaneID)
+    }
+
+    public func nextPaneTabID() -> PaneID? {
+        focusedPaneStack?.nextPaneID(after: focusedPaneID)
+    }
+
+    public func previousPaneTabID() -> PaneID? {
+        focusedPaneStack?.previousPaneID(before: focusedPaneID)
+    }
+
+    public func nextVisiblePaneID() -> PaneID? {
+        adjacentVisiblePaneID(offset: 1)
+    }
+
+    public func previousVisiblePaneID() -> PaneID? {
+        adjacentVisiblePaneID(offset: -1)
     }
 
     @discardableResult
@@ -695,6 +745,38 @@ public struct Tab: Equatable, Codable, Sendable {
             focusedPaneID = pane.id
         }
         return true
+    }
+
+    @discardableResult
+    public mutating func focusNextPaneTab() -> Bool {
+        guard let paneID = nextPaneTabID() else {
+            return false
+        }
+        return focusPane(paneID)
+    }
+
+    @discardableResult
+    public mutating func focusPreviousPaneTab() -> Bool {
+        guard let paneID = previousPaneTabID() else {
+            return false
+        }
+        return focusPane(paneID)
+    }
+
+    @discardableResult
+    public mutating func focusNextVisiblePane() -> Bool {
+        guard let paneID = nextVisiblePaneID() else {
+            return false
+        }
+        return focusPane(paneID)
+    }
+
+    @discardableResult
+    public mutating func focusPreviousVisiblePane() -> Bool {
+        guard let paneID = previousVisiblePaneID() else {
+            return false
+        }
+        return focusPane(paneID)
     }
 
     @discardableResult
@@ -782,6 +864,18 @@ public struct Tab: Equatable, Codable, Sendable {
                 ]
             )
         }
+    }
+
+    private func adjacentVisiblePaneID(offset: Int) -> PaneID? {
+        let paneIDs = visiblePaneIDs
+        guard paneIDs.count > 1,
+              let index = paneIDs.firstIndex(of: focusedPaneID)
+        else {
+            return nil
+        }
+
+        let nextIndex = (index + offset + paneIDs.count) % paneIDs.count
+        return paneIDs[nextIndex]
     }
 }
 
@@ -878,6 +972,42 @@ public struct Workspace: Equatable, Codable, Sendable {
         }
 
         return false
+    }
+
+    @discardableResult
+    public mutating func focusNextPaneTab() -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        return tabs[tabIndex].focusNextPaneTab()
+    }
+
+    @discardableResult
+    public mutating func focusPreviousPaneTab() -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        return tabs[tabIndex].focusPreviousPaneTab()
+    }
+
+    @discardableResult
+    public mutating func focusNextPane() -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        return tabs[tabIndex].focusNextVisiblePane()
+    }
+
+    @discardableResult
+    public mutating func focusPreviousPane() -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+            return false
+        }
+
+        return tabs[tabIndex].focusPreviousVisiblePane()
     }
 
     public mutating func appendTab(_ tab: Tab, focus: Bool = true) {

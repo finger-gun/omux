@@ -145,8 +145,14 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     private func handleOnMain(request: JSONRPCRequest) throws -> JSONRPCResponse {
         switch ControlMethod(rawValue: request.method) {
         case .openWorkspace:
-            let path = request.params?.objectValue?["path"]?.stringValue ?? FileManager.default.currentDirectoryPath
-            let workspace = try controller.openWorkspace(at: path)
+            let rawPath = request.params?.objectValue?["path"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let workspace: Workspace
+            if let rawPath, rawPath.isEmpty == false {
+                workspace = try controller.openWorkspace(at: OmuxWorkspacePathResolver.resolve(rawPath) ?? rawPath)
+            } else {
+                workspace = try controller.createWorkspace()
+            }
             return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
         case .listWorkspaces:
             if request.params?.objectValue?["full"]?.boolValue == true {
@@ -230,12 +236,36 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane tab not found"))
+        case .focusNextPaneTab:
+            return navigationResponse(
+                id: request.id,
+                workspace: controller.focusNextPaneTab(),
+                unavailableMessage: "next pane tab unavailable"
+            )
+        case .focusPreviousPaneTab:
+            return navigationResponse(
+                id: request.id,
+                workspace: controller.focusPreviousPaneTab(),
+                unavailableMessage: "previous pane tab unavailable"
+            )
         case .closePaneTab:
             let paneID = request.params?.objectValue?["paneID"]?.stringValue.map(PaneID.init(rawValue:))
             if let workspace = try controller.closePaneTab(paneID: paneID) {
                 return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane tab cannot be closed"))
+        case .focusNextPane:
+            return navigationResponse(
+                id: request.id,
+                workspace: controller.focusNextPane(),
+                unavailableMessage: "next pane unavailable"
+            )
+        case .focusPreviousPane:
+            return navigationResponse(
+                id: request.id,
+                workspace: controller.focusPreviousPane(),
+                unavailableMessage: "previous pane unavailable"
+            )
         case .focusSession:
             guard let target = ControlPlaneTerminalTarget(rpcValue: request.params) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target"))
@@ -307,6 +337,27 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
         case .none:
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: -32601, message: "method not found"))
         }
+    }
+
+    @MainActor
+    private func navigationResponse(
+        id: String?,
+        workspace: Workspace?,
+        unavailableMessage: String
+    ) -> JSONRPCResponse {
+        guard let workspace,
+              let context = controller.resolveTerminalTarget(.focused)
+        else {
+            return JSONRPCResponse(id: id, error: JSONRPCError(code: 409, message: unavailableMessage))
+        }
+
+        return JSONRPCResponse(
+            id: id,
+            result: ControlPlaneActionResult(
+                target: context,
+                workspace: .object(workspace.rpcObject)
+            ).rpcValue
+        )
     }
 
     private func handleStream(descriptor: Int32, request: JSONRPCRequest) throws -> Bool {

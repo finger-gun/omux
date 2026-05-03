@@ -20,6 +20,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var splitRightMenuItem: NSMenuItem?
     private weak var splitDownMenuItem: NSMenuItem?
     private weak var removePaneMenuItem: NSMenuItem?
+    private weak var createPaneTabMenuItem: NSMenuItem?
+    private weak var closePaneTabMenuItem: NSMenuItem?
+    private weak var nextPaneTabMenuItem: NSMenuItem?
+    private weak var nextPaneMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
     private weak var installCLIMenuItem: NSMenuItem?
     private weak var previousWorkspaceMenuItem: NSMenuItem?
@@ -39,7 +43,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             registry: UserHookDirectoryDiscovery.registry(in: OmuxConfigPaths.hooksDirectoryURL),
             executionMode: .asynchronous
         )
-        let workspaceController = WorkspaceController(bridge: bridge, hookRunner: hookRunner)
+        let workspaceController = WorkspaceController(
+            bridge: bridge,
+            hookRunner: hookRunner,
+            defaultWorkspaceRootPath: preparedConfiguration.defaultWorkspaceRootPath
+        )
         self.workspaceController = workspaceController
         self.configurationCoordinator = OpenMUXConfigurationCoordinator(
             bridge: bridge,
@@ -84,6 +92,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             NSApplication.shared.activate(ignoringOtherApps: true)
             configurationCoordinator.onThemeChange = { [weak self] theme in
                 self?.windowController?.updateTheme(theme)
+            }
+            configurationCoordinator.onWorkspaceDefaultRootChange = { [weak self] path in
+                self?.workspaceController.updateDefaultWorkspaceRootPath(path)
             }
             configurationCoordinator.onDiagnosticsChange = { diagnostics in
                 diagnostics.forEach { diagnostic in
@@ -174,6 +185,38 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         } catch {
             assertionFailure("Failed to remove active pane: \(error)")
         }
+    }
+
+    @objc private func createPaneTabFromMenu(_ sender: Any?) {
+        _ = sender
+        do {
+            _ = try workspaceController.createPaneTab()
+            refreshMenuValidation()
+        } catch {
+            assertionFailure("Failed to create pane tab: \(error)")
+        }
+    }
+
+    @objc private func closePaneTabFromMenu(_ sender: Any?) {
+        _ = sender
+        do {
+            _ = try workspaceController.closePaneTab()
+            refreshMenuValidation()
+        } catch {
+            assertionFailure("Failed to close pane tab: \(error)")
+        }
+    }
+
+    @objc private func focusNextPaneTabFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = workspaceController.focusNextPaneTab()
+        refreshMenuValidation()
+    }
+
+    @objc private func focusNextPaneFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = workspaceController.focusNextPane()
+        refreshMenuValidation()
     }
 
     @objc private func toggleSidebarFromMenu(_ sender: Any?) {
@@ -282,7 +325,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let deleteWorkspaceMenuItem = NSMenuItem(
             title: "Delete Workspace",
             action: #selector(deleteWorkspaceFromMenu(_:)),
-            keyEquivalent: "w"
+            keyEquivalent: ""
         )
         deleteWorkspaceMenuItem.target = self
         viewMenu.addItem(deleteWorkspaceMenuItem)
@@ -372,6 +415,42 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         removePaneMenuItem.target = self
         viewMenu.addItem(removePaneMenuItem)
 
+        let createPaneTabMenuItem = NSMenuItem(
+            title: "New Pane Tab",
+            action: #selector(createPaneTabFromMenu(_:)),
+            keyEquivalent: "t"
+        )
+        createPaneTabMenuItem.keyEquivalentModifierMask = [.command]
+        createPaneTabMenuItem.target = self
+        viewMenu.addItem(createPaneTabMenuItem)
+
+        let closePaneTabMenuItem = NSMenuItem(
+            title: "Close Pane Tab",
+            action: #selector(closePaneTabFromMenu(_:)),
+            keyEquivalent: "w"
+        )
+        closePaneTabMenuItem.keyEquivalentModifierMask = [.command]
+        closePaneTabMenuItem.target = self
+        viewMenu.addItem(closePaneTabMenuItem)
+
+        let nextPaneTabMenuItem = NSMenuItem(
+            title: "Next Pane Tab",
+            action: #selector(focusNextPaneTabFromMenu(_:)),
+            keyEquivalent: "\t"
+        )
+        nextPaneTabMenuItem.keyEquivalentModifierMask = [.control]
+        nextPaneTabMenuItem.target = self
+        viewMenu.addItem(nextPaneTabMenuItem)
+
+        let nextPaneMenuItem = NSMenuItem(
+            title: "Next Pane",
+            action: #selector(focusNextPaneFromMenu(_:)),
+            keyEquivalent: "\t"
+        )
+        nextPaneMenuItem.keyEquivalentModifierMask = [.control, .shift]
+        nextPaneMenuItem.target = self
+        viewMenu.addItem(nextPaneMenuItem)
+
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
@@ -388,6 +467,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.splitRightMenuItem = splitRightMenuItem
         self.splitDownMenuItem = splitDownMenuItem
         self.removePaneMenuItem = removePaneMenuItem
+        self.createPaneTabMenuItem = createPaneTabMenuItem
+        self.closePaneTabMenuItem = closePaneTabMenuItem
+        self.nextPaneTabMenuItem = nextPaneTabMenuItem
+        self.nextPaneMenuItem = nextPaneMenuItem
     }
 
     private func refreshMenuValidation() {
@@ -407,6 +490,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         splitRightMenuItem?.isEnabled = hasWorkspace
         splitDownMenuItem?.isEnabled = hasWorkspace
         removePaneMenuItem?.isEnabled = workspaceController.canRemoveActivePane()
+        createPaneTabMenuItem?.isEnabled = hasWorkspace
+        closePaneTabMenuItem?.isEnabled = workspaceController.canClosePaneTab()
+        nextPaneTabMenuItem?.isEnabled = workspaceController.canFocusPaneTab()
+        nextPaneMenuItem?.isEnabled = workspaceController.canFocusPane()
     }
 
     private func restoreInitialWorkspace() throws -> Workspace {
@@ -421,7 +508,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
-        let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
+        let workspace = try workspaceController.createWorkspace()
         persistWorkspaceState()
         return workspace
     }

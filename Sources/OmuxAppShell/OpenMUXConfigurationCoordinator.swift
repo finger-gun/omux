@@ -6,6 +6,7 @@ import OmuxTheme
 @MainActor
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
+    let defaultWorkspaceRootPath: String
     let compiledConfigURL: URL?
     let compiledHash: String?
     let diagnostics: [OmuxConfigDiagnostic]
@@ -19,6 +20,7 @@ struct OpenMUXConfigurationReloadResult: Sendable {
 @MainActor
 final class OpenMUXConfigurationCoordinator {
     var onThemeChange: ((WorkspaceShellTheme) -> Void)?
+    var onWorkspaceDefaultRootChange: ((String) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
 
     private let bridge: GhosttyTerminalBridge
@@ -26,6 +28,7 @@ final class OpenMUXConfigurationCoordinator {
     private let reloadLock = NSLock()
     private let stateLock = NSLock()
     private var currentTheme: WorkspaceShellTheme
+    private var currentDefaultWorkspaceRootPath: String
     private var currentCompiledConfigURL: URL?
     private var currentCompiledHash: String?
     private var currentDiagnostics: [OmuxConfigDiagnostic]
@@ -38,6 +41,7 @@ final class OpenMUXConfigurationCoordinator {
         self.bridge = bridge
         self.evaluator = evaluator
         self.currentTheme = initialState.theme
+        self.currentDefaultWorkspaceRootPath = initialState.defaultWorkspaceRootPath
         self.currentCompiledConfigURL = initialState.compiledConfigURL
         self.currentCompiledHash = initialState.compiledHash
         self.currentDiagnostics = initialState.diagnostics
@@ -52,6 +56,7 @@ final class OpenMUXConfigurationCoordinator {
         guard let output = evaluation.compilerOutput else {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: evaluation.diagnostics
@@ -63,6 +68,7 @@ final class OpenMUXConfigurationCoordinator {
             evaluator.garbageCollect(activeFileURL: fileURL)
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 compiledConfigURL: fileURL,
                 compiledHash: output.hash,
                 diagnostics: evaluation.diagnostics
@@ -70,6 +76,7 @@ final class OpenMUXConfigurationCoordinator {
         } catch {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: evaluation.diagnostics + [
@@ -86,6 +93,12 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.lock()
         defer { stateLock.unlock() }
         return currentDiagnostics
+    }
+
+    func defaultWorkspaceRootPath() -> String {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentDefaultWorkspaceRootPath
     }
 
     @discardableResult
@@ -119,13 +132,15 @@ final class OpenMUXConfigurationCoordinator {
             }
 
             let shellTheme = WorkspaceShellTheme(theme: theme)
+            let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
             stateLock.withLock {
                 currentTheme = shellTheme
+                currentDefaultWorkspaceRootPath = defaultWorkspaceRootPath
                 currentCompiledConfigURL = fileURL
                 currentCompiledHash = output.hash
                 currentDiagnostics = diagnostics
             }
-            publish(theme: shellTheme, diagnostics: diagnostics)
+            publish(theme: shellTheme, defaultWorkspaceRootPath: defaultWorkspaceRootPath, diagnostics: diagnostics)
             return OpenMUXConfigurationReloadResult(applied: shouldRefresh, diagnostics: diagnostics)
         } catch {
             let diagnostics = evaluation.diagnostics + [
@@ -143,12 +158,15 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.withLock {
             currentDiagnostics = diagnostics
         }
-        publish(theme: nil, diagnostics: diagnostics)
+        publish(theme: nil, defaultWorkspaceRootPath: nil, diagnostics: diagnostics)
     }
 
-    private func publish(theme: WorkspaceShellTheme?, diagnostics: [OmuxConfigDiagnostic]) {
+    private func publish(theme: WorkspaceShellTheme?, defaultWorkspaceRootPath: String?, diagnostics: [OmuxConfigDiagnostic]) {
         if let theme {
             onThemeChange?(theme)
+        }
+        if let defaultWorkspaceRootPath {
+            onWorkspaceDefaultRootChange?(defaultWorkspaceRootPath)
         }
         onDiagnosticsChange?(diagnostics)
     }

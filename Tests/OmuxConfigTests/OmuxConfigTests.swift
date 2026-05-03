@@ -39,6 +39,7 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(result.config.theme.name == "nord")
         #expect(result.config.terminal == OmuxConfig.defaults.terminal)
+        #expect(result.config.workspace == OmuxConfig.defaults.workspace)
     }
 
     @Test
@@ -150,6 +151,93 @@ struct OmuxConfigTests {
         let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
         #expect(result.hasErrors)
         #expect(result.diagnostics.contains(where: { $0.message.contains("terminal.option_as_alt") }))
+    }
+
+    @Test
+    func loadsWorkspaceDefaultRootSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let projectRoot = home.appendingPathComponent("projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        try write(
+            """
+            schema = 1
+
+            [workspace]
+            default_root_path = "\(projectRoot.path)"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.workspace.defaultRootPath == projectRoot.standardizedFileURL.path)
+    }
+
+    @Test
+    func expandsHomeWorkspaceDefaultRootSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [workspace]
+            default_root_path = "~"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.workspace.defaultRootPath == OmuxWorkspacePathResolver.defaultRootPath)
+    }
+
+    @Test
+    func rejectsInvalidWorkspaceDefaultRootSettings() throws {
+        let cases = [
+            ("123", "workspace.default_root_path must be a string"),
+            ("\"relative/path\"", "workspace.default_root_path must be an absolute path"),
+            ("\"/definitely/not/a/real/omux/path\"", "workspace.default_root_path must point to an existing directory"),
+        ]
+
+        for (literal, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [workspace]
+                default_root_path = \(literal)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+            #expect(result.config.workspace == OmuxConfig.defaults.workspace)
+        }
+    }
+
+    @Test
+    func rejectsUnknownWorkspaceKey() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [workspace]
+            nope = "x"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains(where: { $0.message.contains("Unknown [workspace] key") }))
     }
 }
 

@@ -44,6 +44,40 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(output[0].contains("/tmp/demo"))
     }
 
+    func testCLIOpenAcceptsOptionalPath() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "open.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "open"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "open", "/tmp"]), 0)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.openWorkspace.rawValue,
+            ControlMethod.openWorkspace.rawValue,
+        ])
+        XCTAssertNil(requests.value[0].params)
+        guard case .object(let params)? = requests.value[1].params,
+              case .string("/tmp")? = params["path"] else {
+            return XCTFail("expected explicit open path")
+        }
+        XCTAssertEqual(output, ["ok", "ok"])
+    }
+
     func testCLISupportsTabSplitAndRunCommands() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -70,8 +104,12 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "split"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "split", "down"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-next"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-prev"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-focus", "pane-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-close", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-next"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-prev"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "--pane", "pane-1", "--", "echo", "hello"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "send-text", "--session", "session-1", "--", "hello", "world"]), 0)
@@ -85,8 +123,12 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.splitPane.rawValue):columns",
             "\(ControlMethod.splitPane.rawValue):rows",
             "\(ControlMethod.createPaneTab.rawValue):none",
+            "\(ControlMethod.focusNextPaneTab.rawValue):none",
+            "\(ControlMethod.focusPreviousPaneTab.rawValue):none",
             "\(ControlMethod.focusPaneTab.rawValue):none",
             "\(ControlMethod.closePaneTab.rawValue):none",
+            "\(ControlMethod.focusNextPane.rawValue):none",
+            "\(ControlMethod.focusPreviousPane.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.sendText.rawValue):none",

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OmuxConfig
 import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
@@ -27,6 +28,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
     private let hookRunner: ExternalHookRunner
+    private var defaultWorkspaceRootPath: String
     private var workspaces: [Workspace] = []
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
@@ -51,10 +53,12 @@ public final class WorkspaceController: @unchecked Sendable {
 
     public init(
         bridge: GhosttyTerminalBridge,
-        hookRunner: ExternalHookRunner
+        hookRunner: ExternalHookRunner,
+        defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
+        self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         _ = terminalActionCoordinator
     }
 
@@ -397,13 +401,41 @@ public final class WorkspaceController: @unchecked Sendable {
         return workspaces[index].tabs.count > 1 || focusedTab.panes.count > 1
     }
 
+    public func canClosePaneTab() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeWorkspaceIndex.flatMap { index in
+            workspaces[index].focusedPaneStack?.panes.count
+        }.map { $0 > 1 } ?? false
+    }
+
+    public func canFocusPaneTab() -> Bool {
+        canClosePaneTab()
+    }
+
+    public func canFocusPane() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeWorkspaceIndex.flatMap { index in
+            workspaces[index].focusedTab?.visiblePaneIDs.count
+        }.map { $0 > 1 } ?? false
+    }
+
     public var terminalBridge: GhosttyTerminalBridge {
         bridge
     }
 
+    public func updateDefaultWorkspaceRootPath(_ path: String) {
+        lock.lock()
+        defaultWorkspaceRootPath = path
+        lock.unlock()
+    }
+
     @discardableResult
     public func createWorkspace() throws -> Workspace {
-        let rootPath = activeWorkspace()?.rootPath ?? FileManager.default.currentDirectoryPath
+        lock.lock()
+        let rootPath = defaultWorkspaceRootPath
+        lock.unlock()
         return try openWorkspace(at: rootPath)
     }
 
@@ -802,28 +834,12 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func focus(paneID: PaneID) -> Workspace? {
-        var updatedWorkspace: Workspace?
-        lock.lock()
-        if let index = activeWorkspaceIndex,
-           workspaces[index].focusedPane?.id != paneID,
-           workspaces[index].focus(paneID: paneID) {
-            updatedWorkspace = workspaces[index]
+        let updatedWorkspace = focusActiveWorkspace {
+            $0.focusedPane?.id != paneID && $0.focus(paneID: paneID)
         }
-        lock.unlock()
 
         if let updatedWorkspace {
-            let focusedPane = updatedWorkspace.focusedPane
-            publishControlPlaneEvent(
-                ControlPlaneEvent(
-                    name: .paneTabFocused,
-                    workspaceID: updatedWorkspace.id,
-                    tabID: updatedWorkspace.focusedTabID,
-                    paneID: focusedPane?.id ?? paneID,
-                    sessionID: focusedPane?.session.id,
-                    payload: .object([:])
-                )
-            )
-            onChange?(updatedWorkspace)
+            publishPaneFocusChange(updatedWorkspace, fallbackPaneID: paneID)
         }
 
         return updatedWorkspace
@@ -832,6 +848,26 @@ public final class WorkspaceController: @unchecked Sendable {
     @discardableResult
     public func focusPaneTab(paneID: PaneID) -> Workspace? {
         focus(paneID: paneID)
+    }
+
+    @discardableResult
+    public func focusNextPaneTab() -> Workspace? {
+        focusActiveWorkspaceNavigation { $0.focusNextPaneTab() }
+    }
+
+    @discardableResult
+    public func focusPreviousPaneTab() -> Workspace? {
+        focusActiveWorkspaceNavigation { $0.focusPreviousPaneTab() }
+    }
+
+    @discardableResult
+    public func focusNextPane() -> Workspace? {
+        focusActiveWorkspaceNavigation { $0.focusNextPane() }
+    }
+
+    @discardableResult
+    public func focusPreviousPane() -> Workspace? {
+        focusActiveWorkspaceNavigation { $0.focusPreviousPane() }
     }
 
     @discardableResult
@@ -1079,6 +1115,39 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return previousWorkspaceID != activeWorkspaceID && workspaces.contains(where: { $0.id == previousWorkspaceID })
+    }
+
+    private func focusActiveWorkspace(_ transform: (inout Workspace) -> Bool) -> Workspace? {
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        if let index = activeWorkspaceIndex, transform(&workspaces[index]) {
+            updatedWorkspace = workspaces[index]
+        }
+        lock.unlock()
+        return updatedWorkspace
+    }
+
+    private func focusActiveWorkspaceNavigation(_ transform: (inout Workspace) -> Bool) -> Workspace? {
+        let updatedWorkspace = focusActiveWorkspace(transform)
+        if let updatedWorkspace {
+            publishPaneFocusChange(updatedWorkspace)
+        }
+        return updatedWorkspace
+    }
+
+    private func publishPaneFocusChange(_ workspace: Workspace, fallbackPaneID: PaneID? = nil) {
+        let focusedPane = workspace.focusedPane
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .paneTabFocused,
+                workspaceID: workspace.id,
+                tabID: workspace.focusedTabID,
+                paneID: focusedPane?.id ?? fallbackPaneID,
+                sessionID: focusedPane?.session.id,
+                payload: .object([:])
+            )
+        )
+        onChange?(workspace)
     }
 
     private var activeWorkspaceIndex: Int? {

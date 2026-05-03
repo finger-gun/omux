@@ -47,6 +47,59 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(event.route, .shortcut)
     }
 
+    func testPaneTabCommandChordsRouteToShortcut() {
+        let commandT = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 17,
+                characters: "t",
+                charactersIgnoringModifiers: "t",
+                modifiers: [.leftCommand]
+            )
+        )
+        let commandW = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 13,
+                characters: "w",
+                charactersIgnoringModifiers: "w",
+                modifiers: [.leftCommand]
+            )
+        )
+
+        XCTAssertEqual(commandT.route, .shortcut)
+        XCTAssertEqual(commandW.route, .shortcut)
+    }
+
+    func testControlTabNavigationChordsRouteToShortcut() {
+        let controlTab = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 48,
+                characters: "\t",
+                charactersIgnoringModifiers: "\t",
+                modifiers: [.leftControl]
+            )
+        )
+        let controlShiftTab = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 48,
+                characters: "\t",
+                charactersIgnoringModifiers: "\t",
+                modifiers: [.leftControl, .leftShift]
+            )
+        )
+        let optionTab = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 48,
+                characters: "\t",
+                charactersIgnoringModifiers: "\t",
+                modifiers: [.leftOption]
+            )
+        )
+
+        XCTAssertEqual(controlTab.route, .shortcut)
+        XCTAssertEqual(controlShiftTab.route, .shortcut)
+        XCTAssertEqual(optionTab.route, .terminal)
+    }
+
     func testUnknownCommandChordRemainsTerminalInput() {
         let raw = RawKeyInput(
             keyCode: 0,
