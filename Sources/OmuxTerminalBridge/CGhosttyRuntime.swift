@@ -926,41 +926,64 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
 
         return mainActorValue {
-            var text = ghostty_text_s()
-            let selection = ghostty_selection_s(
-                top_left: ghostty_point_s(
-                    tag: GHOSTTY_POINT_SURFACE,
-                    coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                    x: 0,
-                    y: 0
-                ),
-                bottom_right: ghostty_point_s(
-                    tag: GHOSTTY_POINT_SURFACE,
-                    coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                    x: 0,
-                    y: 0
-                ),
-                rectangle: false
-            )
-            guard ghostty_surface_read_text(surface, selection, &text) else {
-                return nil
-            }
-            defer {
-                ghostty_surface_free_text(surface, &text)
-            }
-            guard let pointer = text.text, text.text_len > 0 else {
-                return nil
-            }
-            let bytes = UnsafeBufferPointer(
-                start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
-                count: Int(text.text_len)
-            )
-            return PaneScrollbackSnapshot.bounded(
-                text: String(decoding: bytes, as: UTF8.self),
+            guard let snapshot = self.readSurfaceText(
+                surface,
+                tag: GHOSTTY_POINT_SCREEN,
                 maxBytes: maxBytes,
                 maxLines: maxLines
-            )
+            ) ?? self.readSurfaceText(
+                surface,
+                tag: GHOSTTY_POINT_VIEWPORT,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            ) else {
+                return nil
+            }
+            return snapshot
         }
+    }
+
+    @MainActor
+    private func readSurfaceText(
+        _ surface: ghostty_surface_t,
+        tag: ghostty_point_tag_e,
+        maxBytes: Int,
+        maxLines: Int
+    ) -> PaneScrollbackSnapshot? {
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        guard ghostty_surface_read_text(surface, selection, &text) else {
+            return nil
+        }
+        defer {
+            ghostty_surface_free_text(surface, &text)
+        }
+        guard let pointer = text.text, text.text_len > 0 else {
+            return nil
+        }
+        let bytes = UnsafeBufferPointer(
+            start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
+            count: Int(text.text_len)
+        )
+        return PaneScrollbackSnapshot.bounded(
+            text: String(decoding: bytes, as: UTF8.self),
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
     }
 
     @MainActor

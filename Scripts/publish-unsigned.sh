@@ -9,6 +9,7 @@ BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.fingergun.omux}"
 BUNDLE_VERSION="${BUNDLE_VERSION:-1}"
 SHORT_VERSION="${SHORT_VERSION:-0.1.0}"
 GHOSTTY_XCFRAMEWORK="$ROOT_DIR/Vendor/ghostty/macos/GhosttyKit.xcframework"
+GHOSTTY_SHARE_DIR="$ROOT_DIR/Vendor/ghostty/zig-out/share"
 LIGHT_ICON_SOURCE="$ROOT_DIR/assets/icon-light.png"
 DARK_ICON_SOURCE="$ROOT_DIR/assets/icon-dark.png"
 ICON_FILE_NAME="OpenMUX.icns"
@@ -56,6 +57,12 @@ cp "$CLI_BIN" "$MACOS_DIR/omux"
 chmod +x "$MACOS_DIR/omux"
 
 find "$BIN_DIR" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$RESOURCES_DIR"/ \;
+if [ -d "$GHOSTTY_SHARE_DIR/ghostty" ]; then
+  cp -R "$GHOSTTY_SHARE_DIR/ghostty" "$RESOURCES_DIR/"
+fi
+if [ -d "$GHOSTTY_SHARE_DIR/terminfo" ]; then
+  cp -R "$GHOSTTY_SHARE_DIR/terminfo" "$RESOURCES_DIR/"
+fi
 
 if [ ! -f "$LIGHT_ICON_SOURCE" ]; then
   echo "error: missing light icon source at $LIGHT_ICON_SOURCE" >&2

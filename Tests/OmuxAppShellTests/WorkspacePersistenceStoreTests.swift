@@ -73,7 +73,40 @@ final class WorkspacePersistenceStoreTests: XCTestCase {
 
         XCTAssertEqual(primaryStore.load(), snapshot)
         XCTAssertEqual(WorkspacePersistenceStore(defaults: primaryDefaults).load(), snapshot)
-        XCTAssertNil(fallbackStore.load())
+        XCTAssertEqual(fallbackStore.load(), snapshot)
+    }
+
+    func testWorkspacePersistenceStoreRestoresLatestBackupWhenDefaultsAreMissing() throws {
+        let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let backupDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspacePersistenceStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: backupDirectory)
+        }
+
+        let store = WorkspacePersistenceStore(defaults: defaults, backupDirectory: backupDirectory)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(title: "hx", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            customName: "Client Shell",
+            rootPath: "/tmp/project",
+            tabs: [tab],
+            focusedTabID: tab.id
+        )
+        let snapshot = WorkspacePersistenceSnapshot(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+
+        store.save(snapshot)
+        store.save(nil)
+
+        XCTAssertEqual(store.load(), snapshot)
     }
 
     func testWorkspacePersistenceStoreClearsSavedSnapshot() throws {

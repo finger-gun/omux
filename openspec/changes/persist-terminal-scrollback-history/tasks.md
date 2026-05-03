@@ -11,11 +11,11 @@
 
 ## 3. Persist and restore historical context
 
-- [x] 3.1 Include bounded per-pane scrollback snapshots in workspace persistence.
-- [x] 3.2 Restore saved scrollback as historical context without claiming live process restoration.
+- [ ] 3.1 Include bounded per-pane scrollback snapshots in workspace persistence. **Paused:** disabled from workspace persistence until a terminal-native or hook-based UX is designed.
+- [ ] 3.2 Restore saved scrollback as historical context without claiming live process restoration. **Paused:** disabled from pane rendering because the separate restored-history UI is not acceptable.
 - [x] 3.3 Keep persisted scrollback out of hook payloads and control-plane events by default.
 
 ## 4. Validate behavior
 
-- [x] 4.1 Add tests for scrollback bounds, persistence, restore, and unavailable runtime behavior.
+- [ ] 4.1 Add tests for scrollback bounds, persistence, restore, and unavailable runtime behavior. **Paused:** active tests now cover bounds, bridge capture, unavailable runtime behavior, and disabled workspace persistence/restore.
 - [x] 4.2 Run targeted terminal bridge and app-shell tests plus the repository test suite or closest existing target set.

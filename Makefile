@@ -41,7 +41,7 @@ package-release:
 	./Scripts/package-release.sh
 
 dev:
-	swift run OpenMUXApp
+	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" swift run OpenMUXApp
 
 app: dev
 

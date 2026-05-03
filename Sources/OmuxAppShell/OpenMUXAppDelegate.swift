@@ -8,7 +8,7 @@ import OmuxTerminalBridge
 import OmuxTheme
 
 @MainActor
-public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
+public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
@@ -75,6 +75,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
                 initialTheme: initialTheme
             )
             self.windowController = windowController
+            windowController.window?.delegate = self
             windowController.showWindow(nil)
             if let window = windowController.window {
                 window.center()
@@ -102,10 +103,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        _ = sender
+        persistWorkspaceState()
+        return .terminateNow
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         persistWorkspaceState()
         controlPlaneService.stop()
+    }
+
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        _ = sender
+        persistWorkspaceState()
+        return true
     }
 
     @objc private func createWorkspaceFromMenu(_ sender: Any?) {
@@ -402,12 +415,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate {
                 if let restoredWorkspace = try workspaceController.restorePersistedState(snapshot) {
                     persistWorkspaceState()
                     return restoredWorkspace
-                }
-            } catch {
-                fputs("warning: failed to restore persisted workspace state: \(error)\n", stderr)
-                workspacePersistenceStore.save(nil)
             }
+        } catch {
+            fputs("warning: failed to restore persisted workspace state: \(error)\n", stderr)
         }
+    }
 
         let workspace = try workspaceController.openWorkspace(at: FileManager.default.currentDirectoryPath)
         persistWorkspaceState()

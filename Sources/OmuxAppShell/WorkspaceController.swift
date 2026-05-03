@@ -1359,7 +1359,6 @@ public final class WorkspaceController: @unchecked Sendable {
 
     private func sanitizedPaneForPersistence(_ pane: Pane) -> Pane {
         let liveSnapshot = bridge.snapshot(for: pane.id)
-        let scrollback = bridge.scrollbackSnapshot(for: pane.id) ?? pane.terminalState.restoredScrollback
         var session = pane.session
         if let workingDirectory = pane.terminalState.reportedWorkingDirectory, workingDirectory.isEmpty == false {
             session.workingDirectory = workingDirectory
@@ -1370,7 +1369,7 @@ public final class WorkspaceController: @unchecked Sendable {
             id: pane.id,
             title: pane.title,
             session: session,
-            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+            terminalState: PaneTerminalState()
         )
     }
 
@@ -1379,7 +1378,7 @@ public final class WorkspaceController: @unchecked Sendable {
             id: pane.id,
             title: pane.title,
             session: pane.session,
-            terminalState: PaneTerminalState(restoredScrollback: pane.terminalState.restoredScrollback)
+            terminalState: PaneTerminalState()
         )
     }
 
