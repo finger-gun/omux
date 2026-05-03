@@ -3,6 +3,7 @@ import XCTest
 @testable import OmuxCLI
 @testable import OmuxConfig
 @testable import OmuxControlPlane
+@testable import OmuxCore
 @testable import OmuxTheme
 
 final class OmuxCLITests: XCTestCase {
@@ -123,6 +124,181 @@ final class OmuxCLITests: XCTestCase {
 
         XCTAssertEqual(command.run(arguments: ["omux", "list", "--full"]), 0)
         XCTAssertEqual(output, ["\(ControlMethod.listWorkspaces.rawValue):true"])
+    }
+
+    func testCLISplitAcceptsDirectionAndTargetInEitherOrder() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "split.sock")
+            .path(percentEncoded: false)
+
+        let requests = LockedValue<[RPCValue?]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request.params)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "split", "left", "--focused"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "split", "--pane", "pane-1", "up"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "split", "sideways"]), 1)
+
+        guard case .object(let leftParams)? = requests.value[0],
+              case .object(let upParams)? = requests.value[1],
+              case .object(let leftTarget)? = leftParams["target"],
+              case .object(let upTarget)? = upParams["target"]
+        else {
+            return XCTFail("expected split params")
+        }
+
+        XCTAssertEqual(leftParams["axis"], .string(PaneSplitAxis.columns.rawValue))
+        XCTAssertEqual(leftTarget["type"], .string("focused"))
+        XCTAssertEqual(upParams["axis"], .string(PaneSplitAxis.rows.rawValue))
+        XCTAssertEqual(upTarget["type"], .string("pane"))
+        XCTAssertEqual(upTarget["id"], .string("pane-1"))
+        XCTAssertEqual(output.last, "usage: omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]")
+    }
+
+    func testCLIHistoryRequestsScopesAndFormatsHumanOutput() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "h.sock")
+            .path(percentEncoded: false)
+
+        let requests = LockedValue<[(method: String, params: RPCValue?)]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append((request.method, request.params))
+            return JSONRPCResponse(id: request.id, result: .object([
+                "maxBytes": .integer(16_384),
+                "maxLines": .integer(400),
+                "items": .array([
+                    .object([
+                        "workspaceID": .string("workspace-1"),
+                        "workspaceName": .string("OMUX"),
+                        "tabID": .string("tab-1"),
+                        "tabTitle": .string("Main"),
+                        "paneStackID": .string("stack-1"),
+                        "paneID": .string("pane-1"),
+                        "paneTitle": .string("omux"),
+                        "sessionID": .string("session-1"),
+                        "workingDirectory": .string("/tmp/omux"),
+                        "text": .string("hello\nworld"),
+                        "lineCount": .integer(2),
+                        "byteCount": .integer(11),
+                        "truncated": .bool(false),
+                        "unavailable": .null,
+                    ]),
+                ]),
+            ]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "history"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "all", "--max-lines", "2", "--max-bytes", "50"]), 0)
+
+        XCTAssertEqual(requests.value.map(\.method), Array(repeating: ControlMethod.terminalHistory.rawValue, count: 3))
+        XCTAssertTrue(output.joined(separator: "\n").contains("== OMUX (workspace-1) / Main (tab-1) / omux (pane-1)"))
+        XCTAssertTrue(output.joined(separator: "\n").contains("cwd: /tmp/omux"))
+        XCTAssertTrue(output.joined(separator: "\n").contains("hello\nworld"))
+
+        guard case .object(let noArgParams)? = requests.value[0].params,
+              case .object(let paneParams)? = requests.value[1].params,
+              case .object(let allParams)? = requests.value[2].params
+        else {
+            return XCTFail("expected history params")
+        }
+        XCTAssertEqual(noArgParams["scope"], .string("activeWorkspace"))
+        XCTAssertEqual(paneParams["scope"], .string("pane"))
+        XCTAssertEqual(paneParams["paneID"], .string("pane-1"))
+        XCTAssertEqual(allParams["scope"], .string("all"))
+        XCTAssertEqual(allParams["maxLines"], .integer(2))
+        XCTAssertEqual(allParams["maxBytes"], .integer(50))
+    }
+
+    func testCLIHistorySupportsJSONOutputAndInvalidArguments() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "hj.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            XCTAssertEqual(request.method, ControlMethod.terminalHistory.rawValue)
+            return JSONRPCResponse(id: request.id, result: .object([
+                "items": .array([]),
+            ]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "--json", "all"]), 0)
+        XCTAssertTrue(output.first?.contains("\"items\" : [") == true)
+
+        output.removeAll()
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "--max-lines"]), 1)
+        XCTAssertEqual(output, ["usage: omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]"])
+    }
+
+    func testCLIHistoryPrintsUnavailablePane() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "hu.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            JSONRPCResponse(id: request.id, result: .object([
+                "items": .array([
+                    .object([
+                        "workspaceID": .string("workspace-1"),
+                        "workspaceName": .string("OMUX"),
+                        "tabID": .string("tab-1"),
+                        "tabTitle": .string("Main"),
+                        "paneStackID": .null,
+                        "paneID": .string("pane-1"),
+                        "paneTitle": .string("omux"),
+                        "sessionID": .string("session-1"),
+                        "workingDirectory": .null,
+                        "text": .string(""),
+                        "lineCount": .integer(0),
+                        "byteCount": .integer(0),
+                        "truncated": .bool(false),
+                        "unavailable": .string("history unavailable"),
+                    ]),
+                ]),
+            ]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "pane-1"]), 0)
+        XCTAssertTrue(output.contains("unavailable: history unavailable"))
+        XCTAssertTrue(output.contains("(no history)"))
     }
 
     func testCLIPrintsControlPlaneEventsUntilStreamCloses() throws {
@@ -549,5 +725,27 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "install-cli", destinationURL.path]), 0)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: destinationURL.path), executableURL.path)
         XCTAssertEqual(output, ["Installed omux at \(destinationURL.path) -> \(executableURL.path)"])
+    }
+}
+
+private final class LockedValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ value: Value) {
+        storage = value
+    }
+
+    var value: Value {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
     }
 }

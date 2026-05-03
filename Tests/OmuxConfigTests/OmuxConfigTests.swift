@@ -83,6 +83,29 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func ignoresDeprecatedKeyboardSelectionTerminalKey() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [terminal]
+            keyboard_selection = true
+            option_as_alt = "right"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.terminal.optionAsAlt == .right)
+        #expect(result.diagnostics.contains(where: {
+            $0.severity == .warning && $0.message.contains("keyboard_selection")
+        }))
+    }
+
+    @Test
     func loadsOptionAsAltTerminalSetting() throws {
         let cases: [(String, OmuxConfigTerminal.OptionAsAlt)] = [
             ("false", .disabled),

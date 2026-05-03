@@ -161,3 +161,213 @@ public struct ControlPlaneActionResult: Equatable, Sendable {
         return .object(object)
     }
 }
+
+public enum ControlPlaneHistoryScope: Equatable, Sendable {
+    case activeWorkspace
+    case pane(PaneID)
+    case all
+
+    public var rpcValue: RPCValue {
+        switch self {
+        case .activeWorkspace:
+            return .object(["scope": .string("activeWorkspace")])
+        case .pane(let paneID):
+            return .object([
+                "scope": .string("pane"),
+                "paneID": .string(paneID.rawValue),
+            ])
+        case .all:
+            return .object(["scope": .string("all")])
+        }
+    }
+
+    public init?(rpcObject object: [String: RPCValue]) {
+        if case .string(let paneID)? = object["paneID"] {
+            self = .pane(PaneID(rawValue: paneID))
+            return
+        }
+
+        guard case .string(let scope)? = object["scope"] ?? object["type"] else {
+            self = .activeWorkspace
+            return
+        }
+
+        switch scope {
+        case "activeWorkspace", "current":
+            self = .activeWorkspace
+        case "all":
+            self = .all
+        case "pane":
+            guard case .string(let paneID)? = object["id"] else {
+                return nil
+            }
+            self = .pane(PaneID(rawValue: paneID))
+        default:
+            return nil
+        }
+    }
+}
+
+public struct ControlPlaneHistoryRequest: Equatable, Sendable {
+    public let scope: ControlPlaneHistoryScope
+    public let maxBytes: Int
+    public let maxLines: Int
+
+    public init(
+        scope: ControlPlaneHistoryScope = .activeWorkspace,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) {
+        self.scope = scope
+        self.maxBytes = max(0, maxBytes)
+        self.maxLines = max(0, maxLines)
+    }
+
+    public init?(rpcValue: RPCValue?) {
+        guard let rpcValue else {
+            self.init()
+            return
+        }
+
+        guard case .object(let object) = rpcValue else {
+            return nil
+        }
+
+        guard let scope = ControlPlaneHistoryScope(rpcObject: object) else {
+            return nil
+        }
+
+        self.init(
+            scope: scope,
+            maxBytes: object["maxBytes"]?.integerValue ?? PaneScrollbackSnapshot.defaultMaxBytes,
+            maxLines: object["maxLines"]?.integerValue ?? PaneScrollbackSnapshot.defaultMaxLines
+        )
+    }
+
+    public var rpcValue: RPCValue {
+        var object: [String: RPCValue]
+        if case .object(let scopeObject) = scope.rpcValue {
+            object = scopeObject
+        } else {
+            object = [:]
+        }
+        object["maxBytes"] = .integer(maxBytes)
+        object["maxLines"] = .integer(maxLines)
+        return .object(object)
+    }
+}
+
+public struct ControlPlanePaneHistoryItem: Equatable, Sendable {
+    public let workspaceID: WorkspaceID
+    public let workspaceName: String
+    public let tabID: TabID
+    public let tabTitle: String
+    public let paneStackID: PaneStackID?
+    public let paneID: PaneID
+    public let paneTitle: String
+    public let sessionID: SessionID
+    public let workingDirectory: String?
+    public let text: String
+    public let lineCount: Int
+    public let byteCount: Int
+    public let truncated: Bool
+    public let unavailable: String?
+
+    public init(
+        workspaceID: WorkspaceID,
+        workspaceName: String,
+        tabID: TabID,
+        tabTitle: String,
+        paneStackID: PaneStackID?,
+        paneID: PaneID,
+        paneTitle: String,
+        sessionID: SessionID,
+        workingDirectory: String?,
+        text: String,
+        truncated: Bool,
+        unavailable: String? = nil
+    ) {
+        self.workspaceID = workspaceID
+        self.workspaceName = workspaceName
+        self.tabID = tabID
+        self.tabTitle = tabTitle
+        self.paneStackID = paneStackID
+        self.paneID = paneID
+        self.paneTitle = paneTitle
+        self.sessionID = sessionID
+        self.workingDirectory = workingDirectory
+        self.text = text
+        self.lineCount = text.isEmpty ? 0 : text.split(separator: "\n", omittingEmptySubsequences: false).count
+        self.byteCount = text.utf8.count
+        self.truncated = truncated
+        self.unavailable = unavailable
+    }
+
+    public var rpcValue: RPCValue {
+        .object([
+            "workspaceID": .string(workspaceID.rawValue),
+            "workspaceName": .string(workspaceName),
+            "tabID": .string(tabID.rawValue),
+            "tabTitle": .string(tabTitle),
+            "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+            "paneID": .string(paneID.rawValue),
+            "paneTitle": .string(paneTitle),
+            "sessionID": .string(sessionID.rawValue),
+            "workingDirectory": workingDirectory.map(RPCValue.string) ?? .null,
+            "text": .string(text),
+            "lineCount": .integer(lineCount),
+            "byteCount": .integer(byteCount),
+            "truncated": .bool(truncated),
+            "unavailable": unavailable.map(RPCValue.string) ?? .null,
+        ])
+    }
+}
+
+public struct ControlPlaneHistoryResponse: Equatable, Sendable {
+    public let scope: ControlPlaneHistoryScope
+    public let maxBytes: Int
+    public let maxLines: Int
+    public let items: [ControlPlanePaneHistoryItem]
+
+    public init(
+        scope: ControlPlaneHistoryScope,
+        maxBytes: Int,
+        maxLines: Int,
+        items: [ControlPlanePaneHistoryItem]
+    ) {
+        self.scope = scope
+        self.maxBytes = maxBytes
+        self.maxLines = maxLines
+        self.items = items
+    }
+
+    public var rpcValue: RPCValue {
+        var scopeObject: [String: RPCValue]
+        if case .object(let object) = scope.rpcValue {
+            scopeObject = object
+        } else {
+            scopeObject = [:]
+        }
+        scopeObject["maxBytes"] = .integer(maxBytes)
+        scopeObject["maxLines"] = .integer(maxLines)
+
+        return .object([
+            "scope": .object(scopeObject),
+            "maxBytes": .integer(maxBytes),
+            "maxLines": .integer(maxLines),
+            "items": .array(items.map(\.rpcValue)),
+        ])
+    }
+}
+
+private extension RPCValue {
+    var integerValue: Int? {
+        switch self {
+        case .number(let value):
+            guard value.isFinite else { return nil }
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+}

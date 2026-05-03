@@ -71,8 +71,9 @@ swift run omux theme nord
 swift run omux theme list
 swift run omux tab
 swift run omux split
+swift run omux split right
+swift run omux split left --focused
 swift run omux split down
-swift run omux split --focused right
 swift run omux pane-tab
 swift run omux pane-tab-focus <pane-id>
 swift run omux pane-tab-close [pane-id]
@@ -80,6 +81,9 @@ swift run omux events
 swift run omux list --full
 swift run omux sessions
 swift run omux panes
+swift run omux history
+swift run omux history <pane-id>
+swift run omux history all --json
 swift run omux run <session-id> "pwd"
 swift run omux run --pane <pane-id> -- "pwd"
 swift run omux send-text --session <session-id> -- "hello"

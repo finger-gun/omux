@@ -66,6 +66,10 @@ final class OmuxControlPlaneTests: XCTestCase {
         ]))
         let sessions = try client.request(method: .listSessions)
         let panes = try client.request(method: .listPanes)
+        let history = try client.request(method: .terminalHistory, params: .object([
+            "scope": .string("pane"),
+            "id": .string("pane-1"),
+        ]))
 
         XCTAssertEqual(createTab.result, .object(["method": .string(ControlMethod.createTab.rawValue)]))
         XCTAssertEqual(split.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
@@ -77,6 +81,74 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(sendText.result, .object(["method": .string(ControlMethod.sendText.rawValue)]))
         XCTAssertEqual(sessions.result, .object(["method": .string(ControlMethod.listSessions.rawValue)]))
         XCTAssertEqual(panes.result, .object(["method": .string(ControlMethod.listPanes.rawValue)]))
+        XCTAssertEqual(history.result, .object(["method": .string(ControlMethod.terminalHistory.rawValue)]))
+    }
+
+    func testTerminalHistoryRequestParsesScopesAndBounds() {
+        XCTAssertEqual(ControlPlaneHistoryRequest(rpcValue: nil), ControlPlaneHistoryRequest())
+
+        XCTAssertEqual(
+            ControlPlaneHistoryRequest(rpcValue: .object([
+                "scope": .string("all"),
+                "maxLines": .integer(20),
+                "maxBytes": .integer(1_024),
+            ])),
+            ControlPlaneHistoryRequest(scope: .all, maxBytes: 1_024, maxLines: 20)
+        )
+
+        XCTAssertEqual(
+            ControlPlaneHistoryRequest(rpcValue: .object([
+                "paneID": .string("pane-1"),
+                "maxLines": .integer(2),
+                "maxBytes": .integer(128),
+            ])),
+            ControlPlaneHistoryRequest(scope: .pane(PaneID(rawValue: "pane-1")), maxBytes: 128, maxLines: 2)
+        )
+
+        XCTAssertNil(ControlPlaneHistoryRequest(rpcValue: .object(["scope": .string("bogus")])))
+    }
+
+    func testTerminalHistoryResponseUsesOpenMUXNativeMetadata() {
+        let response = ControlPlaneHistoryResponse(
+            scope: .pane(PaneID(rawValue: "pane-1")),
+            maxBytes: 1_000,
+            maxLines: 10,
+            items: [
+                ControlPlanePaneHistoryItem(
+                    workspaceID: WorkspaceID(rawValue: "workspace-1"),
+                    workspaceName: "OMUX",
+                    tabID: TabID(rawValue: "tab-1"),
+                    tabTitle: "Main",
+                    paneStackID: PaneStackID(rawValue: "stack-1"),
+                    paneID: PaneID(rawValue: "pane-1"),
+                    paneTitle: "omux",
+                    sessionID: SessionID(rawValue: "session-1"),
+                    workingDirectory: "/tmp/omux",
+                    text: "one\ntwo",
+                    truncated: true
+                ),
+            ]
+        )
+
+        guard case .object(let object) = response.rpcValue,
+              case .array(let items)? = object["items"],
+              case .object(let item)? = items.first
+        else {
+            return XCTFail("expected structured history response")
+        }
+
+        XCTAssertEqual(item["workspaceID"], .string("workspace-1"))
+        XCTAssertEqual(item["workspaceName"], .string("OMUX"))
+        XCTAssertEqual(item["tabID"], .string("tab-1"))
+        XCTAssertEqual(item["paneStackID"], .string("stack-1"))
+        XCTAssertEqual(item["paneID"], .string("pane-1"))
+        XCTAssertEqual(item["sessionID"], .string("session-1"))
+        XCTAssertEqual(item["workingDirectory"], .string("/tmp/omux"))
+        XCTAssertEqual(item["text"], .string("one\ntwo"))
+        XCTAssertEqual(item["lineCount"], .integer(2))
+        XCTAssertEqual(item["byteCount"], .integer(7))
+        XCTAssertEqual(item["truncated"], .bool(true))
+        XCTAssertEqual(item["unavailable"], .null)
     }
 
     func testTerminalTargetSelectorsRoundTripFromRPCValues() {

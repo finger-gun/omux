@@ -106,6 +106,8 @@ OpenMUX currently models these terminal settings directly:
 | `scrollback_lines` | integer | Maximum scrollback preserved by the terminal. |
 | `option_as_alt` | `false` \| `true` \| `"left"` \| `"right"` | OpenMUX-owned macOS Option-key behavior, compiled to Ghostty-compatible `macos-option-as-alt` semantics. |
 
+Older configs may contain `keyboard_selection`; current OpenMUX ignores that deprecated key and removes it the next time `omux theme` rewrites the config.
+
 ### `terminal.option_as_alt`
 
 `option_as_alt` controls which macOS Option key should behave like terminal Alt/Meta input.

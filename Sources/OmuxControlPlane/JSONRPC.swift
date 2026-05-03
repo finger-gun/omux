@@ -51,6 +51,7 @@ public enum ControlMethod: String, Sendable {
     case sendText = "session.sendText"
     case listSessions = "session.list"
     case listPanes = "pane.list"
+    case terminalHistory = "terminal.history"
     case sendNotification = "notification.send"
     case restoreLayout = "workspace.restore"
     case configDoctor = "config.doctor"

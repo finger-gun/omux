@@ -732,7 +732,13 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let terminalAllowedKeys: Set<String> = ["font_family", "font_size", "scrollback_lines", "option_as_alt"]
+        let terminalAllowedKeys: Set<String> = [
+            "font_family",
+            "font_size",
+            "scrollback_lines",
+            "option_as_alt",
+            "keyboard_selection",
+        ]
         var fontFamily = config.terminal.fontFamily
         var fontSize = config.terminal.fontSize
         var scrollbackLines = config.terminal.scrollbackLines
@@ -752,6 +758,15 @@ public struct OmuxConfigLoader {
             }
 
             switch entry.key {
+            case "keyboard_selection":
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .warning,
+                        message: "terminal.keyboard_selection is deprecated and ignored.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
             case "font_family":
                 guard let value = entry.value.stringValue else {
                     diagnostics.append(

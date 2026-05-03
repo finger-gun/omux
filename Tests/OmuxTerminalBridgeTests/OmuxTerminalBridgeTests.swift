@@ -1078,6 +1078,20 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated)
     }
 
+    func testBridgeReturnsByteBoundedScrollbackSnapshot() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = "abcdef"
+
+        let snapshot = try XCTUnwrap(bridge.scrollbackSnapshot(for: pane.id, maxBytes: 3, maxLines: 100))
+        XCTAssertEqual(snapshot.text, "def")
+        XCTAssertTrue(snapshot.truncated)
+    }
+
     func testBridgeReturnsNilWhenScrollbackUnavailable() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1087,6 +1101,12 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         _ = try bridge.attach(session: session, to: pane)
 
         XCTAssertNil(bridge.scrollbackSnapshot(for: pane.id))
+    }
+
+    func testBridgeReturnsNilWhenScrollbackSurfaceMissing() throws {
+        let bridge = GhosttyTerminalBridge(runtime: InspectableGhosttyRuntime())
+
+        XCTAssertNil(bridge.scrollbackSnapshot(for: PaneID(rawValue: "missing")))
     }
 
     func testBridgePublishesTypedTerminalActionEvents() throws {

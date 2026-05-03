@@ -10,6 +10,18 @@ private struct CommandAutomationContext: Sendable {
     let cwd: String?
 }
 
+private struct PaneHistoryTarget: Sendable {
+    let workspaceID: WorkspaceID
+    let workspaceName: String
+    let tabID: TabID
+    let tabTitle: String
+    let paneStackID: PaneStackID?
+    let paneID: PaneID
+    let paneTitle: String
+    let sessionID: SessionID
+    let workingDirectory: String?
+}
+
 public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
@@ -104,6 +116,51 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return workspaces
+    }
+
+    public func terminalHistory(_ request: ControlPlaneHistoryRequest) -> ControlPlaneHistoryResponse? {
+        let targets: [PaneHistoryTarget]
+        lock.lock()
+        switch request.scope {
+        case .activeWorkspace:
+            if let activeWorkspaceID,
+               let workspace = workspaces.first(where: { $0.id == activeWorkspaceID }) {
+                targets = Self.historyTargets(in: workspace)
+            } else {
+                targets = []
+            }
+        case .pane(let paneID):
+            guard let target = workspaces.lazy.compactMap({ Self.historyTarget(paneID: paneID, in: $0) }).first else {
+                lock.unlock()
+                return nil
+            }
+            targets = [target]
+        case .all:
+            targets = workspaces.flatMap(Self.historyTargets(in:))
+        }
+        lock.unlock()
+
+        let items = targets.map { target in
+            if let snapshot = bridge.scrollbackSnapshot(
+                for: target.paneID,
+                maxBytes: request.maxBytes,
+                maxLines: request.maxLines
+            ) {
+                return target.historyItem(text: snapshot.text, truncated: snapshot.truncated)
+            }
+
+            let reason = bridge.surface(for: target.paneID) == nil
+                ? "terminal session unavailable"
+                : "history unavailable"
+            return target.historyItem(text: "", truncated: false, unavailable: reason)
+        }
+
+        return ControlPlaneHistoryResponse(
+            scope: request.scope,
+            maxBytes: request.maxBytes,
+            maxLines: request.maxLines,
+            items: items
+        )
     }
 
     public func resolveTerminalTarget(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
@@ -1115,6 +1172,28 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    private static func historyTargets(in workspace: Workspace) -> [PaneHistoryTarget] {
+        workspace.tabs.flatMap { tab in
+            tab.panes.map { pane in
+                PaneHistoryTarget(
+                    workspaceID: workspace.id,
+                    workspaceName: workspace.name,
+                    tabID: tab.id,
+                    tabTitle: tab.title,
+                    paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                    paneID: pane.id,
+                    paneTitle: pane.title,
+                    sessionID: pane.session.id,
+                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+                )
+            }
+        }
+    }
+
+    private static func historyTarget(paneID: PaneID, in workspace: Workspace) -> PaneHistoryTarget? {
+        historyTargets(in: workspace).first(where: { $0.paneID == paneID })
+    }
+
     private func workingDirectory(for paneID: PaneID) -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -1598,5 +1677,28 @@ public final class WorkspaceController: @unchecked Sendable {
         onChange?(updatedWorkspace)
 
         return updatedWorkspace
+    }
+}
+
+private extension PaneHistoryTarget {
+    func historyItem(
+        text: String,
+        truncated: Bool,
+        unavailable: String? = nil
+    ) -> ControlPlanePaneHistoryItem {
+        ControlPlanePaneHistoryItem(
+            workspaceID: workspaceID,
+            workspaceName: workspaceName,
+            tabID: tabID,
+            tabTitle: tabTitle,
+            paneStackID: paneStackID,
+            paneID: paneID,
+            paneTitle: paneTitle,
+            sessionID: sessionID,
+            workingDirectory: workingDirectory,
+            text: text,
+            truncated: truncated,
+            unavailable: unavailable
+        )
     }
 }

@@ -86,14 +86,18 @@ public struct OmuxCLICommand {
                 try client.streamTerminalEvents { event in
                     writeLine(event.prettyPrinted)
                 }
+            case "history":
+                return try runHistoryCommand(arguments: Array(commandArguments.dropFirst()))
             case "tab":
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
             case "split":
-                let parsed = parseTargetPrefix(Array(commandArguments.dropFirst()))
-                let axis = splitAxis(from: parsed.remaining[...])
-                var params = targetParams(parsed.target)
-                params["axis"] = .string(axis.rawValue)
+                guard let splitRequest = parseSplitRequest(Array(commandArguments.dropFirst())) else {
+                    writeLine("usage: omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]")
+                    return 1
+                }
+                var params = targetParams(splitRequest.target)
+                params["axis"] = .string(splitRequest.axis.rawValue)
                 let response = try client.request(
                     method: .splitPane,
                     params: .object(params)
@@ -210,7 +214,7 @@ public struct OmuxCLICommand {
                 return 1
             }
         } catch {
-            writeLine("omux error: \(error)")
+            writeLine(Self.errorMessage(for: error))
             return 1
         }
 
@@ -231,9 +235,10 @@ public struct OmuxCLICommand {
       omux sessions
       omux panes
       omux events
+      omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
       omux open <path>
       omux tab
-      omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [right|down]
+      omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]
       omux pane-tab
       omux pane-tab-focus <pane-id>
       omux pane-tab-close [pane-id]
@@ -246,16 +251,42 @@ public struct OmuxCLICommand {
       omux install-cli [destination]
     """
 
-    private func splitAxis(from arguments: ArraySlice<String>) -> PaneSplitAxis {
-        guard let value = arguments.first?.lowercased() else {
-            return .columns
+    private func parseSplitRequest(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, axis: PaneSplitAxis)? {
+        var remaining = arguments
+        let leading = parseTargetPrefix(remaining)
+        var target = leading.target
+        remaining = leading.remaining
+
+        let axis: PaneSplitAxis
+        if let direction = remaining.first {
+            guard let parsedAxis = splitAxis(from: direction) else {
+                return nil
+            }
+            axis = parsedAxis
+            remaining.removeFirst()
+        } else {
+            axis = .columns
         }
 
-        switch value {
-        case "down", "vertical":
+        let trailing = parseTargetPrefix(remaining)
+        if let trailingTarget = trailing.target {
+            target = trailingTarget
+        }
+        guard trailing.remaining.isEmpty else {
+            return nil
+        }
+
+        return (target, axis)
+    }
+
+    private func splitAxis(from direction: String) -> PaneSplitAxis? {
+        switch direction.lowercased() {
+        case "left", "right", "horizontal":
+            return .columns
+        case "up", "down", "vertical":
             return .rows
         default:
-            return .columns
+            return nil
         }
     }
 
@@ -339,6 +370,136 @@ public struct OmuxCLICommand {
         }
 
         return ["target": target.rpcValue]
+    }
+
+    private func runHistoryCommand(arguments: [String]) throws -> Int32 {
+        guard let parsed = parseHistoryRequest(arguments) else {
+            writeLine("usage: omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]")
+            return 1
+        }
+
+        let response = try client.request(
+            method: .terminalHistory,
+            params: parsed.request.rpcValue
+        )
+        if let error = response.error {
+            writeLine("omux error: \(error.message)")
+            return 1
+        }
+
+        guard let result = response.result else {
+            writeLine(parsed.json ? "{}" : "No history.")
+            return 0
+        }
+
+        if parsed.json {
+            writeLine(result.prettyPrinted)
+        } else {
+            printHistory(result)
+        }
+        return 0
+    }
+
+    private func parseHistoryRequest(
+        _ arguments: [String]
+    ) -> (request: ControlPlaneHistoryRequest, json: Bool)? {
+        var json = false
+        var maxLines = PaneScrollbackSnapshot.defaultMaxLines
+        var maxBytes = PaneScrollbackSnapshot.defaultMaxBytes
+        var positional: [String] = []
+        var index = 0
+
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--json":
+                json = true
+                index += 1
+            case "--max-lines":
+                guard index + 1 < arguments.count, let value = Int(arguments[index + 1]), value >= 0 else {
+                    return nil
+                }
+                maxLines = value
+                index += 2
+            case "--max-bytes":
+                guard index + 1 < arguments.count, let value = Int(arguments[index + 1]), value >= 0 else {
+                    return nil
+                }
+                maxBytes = value
+                index += 2
+            default:
+                guard arguments[index].hasPrefix("--") == false else {
+                    return nil
+                }
+                positional.append(arguments[index])
+                index += 1
+            }
+        }
+
+        guard positional.count <= 1 else {
+            return nil
+        }
+
+        let scope: ControlPlaneHistoryScope
+        if let target = positional.first {
+            scope = target == "all" ? .all : .pane(PaneID(rawValue: target))
+        } else {
+            scope = .activeWorkspace
+        }
+
+        return (
+            ControlPlaneHistoryRequest(scope: scope, maxBytes: maxBytes, maxLines: maxLines),
+            json
+        )
+    }
+
+    private func printHistory(_ result: RPCValue) {
+        guard case .object(let object) = result,
+              case .array(let items)? = object["items"]
+        else {
+            writeLine(result.prettyPrinted)
+            return
+        }
+
+        guard items.isEmpty == false else {
+            writeLine("No history.")
+            return
+        }
+
+        for (index, item) in items.enumerated() {
+            guard case .object(let history) = item else {
+                continue
+            }
+
+            if index > 0 {
+                writeLine("")
+            }
+
+            let workspaceName = history["workspaceName"]?.stringValue ?? "workspace"
+            let workspaceID = history["workspaceID"]?.stringValue ?? "unknown"
+            let tabTitle = history["tabTitle"]?.stringValue ?? "tab"
+            let tabID = history["tabID"]?.stringValue ?? "unknown"
+            let paneTitle = history["paneTitle"]?.stringValue ?? "pane"
+            let paneID = history["paneID"]?.stringValue ?? "unknown"
+            let sessionID = history["sessionID"]?.stringValue ?? "unknown"
+            let cwd = history["workingDirectory"]?.nullableStringValue
+            let lineCount = history["lineCount"]?.integerValue ?? 0
+            let byteCount = history["byteCount"]?.integerValue ?? 0
+            let truncated = history["truncated"]?.boolValue ?? false
+            let unavailable = history["unavailable"]?.nullableStringValue
+            let text = history["text"]?.stringValue ?? ""
+
+            writeLine("== \(workspaceName) (\(workspaceID)) / \(tabTitle) (\(tabID)) / \(paneTitle) (\(paneID))")
+            writeLine("session: \(sessionID)")
+            if let cwd {
+                writeLine("cwd: \(cwd)")
+            }
+            writeLine("lines: \(lineCount), bytes: \(byteCount), truncated: \(truncated)")
+            if let unavailable {
+                writeLine("unavailable: \(unavailable)")
+            }
+            writeLine("--")
+            writeLine(text.isEmpty ? "(no history)" : text)
+        }
     }
 
     private func runConfigCommand(arguments: [String]) -> Int32 {
@@ -623,6 +784,14 @@ public struct OmuxCLICommand {
 
         return diagnostics.contains(where: { $0.severity.isError }) ? 1 : 0
     }
+
+    private static func errorMessage(for error: Error) -> String {
+        if case UnixSocketError.connectFailed(let code) = error,
+           code == ENOENT || code == ECONNREFUSED {
+            return "omux error: OpenMUX is not reachable on the local control socket. Start or restart the current app build, for example with `make app`."
+        }
+        return "omux error: \(error)"
+    }
 }
 
 struct ThemePickerViewport: Equatable {
@@ -897,9 +1066,23 @@ private extension RPCValue {
         return nil
     }
 
+    var nullableStringValue: String? {
+        if case .null = self {
+            return nil
+        }
+        return stringValue
+    }
+
     var intValue: Int? {
         if case .number(let value) = self {
             return Int(exactly: value)
+        }
+        return nil
+    }
+
+    var integerValue: Int? {
+        if case .number(let value) = self, value.isFinite {
+            return Int(value)
         }
         return nil
     }
