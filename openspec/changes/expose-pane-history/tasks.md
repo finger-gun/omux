@@ -8,9 +8,9 @@
 ## 2. App-Shell History Resolution
 
 - [x] 2.1 Resolve active workspace, pane ID, and all-workspace history scopes from live workspace/tab/pane topology.
-- [x] 2.2 Capture each live pane through the terminal bridge without reading or writing workspace persistence scrollback.
+- [x] 2.2 Capture each live pane through the terminal bridge and persist bounded history per pane/pane-tab in workspace state.
 - [x] 2.3 Preserve read-only behavior by ensuring history requests do not send input, mutate terminal state, or render UI.
-- [x] 2.4 Add app-shell tests for active workspace, pane-specific, all-workspace grouping, and no-persistence/no-UI side effects.
+- [x] 2.4 Add app-shell tests for active workspace, pane-specific, all-workspace grouping, per-pane persistence, and no-UI side effects.
 
 ## 3. Terminal Bridge Boundary
 

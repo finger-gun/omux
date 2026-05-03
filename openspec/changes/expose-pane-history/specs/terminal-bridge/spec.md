@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: The bridge exposes bounded terminal history snapshots
-The terminal bridge SHALL expose an OpenMUX-native operation for reading bounded text snapshots from live terminal sessions. The operation SHALL support caller-supplied maximum byte and line limits and SHALL report whether the returned text was truncated.
+The terminal bridge SHALL expose an OpenMUX-native operation for reading bounded text snapshots from live terminal sessions. The operation SHALL include scrollback history and active terminal text when the renderer can provide them. The operation SHALL support caller-supplied maximum byte and line limits and SHALL report whether the returned text was truncated.
 
 #### Scenario: Bridge captures bounded text
 - **WHEN** app-shell code requests a history snapshot for a live terminal session with byte and line limits

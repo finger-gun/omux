@@ -114,6 +114,32 @@ public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
 
         return PaneScrollbackSnapshot(text: finalText, truncated: truncated)
     }
+
+    public static func combined(
+        _ first: PaneScrollbackSnapshot?,
+        _ second: PaneScrollbackSnapshot?,
+        maxBytes: Int = defaultMaxBytes,
+        maxLines: Int = defaultMaxLines
+    ) -> PaneScrollbackSnapshot? {
+        let parts = [first?.text, second?.text]
+            .compactMap { text -> String? in
+                let trimmed = text?.trimmingCharacters(in: .newlines) ?? ""
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        guard parts.isEmpty == false else {
+            return nil
+        }
+
+        guard var snapshot = bounded(
+            text: parts.joined(separator: "\n"),
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ) else {
+            return nil
+        }
+        snapshot.truncated = snapshot.truncated || first?.truncated == true || second?.truncated == true
+        return snapshot
+    }
 }
 
 public struct PaneTerminalState: Equatable, Codable, Sendable {

@@ -564,7 +564,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/DungeonPlanner/App"))
     }
 
-    func testWorkspacePersistenceDoesNotStorePaneScrollbackWhileHistoryRestoreIsPaused() throws {
+    func testWorkspacePersistenceStoresBoundedPaneScrollbackForHistoryCommand() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let controller = WorkspaceController(
@@ -580,10 +580,13 @@ final class OmuxAppShellTests: XCTestCase {
         let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
         let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
 
-        XCTAssertNil(persistedPane.terminalState.restoredScrollback)
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").count, 400)
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").first, "line-101")
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").last, "line-500")
+        XCTAssertTrue(persistedPane.terminalState.restoredScrollback?.truncated == true)
     }
 
-    func testWorkspaceRestoreDropsSavedScrollbackWhileHistoryRestoreIsPaused() throws {
+    func testWorkspaceRestoreKeepsSavedScrollbackForHistoryCommandWithoutRenderingIt() throws {
         let scrollback = PaneScrollbackSnapshot(text: "previous output", truncated: false)
         let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
         let pane = Pane(
@@ -600,8 +603,11 @@ final class OmuxAppShellTests: XCTestCase {
 
         _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
 
-        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.restoredScrollback)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.restoredScrollback, scrollback)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.workingDirectory, "/tmp/project")
+
+        let history = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(pane.id))))
+        XCTAssertEqual(history.items.first?.text, "previous output")
     }
 
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {

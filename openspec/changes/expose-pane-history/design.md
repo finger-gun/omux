@@ -1,6 +1,6 @@
 ## Context
 
-OpenMUX now has a bridge-level ability to read bounded terminal text from live hosted terminal surfaces, but workspace persistence/rendered restore for that text is paused because it cannot faithfully reinsert history into Ghostty's buffer and UI overlays degrade the terminal-first experience. The useful remaining capability is explicit, on-demand inspection: a user, hook handler, or script should be able to ask the running app for pane history without coupling to app internals or Ghostty APIs.
+OpenMUX now has a bridge-level ability to read bounded terminal text from live hosted terminal surfaces, but rendered restore for that text is paused because it cannot faithfully reinsert history into Ghostty's buffer and UI overlays degrade the terminal-first experience. The useful capability is explicit, on-demand inspection: a user, hook handler, or script should be able to ask the running app for per-pane history without coupling to app internals or Ghostty APIs.
 
 Existing control-plane commands already expose OpenMUX-native topology, target resolution, and terminal actions over JSON-RPC on a local Unix socket. The history feature should extend that same boundary rather than adding a second transport or background recorder.
 
@@ -13,13 +13,14 @@ Existing control-plane commands already expose OpenMUX-native topology, target r
 - Make the command safe for hook handlers and shell scripts to call.
 - Preserve the terminal bridge boundary by keeping libghostty capture details inside `OmuxTerminalBridge`.
 - Bound reads by lines and bytes so large scrollback buffers do not stall the app or flood hook scripts.
+- Persist a bounded per-pane/pane-tab history snapshot with workspace state so `omux history` remains useful after app restart.
 
 **Non-Goals:**
 
 - Restore scrollback inside Ghostty or make restarted panes appear as if their old PTY session is still alive.
 - Render historical text in OpenMUX pane chrome.
 - Send historical text back to a shell through terminal input APIs.
-- Persist scrollback/history in workspace snapshots.
+- Restore persisted scrollback into the visible terminal UI.
 - Add a daemon, database, tmux/zellij dependency, browser view, or external service.
 
 ## Decisions
@@ -40,7 +41,7 @@ Existing control-plane commands already expose OpenMUX-native topology, target r
    - Alternative considered: Default to the focused pane only. Rejected because it would not match "list current panes history".
 
 4. **Return bounded snapshots with explicit availability metadata.**
-   - Decision: Each pane history item includes `text`, `lineCount`, `byteCount`, `truncated`, and an `unavailable` reason when capture cannot be performed.
+   - Decision: Each pane history item includes `text`, `lineCount`, `byteCount`, `truncated`, and an `unavailable` reason when neither persisted nor live capture can provide text.
    - Rationale: Automation should not infer missing history from empty text, and callers need to know whether output was truncated.
    - Alternative considered: Return raw text only. Rejected because multi-pane output needs topology and diagnostics.
 
@@ -49,14 +50,19 @@ Existing control-plane commands already expose OpenMUX-native topology, target r
    - Rationale: History output can be large; humans need headers, while hooks need stable machine-readable fields.
    - Alternative considered: Always print JSON. Rejected because `omux` is also a terminal-first human CLI.
 
-6. **Do not automatically include full history in hook payloads.**
+6. **Persist history per pane, not per workspace.**
+   - Decision: Persisted history is stored on each `Pane`/terminal record in workspace state and remains associated with that pane ID/session metadata across restore.
+   - Rationale: Users need history for the exact terminal/pane-tab they are inspecting; a workspace-level blob would lose targetability and mix unrelated terminal output.
+   - Alternative considered: Store one history file per workspace. Rejected because it would blur pane/tab boundaries and make `omux history <pane-id>` unreliable.
+
+7. **Do not automatically include full history in hook payloads.**
    - Decision: Hooks receive identifiers and can call `omux history` when they need current output context. Existing bounded hook output context remains separate.
    - Rationale: Automatically injecting scrollback into every hook payload risks leaking secrets, increasing latency, and bloating event delivery.
    - Alternative considered: Add history text to all command hook payloads. Rejected for privacy and performance reasons.
 
 ## Risks / Trade-offs
 
-- **History may contain secrets** -> Keep access local, explicit, on-demand, and scoped; do not persist history or attach it to every hook payload.
+- **History may contain secrets** -> Keep access local, explicit, bounded, and scoped; store only bounded per-pane history and do not attach it to every hook payload.
 - **Large scrollback reads can hurt responsiveness** -> Enforce conservative default `maxLines`/`maxBytes` limits and let callers request different bounds within implementation-defined caps.
 - **Live surface may be unavailable** -> Return an explicit unavailable reason per pane instead of failing the whole multi-pane request when possible.
 - **CLI output can be hard to parse if mixed with headers** -> Provide a JSON mode for scripts and hooks.
@@ -68,7 +74,7 @@ Existing control-plane commands already expose OpenMUX-native topology, target r
 2. Wire app-shell history resolution to live workspace topology and bridge snapshot calls.
 3. Add `omux history` CLI handling and usage text.
 4. Add tests for default, pane-specific, all-workspace, bounded, unavailable, and JSON behavior.
-5. Keep workspace scrollback rendering/persistence disabled.
+5. Keep workspace scrollback rendering disabled while persisting bounded per-pane history for CLI/control-plane access.
 
 Rollback is removing the new CLI command and control-plane method; existing workspace, hook, and terminal behavior remains unchanged.
 

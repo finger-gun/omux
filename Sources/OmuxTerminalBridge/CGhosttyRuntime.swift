@@ -926,7 +926,23 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
 
         return mainActorValue {
-            guard let snapshot = self.readSurfaceText(
+            let history = self.readSurfaceText(
+                surface,
+                tag: GHOSTTY_POINT_SURFACE,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+            let active = self.readSurfaceText(
+                surface,
+                tag: GHOSTTY_POINT_ACTIVE,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+            if let combined = PaneScrollbackSnapshot.combined(history, active, maxBytes: maxBytes, maxLines: maxLines) {
+                return combined
+            }
+
+            return self.readSurfaceText(
                 surface,
                 tag: GHOSTTY_POINT_SCREEN,
                 maxBytes: maxBytes,
@@ -936,10 +952,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 tag: GHOSTTY_POINT_VIEWPORT,
                 maxBytes: maxBytes,
                 maxLines: maxLines
-            ) else {
-                return nil
-            }
-            return snapshot
+            )
         }
     }
 

@@ -20,6 +20,7 @@ private struct PaneHistoryTarget: Sendable {
     let paneTitle: String
     let sessionID: SessionID
     let workingDirectory: String?
+    let persistedHistory: PaneScrollbackSnapshot?
 }
 
 public final class WorkspaceController: @unchecked Sendable {
@@ -141,8 +142,14 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         let items = targets.map { target in
-            if let snapshot = bridge.scrollbackSnapshot(
+            let liveSnapshot = bridge.scrollbackSnapshot(
                 for: target.paneID,
+                maxBytes: request.maxBytes,
+                maxLines: request.maxLines
+            )
+            if let snapshot = PaneScrollbackSnapshot.combined(
+                target.persistedHistory,
+                liveSnapshot,
                 maxBytes: request.maxBytes,
                 maxLines: request.maxLines
             ) {
@@ -1184,7 +1191,8 @@ public final class WorkspaceController: @unchecked Sendable {
                     paneID: pane.id,
                     paneTitle: pane.title,
                     sessionID: pane.session.id,
-                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory,
+                    persistedHistory: pane.terminalState.restoredScrollback
                 )
             }
         }
@@ -1444,11 +1452,16 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if let workingDirectory = liveSnapshot?.workingDirectory, workingDirectory.isEmpty == false {
             session.workingDirectory = workingDirectory
         }
+        let restoredScrollback = bridge.scrollbackSnapshot(
+            for: pane.id,
+            maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
+            maxLines: PaneScrollbackSnapshot.defaultMaxLines
+        ) ?? pane.terminalState.restoredScrollback
         return Pane(
             id: pane.id,
             title: pane.title,
             session: session,
-            terminalState: PaneTerminalState()
+            terminalState: PaneTerminalState(restoredScrollback: restoredScrollback)
         )
     }
 
@@ -1457,7 +1470,7 @@ public final class WorkspaceController: @unchecked Sendable {
             id: pane.id,
             title: pane.title,
             session: pane.session,
-            terminalState: PaneTerminalState()
+            terminalState: PaneTerminalState(restoredScrollback: pane.terminalState.restoredScrollback)
         )
     }
 
