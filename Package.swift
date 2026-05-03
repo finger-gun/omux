@@ -9,7 +9,7 @@ guard FileManager.default.fileExists(atPath: ghosttyXCFrameworkPath) else {
 
 var targets: [Target] = [
     .target(name: "OmuxCore"),
-    .target(name: "OmuxConfig"),
+    .target(name: "OmuxConfig", dependencies: ["OmuxCore"]),
     .target(
         name: "OmuxTheme",
         dependencies: ["OmuxConfig"],

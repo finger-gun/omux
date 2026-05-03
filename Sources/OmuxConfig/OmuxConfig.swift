@@ -1,4 +1,5 @@
 import Foundation
+import OmuxCore
 
 public let OmuxConfigSchemaVersion = 1
 
@@ -212,6 +213,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let theme: OmuxConfigTheme
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
+    public let keyBindings: [OpenMUXKeyBindingOverride]
     public let ghostty: [OmuxGhosttyConfigEntry]
     public let sourceURL: URL?
 
@@ -220,6 +222,7 @@ public struct OmuxConfig: Equatable, Sendable {
         theme: OmuxConfigTheme,
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
+        keyBindings: [OpenMUXKeyBindingOverride] = [],
         ghostty: [OmuxGhosttyConfigEntry],
         sourceURL: URL? = nil
     ) {
@@ -227,6 +230,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.theme = theme
         self.terminal = terminal
         self.workspace = workspace
+        self.keyBindings = keyBindings
         self.ghostty = ghostty
         self.sourceURL = sourceURL
     }
@@ -236,6 +240,7 @@ public struct OmuxConfig: Equatable, Sendable {
         theme: OmuxConfigTheme(name: "monokai-soda"),
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
+        keyBindings: [],
         ghostty: []
     )
 }
@@ -332,7 +337,10 @@ public enum OmuxConfigTemplate {
         # option_as_alt = "right"
 
         [workspace]
-        # default_root_path = "~"
+        default_root_path = "~"
+
+        [keys]
+        \(OpenMUXKeyBindingRegistry.defaultBindingPairs.map { "\"\($0.0.description)\" = \"\($0.1.rawValue)\"" }.joined(separator: "\n"))
 
         [ghostty]
         # "copy-on-select" = false
@@ -688,7 +696,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "keys", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -753,6 +761,7 @@ public struct OmuxConfigLoader {
                 theme: OmuxConfigTheme(name: themeName),
                 terminal: config.terminal,
                 workspace: config.workspace,
+                keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
             )
@@ -762,6 +771,7 @@ public struct OmuxConfigLoader {
                 theme: config.theme,
                 terminal: config.terminal,
                 workspace: config.workspace,
+                keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
             )
@@ -936,6 +946,64 @@ public struct OmuxConfigLoader {
             }
         }
 
+        var keyBindings: [OpenMUXKeyBindingOverride] = []
+        var seenKeyChords = Set<OpenMUXKeyChord>()
+        for entry in document.entries(in: "keys") {
+            let chord: OpenMUXKeyChord
+            do {
+                chord = try OpenMUXKeyChord(parsing: entry.key)
+            } catch {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: keyChordDiagnosticMessage(for: entry.key, error: error),
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard seenKeyChords.insert(chord).inserted else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Duplicate [keys] chord '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard let actionName = entry.value.stringValue else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "[keys] value for '\(entry.key)' must be an action string or \"none\".",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            if actionName == "none" {
+                keyBindings.append(OpenMUXKeyBindingOverride(chord: chord, action: nil))
+            } else if let action = OpenMUXKeyBindingAction(rawValue: actionName) {
+                keyBindings.append(OpenMUXKeyBindingOverride(chord: chord, action: action))
+            } else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unsupported [keys] action '\(actionName)' for chord '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+            }
+        }
+
         let ghosttyEntries = document.entries(in: "ghostty").map {
             OmuxGhosttyConfigEntry(key: $0.key, value: $0.value, line: $0.line)
         }
@@ -950,10 +1018,24 @@ public struct OmuxConfigLoader {
                 optionAsAlt: optionAsAlt
             ),
             workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
+            keyBindings: keyBindings,
             ghostty: ghosttyEntries,
             sourceURL: sourceURL
         )
 
         return OmuxConfigLoadResult(config: config, diagnostics: diagnostics)
+    }
+
+    private func keyChordDiagnosticMessage(for rawChord: String, error: Error) -> String {
+        guard let parseError = error as? OpenMUXKeyChord.ParseError else {
+            return "Malformed [keys] chord '\(rawChord)'."
+        }
+
+        switch parseError {
+        case .unsupportedOptionModifier:
+            return "Unsupported [keys] chord '\(rawChord)': Option/Alt bindings are not supported because they conflict with international text input."
+        default:
+            return "Malformed [keys] chord '\(rawChord)'."
+        }
     }
 }

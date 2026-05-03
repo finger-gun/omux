@@ -3,6 +3,11 @@ import XCTest
 @testable import OmuxCore
 
 final class OmuxCoreTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        OpenMUXShortcutClassifier.updateKeyBindings(.defaults)
+    }
+
     func testRightOptionPreservesInternationalInput() {
         let raw = RawKeyInput(
             keyCode: 19,
@@ -69,6 +74,37 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(commandW.route, .shortcut)
     }
 
+    func testScopedStructuralCommandShiftChordsRouteToShortcut() {
+        let commandShiftW = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 13,
+                characters: "W",
+                charactersIgnoringModifiers: "w",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        let commandShiftN = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 45,
+                characters: "N",
+                charactersIgnoringModifiers: "n",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        let optionShiftN = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 45,
+                characters: "N",
+                charactersIgnoringModifiers: "n",
+                modifiers: [.leftOption, .leftShift]
+            )
+        )
+
+        XCTAssertEqual(commandShiftW.route, .shortcut)
+        XCTAssertEqual(commandShiftN.route, .shortcut)
+        XCTAssertEqual(optionShiftN.route, .terminal)
+    }
+
     func testControlTabNavigationChordsRouteToShortcut() {
         let controlTab = DefaultKeyEventNormalizer().normalize(
             RawKeyInput(
@@ -101,17 +137,25 @@ final class OmuxCoreTests: XCTestCase {
     }
 
     func testUnknownCommandChordRemainsTerminalInput() {
-        let raw = RawKeyInput(
+        let commandA = RawKeyInput(
             keyCode: 0,
             characters: "a",
             charactersIgnoringModifiers: "a",
             modifiers: [.leftCommand]
         )
+        let commandShiftT = RawKeyInput(
+            keyCode: 17,
+            characters: "T",
+            charactersIgnoringModifiers: "t",
+            modifiers: [.leftCommand, .leftShift]
+        )
 
-        let event = DefaultKeyEventNormalizer().normalize(raw)
+        let event = DefaultKeyEventNormalizer().normalize(commandA)
+        let removedPaneAddAlias = DefaultKeyEventNormalizer().normalize(commandShiftT)
 
         XCTAssertEqual(event.route, .terminal)
         XCTAssertTrue(event.modifiers.contains(.leftCommand))
+        XCTAssertEqual(removedPaneAddAlias.route, .terminal)
     }
 
     func testModifiedBackspaceRemainsTerminalInput() {
@@ -134,6 +178,50 @@ final class OmuxCoreTests: XCTestCase {
 
         XCTAssertEqual(commandBackspace.route, .terminal)
         XCTAssertEqual(optionBackspace.route, .terminal)
+    }
+
+    func testConfigurableKeyBindingsOverrideDefaultsAndUnbindChords() throws {
+        let registry = OpenMUXKeyBindingRegistry.effective(overrides: [
+            OpenMUXKeyBindingOverride(
+                chord: try OpenMUXKeyChord(parsing: "cmd+shift+w"),
+                action: nil
+            ),
+            OpenMUXKeyBindingOverride(
+                chord: try OpenMUXKeyChord(parsing: "cmd+shift+p"),
+                action: .paneRemove
+            ),
+        ])
+        let normalizer = DefaultKeyEventNormalizer(keyBindingRegistry: registry)
+
+        let unboundDefault = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 13,
+                characters: "W",
+                charactersIgnoringModifiers: "w",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        let rebound = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 35,
+                characters: "P",
+                charactersIgnoringModifiers: "p",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        let composing = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 35,
+                characters: "",
+                charactersIgnoringModifiers: "p",
+                modifiers: [.leftCommand, .leftShift],
+                isComposing: true
+            )
+        )
+
+        XCTAssertEqual(unboundDefault.route, .terminal)
+        XCTAssertEqual(rebound.route, .shortcut)
+        XCTAssertEqual(composing.route, .composition)
     }
 
     func testControlChordRemainsTerminalInput() {

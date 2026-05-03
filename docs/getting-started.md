@@ -69,7 +69,11 @@ Common commands:
 omux tab
 omux split right
 omux split down
+omux pane-remove --focused
 omux pane-tab
+omux pane-tab-next
+omux pane-tab-prev
+omux pane-tab-close
 omux run --focused -- pwd
 omux send-text --focused -- "echo ready"
 ```
@@ -114,8 +118,16 @@ name = "monokai-soda"
 # option_as_alt = "right"
 
 [workspace]
-# default_root_path = "~"
+default_root_path = "~"
+
+[keys]
+"cmd+shift+w" = "pane.remove"
+"cmd+t" = "pane-tab.create"
+"cmd+w" = "pane-tab.close"
+"ctrl+tab" = "pane-tab.next"
 ```
+
+`omux config init` writes the complete default config, including every default keybinding. Set a binding to `"none"` if OpenMUX conflicts with a terminal app shortcut you want to keep terminal-owned.
 
 List and switch themes:
 
@@ -131,7 +143,7 @@ omux config doctor
 omux config reload
 ```
 
-For all supported keys, default workspace root behavior, theme tokens, built-in themes, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
+For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
 
 ## 6. Add a simple hook
 

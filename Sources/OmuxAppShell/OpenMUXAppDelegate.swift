@@ -23,13 +23,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var createPaneTabMenuItem: NSMenuItem?
     private weak var closePaneTabMenuItem: NSMenuItem?
     private weak var nextPaneTabMenuItem: NSMenuItem?
+    private weak var previousPaneTabMenuItem: NSMenuItem?
     private weak var nextPaneMenuItem: NSMenuItem?
+    private weak var previousPaneMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
     private weak var installCLIMenuItem: NSMenuItem?
     private weak var previousWorkspaceMenuItem: NSMenuItem?
     private weak var moveWorkspaceUpMenuItem: NSMenuItem?
     private weak var moveWorkspaceDownMenuItem: NSMenuItem?
     private var workspaceJumpMenuItems: [NSMenuItem] = []
+    private var keyBindingRegistry: OpenMUXKeyBindingRegistry
 
     public override init() {
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
@@ -59,6 +62,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
+        self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
+        OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
     }
 
@@ -95,6 +100,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onWorkspaceDefaultRootChange = { [weak self] path in
                 self?.workspaceController.updateDefaultWorkspaceRootPath(path)
+            }
+            configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
+                self?.applyKeyBindings(registry)
             }
             configurationCoordinator.onDiagnosticsChange = { diagnostics in
                 diagnostics.forEach { diagnostic in
@@ -213,9 +221,21 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         refreshMenuValidation()
     }
 
+    @objc private func focusPreviousPaneTabFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = workspaceController.focusPreviousPaneTab()
+        refreshMenuValidation()
+    }
+
     @objc private func focusNextPaneFromMenu(_ sender: Any?) {
         _ = sender
         _ = workspaceController.focusNextPane()
+        refreshMenuValidation()
+    }
+
+    @objc private func focusPreviousPaneFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = workspaceController.focusPreviousPane()
         refreshMenuValidation()
     }
 
@@ -282,7 +302,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
-    private func configureMenus() {
+    func configureMenus() {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
@@ -317,7 +337,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let newWorkspaceMenuItem = NSMenuItem(
             title: "New Workspace",
             action: #selector(createWorkspaceFromMenu(_:)),
-            keyEquivalent: "n"
+            keyEquivalent: ""
         )
         newWorkspaceMenuItem.target = self
         viewMenu.addItem(newWorkspaceMenuItem)
@@ -342,7 +362,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let toggleSidebarMenuItem = NSMenuItem(
             title: "Toggle Workspace Column",
             action: #selector(toggleSidebarFromMenu(_:)),
-            keyEquivalent: "b"
+            keyEquivalent: ""
         )
         toggleSidebarMenuItem.target = self
         viewMenu.addItem(toggleSidebarMenuItem)
@@ -350,7 +370,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let previousWorkspaceMenuItem = NSMenuItem(
             title: "Previous Workspace",
             action: #selector(focusPreviousWorkspaceFromMenu(_:)),
-            keyEquivalent: "0"
+            keyEquivalent: ""
         )
         previousWorkspaceMenuItem.target = self
         viewMenu.addItem(previousWorkspaceMenuItem)
@@ -358,18 +378,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let moveWorkspaceUpMenuItem = NSMenuItem(
             title: "Move Workspace Up",
             action: #selector(moveWorkspaceUpFromMenu(_:)),
-            keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+            keyEquivalent: ""
         )
-        moveWorkspaceUpMenuItem.keyEquivalentModifierMask = [.command, .control]
         moveWorkspaceUpMenuItem.target = self
         viewMenu.addItem(moveWorkspaceUpMenuItem)
 
         let moveWorkspaceDownMenuItem = NSMenuItem(
             title: "Move Workspace Down",
             action: #selector(moveWorkspaceDownFromMenu(_:)),
-            keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+            keyEquivalent: ""
         )
-        moveWorkspaceDownMenuItem.keyEquivalentModifierMask = [.command, .control]
         moveWorkspaceDownMenuItem.target = self
         viewMenu.addItem(moveWorkspaceDownMenuItem)
 
@@ -378,7 +396,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             let item = NSMenuItem(
                 title: "Go to Workspace \(index + 1)",
                 action: #selector(focusNumberedWorkspaceFromMenu(_:)),
-                keyEquivalent: "\(index + 1)"
+                keyEquivalent: ""
             )
             item.target = self
             item.tag = index
@@ -391,65 +409,74 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let splitRightMenuItem = NSMenuItem(
             title: "Split Right",
             action: #selector(splitPaneRightFromMenu(_:)),
-            keyEquivalent: "d"
+            keyEquivalent: ""
         )
-        splitRightMenuItem.keyEquivalentModifierMask = [.command]
         splitRightMenuItem.target = self
         viewMenu.addItem(splitRightMenuItem)
 
         let splitDownMenuItem = NSMenuItem(
             title: "Split Down",
             action: #selector(splitPaneDownFromMenu(_:)),
-            keyEquivalent: "D"
+            keyEquivalent: ""
         )
-        splitDownMenuItem.keyEquivalentModifierMask = [.command, .shift]
         splitDownMenuItem.target = self
         viewMenu.addItem(splitDownMenuItem)
 
         let removePaneMenuItem = NSMenuItem(
             title: "Remove Active Pane",
             action: #selector(removeActivePaneFromMenu(_:)),
-            keyEquivalent: "\u{8}"
+            keyEquivalent: ""
         )
-        removePaneMenuItem.keyEquivalentModifierMask = [.command, .shift]
         removePaneMenuItem.target = self
         viewMenu.addItem(removePaneMenuItem)
 
         let createPaneTabMenuItem = NSMenuItem(
             title: "New Pane Tab",
             action: #selector(createPaneTabFromMenu(_:)),
-            keyEquivalent: "t"
+            keyEquivalent: ""
         )
-        createPaneTabMenuItem.keyEquivalentModifierMask = [.command]
         createPaneTabMenuItem.target = self
         viewMenu.addItem(createPaneTabMenuItem)
 
         let closePaneTabMenuItem = NSMenuItem(
             title: "Close Pane Tab",
             action: #selector(closePaneTabFromMenu(_:)),
-            keyEquivalent: "w"
+            keyEquivalent: ""
         )
-        closePaneTabMenuItem.keyEquivalentModifierMask = [.command]
         closePaneTabMenuItem.target = self
         viewMenu.addItem(closePaneTabMenuItem)
 
         let nextPaneTabMenuItem = NSMenuItem(
             title: "Next Pane Tab",
             action: #selector(focusNextPaneTabFromMenu(_:)),
-            keyEquivalent: "\t"
+            keyEquivalent: ""
         )
-        nextPaneTabMenuItem.keyEquivalentModifierMask = [.control]
         nextPaneTabMenuItem.target = self
         viewMenu.addItem(nextPaneTabMenuItem)
+
+        let previousPaneTabMenuItem = NSMenuItem(
+            title: "Previous Pane Tab",
+            action: #selector(focusPreviousPaneTabFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        previousPaneTabMenuItem.target = self
+        viewMenu.addItem(previousPaneTabMenuItem)
 
         let nextPaneMenuItem = NSMenuItem(
             title: "Next Pane",
             action: #selector(focusNextPaneFromMenu(_:)),
-            keyEquivalent: "\t"
+            keyEquivalent: ""
         )
-        nextPaneMenuItem.keyEquivalentModifierMask = [.control, .shift]
         nextPaneMenuItem.target = self
         viewMenu.addItem(nextPaneMenuItem)
+
+        let previousPaneMenuItem = NSMenuItem(
+            title: "Previous Pane",
+            action: #selector(focusPreviousPaneFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        previousPaneMenuItem.target = self
+        viewMenu.addItem(previousPaneMenuItem)
 
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
@@ -470,7 +497,15 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.createPaneTabMenuItem = createPaneTabMenuItem
         self.closePaneTabMenuItem = closePaneTabMenuItem
         self.nextPaneTabMenuItem = nextPaneTabMenuItem
+        self.previousPaneTabMenuItem = previousPaneTabMenuItem
         self.nextPaneMenuItem = nextPaneMenuItem
+        self.previousPaneMenuItem = previousPaneMenuItem
+        applyMenuKeyBindings()
+    }
+
+    func applyKeyBindings(_ registry: OpenMUXKeyBindingRegistry) {
+        keyBindingRegistry = registry
+        applyMenuKeyBindings()
     }
 
     private func refreshMenuValidation() {
@@ -493,7 +528,47 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         createPaneTabMenuItem?.isEnabled = hasWorkspace
         closePaneTabMenuItem?.isEnabled = workspaceController.canClosePaneTab()
         nextPaneTabMenuItem?.isEnabled = workspaceController.canFocusPaneTab()
+        previousPaneTabMenuItem?.isEnabled = workspaceController.canFocusPaneTab()
         nextPaneMenuItem?.isEnabled = workspaceController.canFocusPane()
+        previousPaneMenuItem?.isEnabled = workspaceController.canFocusPane()
+    }
+
+    private func applyMenuKeyBindings() {
+        setShortcut(for: newWorkspaceMenuItem, action: .workspaceCreate)
+        setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
+        setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
+        setShortcut(for: previousWorkspaceMenuItem, action: .workspacePrevious)
+        setShortcut(for: moveWorkspaceUpMenuItem, action: .workspaceMoveUp)
+        setShortcut(for: moveWorkspaceDownMenuItem, action: .workspaceMoveDown)
+        for (index, item) in workspaceJumpMenuItems.enumerated() {
+            guard let action = OpenMUXKeyBindingAction.workspaceFocusAction(displayIndex: index) else {
+                continue
+            }
+            setShortcut(for: item, action: action)
+        }
+        setShortcut(for: splitRightMenuItem, action: .paneSplitRight)
+        setShortcut(for: splitDownMenuItem, action: .paneSplitDown)
+        setShortcut(for: removePaneMenuItem, action: .paneRemove)
+        setShortcut(for: createPaneTabMenuItem, action: .paneTabCreate)
+        setShortcut(for: closePaneTabMenuItem, action: .paneTabClose)
+        setShortcut(for: nextPaneTabMenuItem, action: .paneTabNext)
+        setShortcut(for: previousPaneTabMenuItem, action: .paneTabPrevious)
+        setShortcut(for: nextPaneMenuItem, action: .paneNext)
+        setShortcut(for: previousPaneMenuItem, action: .panePrevious)
+    }
+
+    private func setShortcut(for item: NSMenuItem?, action: OpenMUXKeyBindingAction) {
+        guard let item else {
+            return
+        }
+        guard let chord = keyBindingRegistry.chord(for: action),
+              let appKitShortcut = AppKitMenuShortcut(chord: chord) else {
+            item.keyEquivalent = ""
+            item.keyEquivalentModifierMask = []
+            return
+        }
+        item.keyEquivalent = appKitShortcut.keyEquivalent
+        item.keyEquivalentModifierMask = appKitShortcut.modifiers
     }
 
     private func restoreInitialWorkspace() throws -> Workspace {
@@ -543,4 +618,63 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
+}
+
+private struct AppKitMenuShortcut {
+    let keyEquivalent: String
+    let modifiers: NSEvent.ModifierFlags
+
+    init?(chord: OpenMUXKeyChord) {
+        switch chord.key {
+        case "tab":
+            keyEquivalent = "\t"
+        case "backspace":
+            keyEquivalent = "\u{8}"
+        case "up":
+            keyEquivalent = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+        case "down":
+            keyEquivalent = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        default:
+            keyEquivalent = chord.key
+        }
+
+        var modifiers: NSEvent.ModifierFlags = []
+        if chord.modifiers.containsCommand {
+            modifiers.insert(.command)
+        }
+        if chord.modifiers.appShellContainsControl {
+            modifiers.insert(.control)
+        }
+        if chord.modifiers.appShellContainsShift {
+            modifiers.insert(.shift)
+        }
+        self.modifiers = modifiers
+    }
+}
+
+private extension OpenMUXKeyBindingAction {
+    static func workspaceFocusAction(displayIndex: Int) -> OpenMUXKeyBindingAction? {
+        switch displayIndex {
+        case 0: return .workspaceFocus1
+        case 1: return .workspaceFocus2
+        case 2: return .workspaceFocus3
+        case 3: return .workspaceFocus4
+        case 4: return .workspaceFocus5
+        case 5: return .workspaceFocus6
+        case 6: return .workspaceFocus7
+        case 7: return .workspaceFocus8
+        case 8: return .workspaceFocus9
+        default: return nil
+        }
+    }
+}
+
+private extension KeyModifiers {
+    var appShellContainsShift: Bool {
+        intersection([.leftShift, .rightShift]).isEmpty == false
+    }
+
+    var appShellContainsControl: Bool {
+        intersection([.leftControl, .rightControl]).isEmpty == false
+    }
 }

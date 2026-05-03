@@ -154,6 +154,23 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 workspace = try controller.createWorkspace()
             }
             return JSONRPCResponse(id: request.id, result: .object(workspace.rpcObject))
+        case .closeWorkspace:
+            let workspaceID = request.params?.objectValue?["workspaceID"]?.stringValue.map(WorkspaceID.init(rawValue:))
+            let updatedWorkspace: Workspace?
+            if let workspaceID {
+                updatedWorkspace = try controller.closeWorkspace(workspaceID)
+            } else {
+                updatedWorkspace = try controller.deleteActiveWorkspace()
+            }
+            if let updatedWorkspace {
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: ControlPlaneActionResult(
+                        workspace: .object(updatedWorkspace.rpcObject)
+                    ).rpcValue
+                )
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "workspace cannot be closed"))
         case .listWorkspaces:
             if request.params?.objectValue?["full"]?.boolValue == true {
                 let workspaces = controller.allWorkspaces()
@@ -202,6 +219,26 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+        case .removePane:
+            let target = ControlPlaneTerminalTarget(rpcValue: request.params) ?? .focused
+            guard let context = controller.resolveTerminalTarget(target) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+            }
+            if target != .focused {
+                guard try controller.focus(target: target) != nil else {
+                    return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+                }
+            }
+            guard let workspace = try controller.removeActivePane() else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane cannot be removed"))
+            }
+            return JSONRPCResponse(
+                id: request.id,
+                result: ControlPlaneActionResult(
+                    target: context,
+                    workspace: .object(workspace.rpcObject)
+                ).rpcValue
+            )
         case .createPaneTab:
             if let workspace = try controller.createPaneTab() {
                 let created = workspace.focusedPane.map {

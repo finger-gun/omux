@@ -92,10 +92,14 @@ Current examples:
 
 ```bash
 omux list
-omux open ~/projects/omux
+omux open [path]
+omux workspace-close [workspace-id]
 omux tab
 omux split down
+omux pane-remove [--pane <pane-id>]
 omux pane-tab
+omux pane-tab-next
+omux pane-tab-prev
 omux pane-tab-focus <pane-id>
 omux pane-tab-close [pane-id]
 omux run <session-id> "pwd"
@@ -127,6 +131,8 @@ OpenMUX owns its user-facing configuration:
 - config file: `~/.omux/config.toml`
 - custom themes: `~/.omux/themes/`
 - generated Ghostty artifacts: `~/.omux/generated/ghostty/`
+
+`omux config init` writes the complete default config, including the `[keys]` table. Map a binding to `"none"` when an OpenMUX shortcut conflicts with a terminal application shortcut you want to preserve.
 
 Built-in themes currently include:
 

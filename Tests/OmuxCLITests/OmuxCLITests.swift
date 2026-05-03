@@ -78,6 +78,52 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["ok", "ok"])
     }
 
+    func testCLIWorkspaceCloseAndPaneRemoveSendExpectedTargets() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "remove.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-close"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-close", "workspace-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-remove"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-remove", "--pane", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-remove", "pane-1"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.closeWorkspace.rawValue,
+            ControlMethod.closeWorkspace.rawValue,
+            ControlMethod.removePane.rawValue,
+            ControlMethod.removePane.rawValue,
+        ])
+        XCTAssertNil(requests.value[0].params)
+        guard case .object(let closeParams)? = requests.value[1].params,
+              case .string("workspace-1")? = closeParams["workspaceID"] else {
+            return XCTFail("expected explicit workspace close target")
+        }
+        XCTAssertNil(requests.value[2].params)
+        guard case .object(let removeParams)? = requests.value[3].params,
+              case .object(let target)? = removeParams["target"],
+              case .string("pane")? = target["type"],
+              case .string("pane-1")? = target["id"] else {
+            return XCTFail("expected explicit pane remove target")
+        }
+        XCTAssertEqual(output, ["ok", "ok", "ok", "ok", "usage: omux pane-remove [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused]"])
+    }
+
     func testCLISupportsTabSplitAndRunCommands() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -110,6 +156,10 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "pane-tab-close", "pane-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-next"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane-prev"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-remove"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-remove", "--pane", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-close"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-close", "workspace-1"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "--pane", "pane-1", "--", "echo", "hello"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "send-text", "--session", "session-1", "--", "hello", "world"]), 0)
@@ -129,6 +179,10 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.closePaneTab.rawValue):none",
             "\(ControlMethod.focusNextPane.rawValue):none",
             "\(ControlMethod.focusPreviousPane.rawValue):none",
+            "\(ControlMethod.removePane.rawValue):none",
+            "\(ControlMethod.removePane.rawValue):none",
+            "\(ControlMethod.closeWorkspace.rawValue):none",
+            "\(ControlMethod.closeWorkspace.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.sendText.rawValue):none",
@@ -478,6 +532,12 @@ final class OmuxCLITests: XCTestCase {
         let contents = try String(contentsOf: configURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("schema = 1"))
         XCTAssertTrue(contents.contains("[theme]"))
+        XCTAssertTrue(contents.contains("default_root_path = \"~\""))
+        XCTAssertTrue(contents.contains("[keys]"))
+        for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
+            XCTAssertTrue(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))
+        }
+        XCTAssertFalse(contents.contains("cmd+shift+backspace"))
 
         output.removeAll()
         XCTAssertEqual(command.run(arguments: ["omux", "config", "init"]), 1)
@@ -546,6 +606,8 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "theme", "nord"]), 0)
         let contents = try String(contentsOf: tempHome.appendingPathComponent("config.toml"), encoding: .utf8)
         XCTAssertTrue(contents.contains("name = \"nord\""))
+        XCTAssertTrue(contents.contains("[keys]"))
+        XCTAssertTrue(contents.contains("\"cmd+shift+w\" = \"pane.remove\""))
         XCTAssertEqual(output, ["Theme set to Nord.", "No diagnostics.", "OpenMUX config reloaded."])
     }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import OmuxConfig
+@testable import OmuxCore
 
 struct OmuxConfigTests {
     @Test
@@ -238,6 +239,77 @@ struct OmuxConfigTests {
         let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
         #expect(result.hasErrors)
         #expect(result.diagnostics.contains(where: { $0.message.contains("Unknown [workspace] key") }))
+    }
+
+    @Test
+    func loadsKeyBindingsAndUnbinds() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [keys]
+            "cmd+shift+w" = "none"
+            "cmd+shift+p" = "pane.remove"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.keyBindings.count == 2)
+        #expect(result.config.keyBindings[0].chord.description == "cmd+shift+w")
+        #expect(result.config.keyBindings[0].action == nil)
+        #expect(result.config.keyBindings[1].chord.description == "cmd+shift+p")
+        #expect(result.config.keyBindings[1].action == .paneRemove)
+    }
+
+    @Test
+    func rejectsInvalidKeyBindings() throws {
+        let cases = [
+            ("\"cmd+option+w\" = \"pane.remove\"", "Option/Alt bindings are not supported"),
+            ("\"cmd+shift+w\" = \"pane.explode\"", "Unsupported [keys] action"),
+            ("\"cmd+shift+w\" = 123", "must be an action string"),
+            ("\"cmd+shift+w\" = \"pane.remove\"\n\"cmd+shift+w\" = \"workspace.close\"", "Duplicate [keys] chord"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [keys]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
+    func starterConfigIncludesDefaultKeyBindingsAndLoads() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(OmuxConfigTemplate.starter(), to: configURL)
+
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        #expect(contents.contains("default_root_path = \"~\""))
+        #expect(contents.contains("[keys]"))
+        for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
+            #expect(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))
+        }
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(OpenMUXKeyBindingRegistry.effective(overrides: result.config.keyBindings).chord(for: .paneRemove)?.description == "cmd+shift+w")
     }
 }
 

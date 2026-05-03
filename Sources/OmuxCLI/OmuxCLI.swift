@@ -139,6 +139,22 @@ public struct OmuxCLICommand {
             case "pane-prev":
                 let response = try client.request(method: .focusPreviousPane)
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-remove":
+                let arguments = Array(commandArguments.dropFirst())
+                let params: RPCValue?
+                if arguments.isEmpty {
+                    params = nil
+                } else {
+                    let parsed = parseTargetPrefix(arguments)
+                    guard let target = parsed.target, parsed.remaining.isEmpty else {
+                        writeLine("usage: omux pane-remove [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused]")
+                        return 1
+                    }
+                    params = .object(["target": target.rpcValue])
+                }
+
+                let response = try client.request(method: .removePane, params: params)
+                writeLine(response.result?.prettyPrinted ?? "")
             case "open":
                 guard commandArguments.count <= 2 else {
                     writeLine("usage: omux open [path]")
@@ -155,6 +171,20 @@ public struct OmuxCLICommand {
                     method: .openWorkspace,
                     params: params
                 )
+                writeLine(response.result?.prettyPrinted ?? "")
+            case "workspace-close":
+                guard commandArguments.count <= 2 else {
+                    writeLine("usage: omux workspace-close [workspace-id]")
+                    return 1
+                }
+
+                let params: RPCValue?
+                if commandArguments.count == 2 {
+                    params = .object(["workspaceID": .string(commandArguments[1])])
+                } else {
+                    params = nil
+                }
+                let response = try client.request(method: .closeWorkspace, params: params)
                 writeLine(response.result?.prettyPrinted ?? "")
             case "focus":
                 guard let target = parseFocusTarget(Array(commandArguments.dropFirst())) else {
@@ -254,8 +284,10 @@ public struct OmuxCLICommand {
       omux events
       omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
       omux open [path]
+      omux workspace-close [workspace-id]
       omux tab
       omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]
+      omux pane-remove [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused]
       omux pane-tab
       omux pane-tab-next
       omux pane-tab-prev
@@ -695,6 +727,7 @@ public struct OmuxCLICommand {
             theme: OmuxConfigTheme(name: theme.name),
             terminal: current.terminal,
             workspace: current.workspace,
+            keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
         )
@@ -763,6 +796,13 @@ public struct OmuxCLICommand {
         lines.append("")
         lines.append("[workspace]")
         lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
+
+        lines.append("")
+        lines.append("[keys]")
+        for entry in config.keyBindings {
+            let value = entry.action?.rawValue ?? "none"
+            lines.append("\"\(entry.chord.description)\" = \(render(.string(value)))")
+        }
 
         lines.append("")
         lines.append("[ghostty]")

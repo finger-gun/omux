@@ -69,14 +69,21 @@ swift run omux config init
 swift run omux theme
 swift run omux theme nord
 swift run omux theme list
+swift run omux open [path]
+swift run omux workspace-close [workspace-id]
 swift run omux tab
 swift run omux split
 swift run omux split right
 swift run omux split left --focused
 swift run omux split down
+swift run omux pane-remove [--pane <pane-id>]
 swift run omux pane-tab
+swift run omux pane-tab-next
+swift run omux pane-tab-prev
 swift run omux pane-tab-focus <pane-id>
 swift run omux pane-tab-close [pane-id]
+swift run omux pane-next
+swift run omux pane-prev
 swift run omux events
 swift run omux list --full
 swift run omux sessions
@@ -122,7 +129,7 @@ The current shell baseline adds:
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions
 - pane resize propagation into the live terminal runtime
-- keyboard-first workspace controls including `Cmd+D` split right, `Cmd+Shift+D` split down, `Cmd+B` workspace-column toggle, `Cmd+1` through `Cmd+9` ordered workspace jumps, and `Cmd+0` previous-workspace recall
+- keyboard-first workspace controls including `Cmd+T`/`Cmd+W` pane-tab create/close, `Cmd+D`/`Cmd+Shift+D` pane split right/down, `Cmd+Shift+W` pane remove, `Cmd+N`/`Cmd+Shift+N` workspace create/close, `Cmd+B` workspace-column toggle, `Cmd+1` through `Cmd+9` ordered workspace jumps, and `Cmd+0` previous-workspace recall
 
 ## Pane stack model
 

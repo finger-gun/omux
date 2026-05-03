@@ -19,14 +19,18 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
-    private func requestControlMethod(_ method: ControlMethod, socketPath: String) throws -> JSONRPCResponse {
+    private func requestControlMethod(
+        _ method: ControlMethod,
+        socketPath: String,
+        params: RPCValue? = nil
+    ) throws -> JSONRPCResponse {
         let requestFinished = expectation(description: "control-plane \(method.rawValue) request finished")
         let responseBox = LockedBox<JSONRPCResponse?>(nil)
         let errorBox = LockedBox<Error?>(nil)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let client = OmuxControlClient(socketPath: socketPath)
-                responseBox.value = try client.request(method: method, params: nil)
+                responseBox.value = try client.request(method: method, params: params)
             } catch {
                 errorBox.value = error
             }
@@ -50,6 +54,101 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         return PaneID(rawValue: paneID)
+    }
+
+    @MainActor
+    func testApplicationMenuUsesScopeShortcutLadder() {
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+
+        let delegate = OpenMUXAppDelegate()
+        delegate.configureMenus()
+        delegate.applyKeyBindings(.defaults)
+
+        let viewMenu = NSApplication.shared.mainMenu?.items
+            .compactMap(\.submenu)
+            .first { $0.title == "View" }
+        XCTAssertNotNil(viewMenu)
+
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "New Workspace",
+            key: "n",
+            modifiers: [.command]
+        ) ?? false)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Delete Workspace",
+            key: "n",
+            modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            title: "New Pane",
+            key: "t",
+            modifiers: [.command, .shift]
+        ) ?? true)
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            key: "t",
+            modifiers: [.command, .shift]
+        ) ?? true)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Remove Active Pane",
+            key: "w",
+            modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            title: "Remove Active Pane",
+            key: "\u{8}",
+            modifiers: [.command, .shift]
+        ) ?? true)
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            key: "\u{8}",
+            modifiers: [.command, .shift]
+        ) ?? true)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "New Pane Tab",
+            key: "t",
+            modifiers: [.command]
+        ) ?? false)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Close Pane Tab",
+            key: "w",
+            modifiers: [.command]
+        ) ?? false)
+    }
+
+    @MainActor
+    func testApplicationMenuReflectsReboundAndUnboundKeybindings() throws {
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+
+        let delegate = OpenMUXAppDelegate()
+        delegate.configureMenus()
+        delegate.applyKeyBindings(
+            .effective(overrides: [
+                OpenMUXKeyBindingOverride(
+                    chord: try OpenMUXKeyChord(parsing: "cmd+shift+w"),
+                    action: nil
+                ),
+                OpenMUXKeyBindingOverride(
+                    chord: try OpenMUXKeyChord(parsing: "cmd+shift+p"),
+                    action: .paneRemove
+                ),
+            ])
+        )
+
+        let viewMenu = NSApplication.shared.mainMenu?.items
+            .compactMap(\.submenu)
+            .first { $0.title == "View" }
+
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            title: "Remove Active Pane",
+            key: "w",
+            modifiers: [.command, .shift]
+        ) ?? true)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Remove Active Pane",
+            key: "p",
+            modifiers: [.command, .shift]
+        ) ?? false)
     }
 
     func testWorkspaceControllerCreatesTabsAndSplits() throws {
@@ -1007,6 +1106,59 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testConfigurationCoordinatorReloadPublishesKeyBindingChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        let expectation = expectation(description: "keybindings changed")
+        coordinator.onKeyBindingsChange = { registry in
+            if registry.chord(for: .paneRemove)?.description == "cmd+shift+p" {
+                expectation.fulfill()
+            }
+        }
+
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [keys]
+        "cmd+shift+w" = "none"
+        "cmd+shift+p" = "pane.remove"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let result = coordinator.reload()
+
+        XCTAssertTrue(result.applied)
+        XCTAssertEqual(coordinator.keyBindingRegistry().chord(for: .paneRemove)?.description, "cmd+shift+p")
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
     func testWorkspaceWindowSidebarTracksMultipleWorkspaces() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -1845,6 +1997,7 @@ final class OmuxAppShellTests: XCTestCase {
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
                 defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []
@@ -1898,6 +2051,7 @@ final class OmuxAppShellTests: XCTestCase {
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
                 defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []
@@ -1946,6 +2100,75 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testControlPlaneClosesWorkspaceAndRemovesTargetedPane() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "remove.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp")
+        let secondWorkspace = try controller.createWorkspace()
+        let closeExplicitResponse = try requestControlMethod(
+            .closeWorkspace,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["workspaceID": .string(secondWorkspace.id.rawValue)])
+        )
+        XCTAssertNil(closeExplicitResponse.error)
+        XCTAssertEqual(controller.allWorkspaces().map(\.id), [firstWorkspace.id])
+
+        let closeLastResponse = try requestControlMethod(.closeWorkspace, socketPath: socketURL.path(percentEncoded: false))
+        XCTAssertEqual(closeLastResponse.error?.code, 409)
+
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let firstPaneID = try XCTUnwrap(splitWorkspace.focusedTab?.visiblePaneIDs.first)
+        let secondPaneID = try XCTUnwrap(splitWorkspace.focusedPane?.id)
+        let removePaneResponse = try requestControlMethod(
+            .removePane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["target": ControlPlaneTerminalTarget.pane(firstPaneID).rpcValue])
+        )
+
+        XCTAssertNil(removePaneResponse.error)
+        XCTAssertEqual(targetPaneID(in: removePaneResponse), firstPaneID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedTab?.panes.map(\.id), [secondPaneID])
+
+        let invalidPaneResponse = try requestControlMethod(
+            .removePane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["target": ControlPlaneTerminalTarget.pane(PaneID(rawValue: "missing")).rpcValue])
+        )
+        XCTAssertEqual(invalidPaneResponse.error?.code, 404)
+    }
+
+    @MainActor
     func testControlPlaneWorkspaceMutationsRunOnMainThreadForHookDrivenRequests() throws {
         let runtime = MainThreadRecordingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1958,6 +2181,7 @@ final class OmuxAppShellTests: XCTestCase {
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
                 defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []
@@ -2017,6 +2241,7 @@ final class OmuxAppShellTests: XCTestCase {
             initialState: OpenMUXPreparedConfiguration(
                 theme: .defaultTheme,
                 defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: []
@@ -2211,6 +2436,29 @@ final class OmuxAppShellTests: XCTestCase {
         try process.run()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
+    }
+}
+
+private extension Array where Element == NSMenuItem {
+    func containsShortcut(title: String, key: String, modifiers expectedModifiers: NSEvent.ModifierFlags) -> Bool {
+        contains { item in
+            item.title == title
+                && item.keyEquivalent == key
+                && item.keyEquivalentModifierMask.structuralShortcutModifiers == expectedModifiers
+        }
+    }
+
+    func containsShortcut(key: String, modifiers expectedModifiers: NSEvent.ModifierFlags) -> Bool {
+        contains { item in
+            item.keyEquivalent == key
+                && item.keyEquivalentModifierMask.structuralShortcutModifiers == expectedModifiers
+        }
+    }
+}
+
+private extension NSEvent.ModifierFlags {
+    var structuralShortcutModifiers: NSEvent.ModifierFlags {
+        intersection([.command, .shift, .control, .option])
     }
 }
 

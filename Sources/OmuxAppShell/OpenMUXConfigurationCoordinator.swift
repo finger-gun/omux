@@ -1,5 +1,6 @@
 import Foundation
 import OmuxConfig
+import OmuxCore
 import OmuxTerminalBridge
 import OmuxTheme
 
@@ -7,6 +8,7 @@ import OmuxTheme
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
     let defaultWorkspaceRootPath: String
+    let keyBindingRegistry: OpenMUXKeyBindingRegistry
     let compiledConfigURL: URL?
     let compiledHash: String?
     let diagnostics: [OmuxConfigDiagnostic]
@@ -21,6 +23,7 @@ struct OpenMUXConfigurationReloadResult: Sendable {
 final class OpenMUXConfigurationCoordinator {
     var onThemeChange: ((WorkspaceShellTheme) -> Void)?
     var onWorkspaceDefaultRootChange: ((String) -> Void)?
+    var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
 
     private let bridge: GhosttyTerminalBridge
@@ -29,6 +32,7 @@ final class OpenMUXConfigurationCoordinator {
     private let stateLock = NSLock()
     private var currentTheme: WorkspaceShellTheme
     private var currentDefaultWorkspaceRootPath: String
+    private var currentKeyBindingRegistry: OpenMUXKeyBindingRegistry
     private var currentCompiledConfigURL: URL?
     private var currentCompiledHash: String?
     private var currentDiagnostics: [OmuxConfigDiagnostic]
@@ -42,6 +46,7 @@ final class OpenMUXConfigurationCoordinator {
         self.evaluator = evaluator
         self.currentTheme = initialState.theme
         self.currentDefaultWorkspaceRootPath = initialState.defaultWorkspaceRootPath
+        self.currentKeyBindingRegistry = initialState.keyBindingRegistry
         self.currentCompiledConfigURL = initialState.compiledConfigURL
         self.currentCompiledHash = initialState.compiledHash
         self.currentDiagnostics = initialState.diagnostics
@@ -52,11 +57,13 @@ final class OpenMUXConfigurationCoordinator {
     ) -> OpenMUXPreparedConfiguration {
         let evaluation = evaluator.evaluate()
         let shellTheme = evaluation.theme.map(WorkspaceShellTheme.init(theme:)) ?? .defaultTheme
+        let keyBindingRegistry = OpenMUXKeyBindingRegistry.effective(overrides: evaluation.config.keyBindings)
 
         guard let output = evaluation.compilerOutput else {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: evaluation.diagnostics
@@ -69,6 +76,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: fileURL,
                 compiledHash: output.hash,
                 diagnostics: evaluation.diagnostics
@@ -77,6 +85,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
                 compiledHash: nil,
                 diagnostics: evaluation.diagnostics + [
@@ -101,6 +110,12 @@ final class OpenMUXConfigurationCoordinator {
         return currentDefaultWorkspaceRootPath
     }
 
+    func keyBindingRegistry() -> OpenMUXKeyBindingRegistry {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentKeyBindingRegistry
+    }
+
     @discardableResult
     func reload() -> OpenMUXConfigurationReloadResult {
         reloadLock.lock()
@@ -118,8 +133,19 @@ final class OpenMUXConfigurationCoordinator {
         }
 
         do {
-            let previousHash = stateLock.withLock { currentCompiledHash }
-            let shouldRefresh = previousHash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
+            let previousState = stateLock.withLock {
+                (
+                    hash: currentCompiledHash,
+                    defaultWorkspaceRootPath: currentDefaultWorkspaceRootPath,
+                    keyBindingRegistry: currentKeyBindingRegistry
+                )
+            }
+            let keyBindingRegistry = OpenMUXKeyBindingRegistry.effective(overrides: evaluation.config.keyBindings)
+            let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
+            let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
+            let shouldApply = shouldRefresh
+                || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
+                || previousState.keyBindingRegistry != keyBindingRegistry
             let fileURL: URL
             var diagnostics = evaluation.diagnostics
 
@@ -132,16 +158,16 @@ final class OpenMUXConfigurationCoordinator {
             }
 
             let shellTheme = WorkspaceShellTheme(theme: theme)
-            let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
             stateLock.withLock {
                 currentTheme = shellTheme
                 currentDefaultWorkspaceRootPath = defaultWorkspaceRootPath
+                currentKeyBindingRegistry = keyBindingRegistry
                 currentCompiledConfigURL = fileURL
                 currentCompiledHash = output.hash
                 currentDiagnostics = diagnostics
             }
-            publish(theme: shellTheme, defaultWorkspaceRootPath: defaultWorkspaceRootPath, diagnostics: diagnostics)
-            return OpenMUXConfigurationReloadResult(applied: shouldRefresh, diagnostics: diagnostics)
+            publish(theme: shellTheme, defaultWorkspaceRootPath: defaultWorkspaceRootPath, keyBindingRegistry: keyBindingRegistry, diagnostics: diagnostics)
+            return OpenMUXConfigurationReloadResult(applied: shouldApply, diagnostics: diagnostics)
         } catch {
             let diagnostics = evaluation.diagnostics + [
                 OmuxConfigDiagnostic(
@@ -158,15 +184,24 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.withLock {
             currentDiagnostics = diagnostics
         }
-        publish(theme: nil, defaultWorkspaceRootPath: nil, diagnostics: diagnostics)
+        publish(theme: nil, defaultWorkspaceRootPath: nil, keyBindingRegistry: nil, diagnostics: diagnostics)
     }
 
-    private func publish(theme: WorkspaceShellTheme?, defaultWorkspaceRootPath: String?, diagnostics: [OmuxConfigDiagnostic]) {
+    private func publish(
+        theme: WorkspaceShellTheme?,
+        defaultWorkspaceRootPath: String?,
+        keyBindingRegistry: OpenMUXKeyBindingRegistry?,
+        diagnostics: [OmuxConfigDiagnostic]
+    ) {
         if let theme {
             onThemeChange?(theme)
         }
         if let defaultWorkspaceRootPath {
             onWorkspaceDefaultRootChange?(defaultWorkspaceRootPath)
+        }
+        if let keyBindingRegistry {
+            OpenMUXShortcutClassifier.updateKeyBindings(keyBindingRegistry)
+            onKeyBindingsChange?(keyBindingRegistry)
         }
         onDiagnosticsChange?(diagnostics)
     }

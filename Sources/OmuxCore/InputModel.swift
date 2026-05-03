@@ -103,7 +103,11 @@ public protocol KeyEventNormalizing {
 }
 
 public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
-    public init() {}
+    private let keyBindingRegistry: OpenMUXKeyBindingRegistry?
+
+    public init(keyBindingRegistry: OpenMUXKeyBindingRegistry? = nil) {
+        self.keyBindingRegistry = keyBindingRegistry
+    }
 
     public func normalize(_ raw: RawKeyInput) -> NormalizedKeyEvent {
         let key = raw.charactersIgnoringModifiers.isEmpty
@@ -120,7 +124,7 @@ public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
         let route: NormalizedInputRoute
         if raw.isComposing {
             route = .composition
-        } else if OpenMUXShortcutClassifier.isOpenMUXShortcut(raw) {
+        } else if OpenMUXShortcutClassifier.isOpenMUXShortcut(raw, registry: keyBindingRegistry) {
             route = .shortcut
         } else {
             route = .terminal
@@ -139,30 +143,28 @@ public struct DefaultKeyEventNormalizer: KeyEventNormalizing, Sendable {
 }
 
 public struct OpenMUXShortcutClassifier: Sendable {
+    nonisolated(unsafe) private static var activeRegistry = OpenMUXKeyBindingRegistry.defaults
+    private static let registryLock = NSLock()
+
     public init() {}
 
-    public static func isOpenMUXShortcut(_ raw: RawKeyInput) -> Bool {
-        let key = (raw.charactersIgnoringModifiers.isEmpty ? raw.characters : raw.charactersIgnoringModifiers)
-            .lowercased()
+    public static func updateKeyBindings(_ registry: OpenMUXKeyBindingRegistry) {
+        registryLock.lock()
+        activeRegistry = registry
+        registryLock.unlock()
+    }
 
-        if key == "\t" {
-            return raw.modifiers.containsOnlyControl || raw.modifiers.containsOnlyControlOrShift
-        }
+    public static func currentKeyBindings() -> OpenMUXKeyBindingRegistry {
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        return activeRegistry
+    }
 
-        guard raw.modifiers.containsCommand,
-              raw.modifiers.containsOptionOrControl == false
-        else {
-            return false
+    public static func isOpenMUXShortcut(_ raw: RawKeyInput, registry: OpenMUXKeyBindingRegistry? = nil) -> Bool {
+        if let registry {
+            return registry.contains(raw)
         }
-
-        switch key {
-        case "d":
-            return raw.modifiers.containsOnlyCommandOrShift
-        case "b", "t", "w", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
-            return raw.modifiers.containsOnlyCommand
-        default:
-            return false
-        }
+        return currentKeyBindings().contains(raw)
     }
 }
 
