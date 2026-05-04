@@ -24,6 +24,60 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(event.route, .terminal)
     }
 
+    func testSemanticVersionComparison() {
+        XCTAssertLessThan(
+            OpenMUXSemanticVersion(parsing: "0.4.0")!,
+            OpenMUXSemanticVersion(parsing: "0.5.0")!
+        )
+        XCTAssertLessThan(
+            OpenMUXSemanticVersion(parsing: "v0.5.0")!,
+            OpenMUXSemanticVersion(parsing: "1.0.0")!
+        )
+    }
+
+    func testVersionProviderReadsRepositoryVersion() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "9.8.7\n".write(to: root.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        let executableURL = root.appendingPathComponent("bin/omux", isDirectory: false)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
+
+        let provider = OpenMUXVersionProvider(
+            executablePath: executableURL.path,
+            currentDirectoryPath: root.appendingPathComponent("nested").path
+        )
+
+        XCTAssertEqual(try provider.currentVersion(), "9.8.7")
+    }
+
+    func testReleaseMetadataParserFindsRequiredAssets() throws {
+        let data = Data("""
+        {
+          "tag_name": "v0.5.0",
+          "prerelease": false,
+          "assets": [
+            {
+              "name": "OpenMUX-0.5.0-macos-unsigned.zip",
+              "browser_download_url": "https://example.test/OpenMUX.zip",
+              "size": 123
+            },
+            {
+              "name": "checksums.txt",
+              "browser_download_url": "https://example.test/checksums.txt"
+            }
+          ]
+        }
+        """.utf8)
+
+        let release = try OpenMUXReleaseMetadataParser.parseLatestRelease(data: data)
+
+        XCTAssertEqual(release.version.description, "0.5.0")
+        XCTAssertEqual(release.appArchiveAsset?.name, "OpenMUX-0.5.0-macos-unsigned.zip")
+        XCTAssertEqual(release.checksumAsset?.name, "checksums.txt")
+    }
+
     func testDeadKeyRoutesToComposition() {
         let raw = RawKeyInput(
             keyCode: 33,

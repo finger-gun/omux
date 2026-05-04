@@ -184,6 +184,37 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
     }
 
+    @MainActor
+    func testWorkspaceControllerStoresUpdateAvailability() {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        controller.setUpdateAvailability(OpenMUXUpdateAvailability(version: "0.5.0"))
+
+        XCTAssertEqual(controller.currentUpdateAvailability(), OpenMUXUpdateAvailability(version: "0.5.0"))
+    }
+
+    @MainActor
+    func testSidebarRendersUpdateNotice() {
+        let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 400))
+
+        sidebar.render(
+            workspaceItems: [],
+            theme: .defaultTheme,
+            onSelectWorkspace: { _ in },
+            onCreateWorkspace: {},
+            onDeleteWorkspace: {},
+            canDeleteWorkspace: false,
+            updateAvailability: OpenMUXUpdateAvailability(version: "0.5.0"),
+            onMoveWorkspace: { _, _ in },
+            onSelectPane: { _ in }
+        )
+
+        XCTAssertEqual(sidebar.updateNoticeTextForTesting, "New version 0.5.0 run: omux update")
+    }
+
     func testFocusPaneTabActivatesContainingWorkspace() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),

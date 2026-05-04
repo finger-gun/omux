@@ -7,6 +7,26 @@ import XCTest
 @testable import OmuxTheme
 
 final class OmuxCLITests: XCTestCase {
+    private final class FakeRunningAppManager: OmuxRunningApplicationManaging {
+        var apps: [OmuxRunningApplication]
+        private(set) var terminateCalls = 0
+
+        init(apps: [OmuxRunningApplication] = []) {
+            self.apps = apps
+        }
+
+        func runningApplications(bundleIdentifier: String) -> [OmuxRunningApplication] {
+            _ = bundleIdentifier
+            return apps
+        }
+
+        func terminate(bundleIdentifier: String) {
+            _ = bundleIdentifier
+            terminateCalls += 1
+            apps = []
+        }
+    }
+
     func testCLIUsesPublicControlPlane() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -42,6 +62,173 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output.count, 1)
         XCTAssertTrue(output[0].contains("demo"))
         XCTAssertTrue(output[0].contains("/tmp/demo"))
+    }
+
+    func testCLIVersionUsesLocalVersionProvider() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "1.2.3\n".write(to: root.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        let executableURL = root.appendingPathComponent("bin/omux", isDirectory: false)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            versionProvider: OpenMUXVersionProvider(executablePath: executableURL.path, currentDirectoryPath: root.path)
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "version"]), 0)
+        XCTAssertEqual(output, ["1.2.3"])
+    }
+
+    func testSelfUpdaterCancelsWhenUserDeclinesRunningAppClose() throws {
+        let fixture = try makeUpdateFixture(currentVersion: "0.4.0", latestVersion: "0.5.0")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let appManager = FakeRunningAppManager(apps: [OmuxRunningApplication(processIdentifier: 123)])
+        var output = [String]()
+        var helperLaunched = false
+
+        let updater = OmuxSelfUpdater(
+            versionProvider: fixture.versionProvider,
+            latestRelease: { fixture.release },
+            fileManager: .default,
+            homeDirectoryURL: fixture.homeURL,
+            temporaryDirectoryURL: fixture.tempURL,
+            executablePath: fixture.executableURL.path,
+            appManager: appManager,
+            download: { source, destination in
+                try FileManager.default.copyItem(at: source, to: destination)
+            },
+            launchDetachedHelper: { _, _ in helperLaunched = true },
+            writeLine: { output.append($0) },
+            readInputLine: { "n" }
+        )
+
+        let outcome = try updater.runUpdate()
+
+        XCTAssertEqual(outcome.state, .cancelled)
+        XCTAssertFalse(helperLaunched)
+        XCTAssertTrue(output.contains("Update cancelled."))
+    }
+
+    func testSelfUpdaterStagesAndLaunchesDetachedHelper() throws {
+        let fixture = try makeUpdateFixture(currentVersion: "0.4.0", latestVersion: "0.5.0")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let appManager = FakeRunningAppManager()
+        var manifestURL: URL?
+
+        let updater = OmuxSelfUpdater(
+            versionProvider: fixture.versionProvider,
+            latestRelease: { fixture.release },
+            fileManager: .default,
+            homeDirectoryURL: fixture.homeURL,
+            temporaryDirectoryURL: fixture.tempURL,
+            executablePath: fixture.executableURL.path,
+            appManager: appManager,
+            download: { source, destination in
+                try FileManager.default.copyItem(at: source, to: destination)
+            },
+            launchDetachedHelper: { _, manifest in manifestURL = manifest },
+            writeLine: { _ in },
+            readInputLine: { nil }
+        )
+
+        let outcome = try updater.runUpdate()
+
+        guard case .handedOff(let version, _) = outcome.state else {
+            return XCTFail("expected helper handoff")
+        }
+        XCTAssertEqual(version, "0.5.0")
+        let manifestPath = try XCTUnwrap(manifestURL?.path)
+        let manifest = try JSONDecoder().decode(
+            OmuxUpdateManifest.self,
+            from: Data(contentsOf: URL(fileURLWithPath: manifestPath))
+        )
+        XCTAssertEqual(manifest.version, "0.5.0")
+        XCTAssertEqual(manifest.targetAppPath, fixture.installedAppURL.path)
+    }
+
+    private func makeUpdateFixture(
+        currentVersion: String,
+        latestVersion: String
+    ) throws -> (
+        root: URL,
+        homeURL: URL,
+        tempURL: URL,
+        executableURL: URL,
+        installedAppURL: URL,
+        versionProvider: OpenMUXVersionProvider,
+        release: OpenMUXRelease
+    ) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let homeURL = root.appendingPathComponent("home", isDirectory: true)
+        let tempURL = root.appendingPathComponent("tmp", isDirectory: true)
+        let installedAppURL = root.appendingPathComponent("Installed/OpenMUX.app", isDirectory: true)
+        let executableURL = installedAppURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false)
+        let releaseRoot = root.appendingPathComponent("release", isDirectory: true)
+        let stagedAppURL = releaseRoot.appendingPathComponent("OpenMUX.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tempURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: stagedAppURL.appendingPathComponent("Contents/MacOS", isDirectory: true), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        try writeInfoPlist(version: currentVersion, to: installedAppURL)
+        try writeInfoPlist(version: latestVersion, to: stagedAppURL)
+
+        let archiveURL = releaseRoot.appendingPathComponent("OpenMUX-\(latestVersion)-macos-unsigned.zip")
+        try runDitto(arguments: ["-c", "-k", "--sequesterRsrc", "--keepParent", stagedAppURL.path, archiveURL.path])
+        let checksum = try sha256(archiveURL)
+        let checksumURL = releaseRoot.appendingPathComponent("checksums.txt")
+        try "\(checksum)  \(archiveURL.lastPathComponent)\n".write(to: checksumURL, atomically: true, encoding: .utf8)
+
+        let provider = OpenMUXVersionProvider(executablePath: executableURL.path, currentDirectoryPath: root.path)
+        let release = OpenMUXRelease(
+            tagName: "v\(latestVersion)",
+            version: try XCTUnwrap(OpenMUXSemanticVersion(parsing: latestVersion)),
+            assets: [
+                OpenMUXReleaseAsset(name: archiveURL.lastPathComponent, downloadURL: archiveURL),
+                OpenMUXReleaseAsset(name: "checksums.txt", downloadURL: checksumURL),
+            ]
+        )
+        return (root, homeURL, tempURL, executableURL, installedAppURL, provider, release)
+    }
+
+    private func writeInfoPlist(version: String, to appURL: URL) throws {
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contentsURL, withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "dev.fingergun.omux",
+            "CFBundleShortVersionString": version,
+        ]
+        (plist as NSDictionary).write(to: contentsURL.appendingPathComponent("Info.plist"), atomically: true)
+    }
+
+    private func runDitto(arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    private func sha256(_ fileURL: URL) throws -> String {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+        process.arguments = ["-a", "256", fileURL.path]
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return try XCTUnwrap(output.split(separator: " ").first.map(String.init))
     }
 
     func testCLIOpenAcceptsOptionalPath() throws {

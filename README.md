@@ -184,6 +184,8 @@ The app bundle includes a bundled `omux` binary. You can install it from the app
 /Applications/OpenMUX.app/Contents/MacOS/omux install-cli
 ```
 
+After that, `omux version` reports the installed version and `omux update` checks the latest GitHub Release, verifies the app archive checksum, stages it in a per-user temporary directory, and installs it. If OpenMUX is running, the updater asks before closing it and performs the final app replacement from a detached helper.
+
 For the exact packaging and release flow, see [docs/releasing.md](./docs/releasing.md).
 
 ## Status

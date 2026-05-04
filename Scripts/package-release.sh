@@ -66,6 +66,7 @@ fi
 CLI_STAGING_DIR="$STAGING_DIR/omux-$VERSION-macos"
 mkdir -p "$CLI_STAGING_DIR"
 cp "$CLI_BIN" "$CLI_STAGING_DIR/omux"
+cp "$ROOT_DIR/VERSION" "$CLI_STAGING_DIR/VERSION"
 find "$BIN_DIR" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$CLI_STAGING_DIR"/ \;
 
 if [ -f "$ROOT_DIR/LICENSE" ]; then

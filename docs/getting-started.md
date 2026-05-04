@@ -34,9 +34,28 @@ After installation, check that the command is available:
 
 ```bash
 omux help
+omux version
 ```
 
 If the installer falls back to `~/.local/bin/omux`, make sure `~/.local/bin` is on your shell `PATH`.
+
+## 2.1. Update OpenMUX
+
+Once `omux` is installed, you can check and install newer GitHub Release app archives from Terminal:
+
+```bash
+omux update
+```
+
+The updater downloads the latest app archive and `checksums.txt`, verifies the SHA-256 checksum, unarchives into a per-user temporary staging directory, validates the app bundle, and then installs `OpenMUX.app`. If OpenMUX is running, it prompts before closing it:
+
+```text
+Close OpenMUX to install 0.5.0 to /Applications/OpenMUX.app? [Y/n]
+```
+
+Press Return or answer `y` to continue; answer `n` to cancel without changing the installed app. The final replacement runs from a detached helper copied into the temporary staging directory, so the update can continue even when the command was launched from an OpenMUX terminal pane.
+
+The updater targets the current installed app when it can determine that location. Otherwise it uses `/Applications/OpenMUX.app` when writable, or `~/Applications/OpenMUX.app` for user-local installs. It does not invoke hidden `sudo` or request administrator privileges.
 
 ## 3. Open a workspace
 

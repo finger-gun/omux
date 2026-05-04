@@ -50,7 +50,9 @@ That command writes artifacts to `dist/release/`:
 - `omux-<version>-macos.tar.gz`
 - `checksums.txt`
 
-The app archive is produced from the existing unsigned app bundle flow in `Scripts/publish-unsigned.sh`. That flow ad-hoc signs the assembled app bundle so macOS sees a structurally valid bundle, but it does not use a Developer ID certificate or notarization. The CLI archive packages the release-built `omux` binary, SwiftPM resource bundles needed by CLI commands such as `omux theme`, and the repository license.
+The app archive is produced from the existing unsigned app bundle flow in `Scripts/publish-unsigned.sh`. That flow ad-hoc signs the assembled app bundle so macOS sees a structurally valid bundle, but it does not use a Developer ID certificate or notarization. The CLI archive packages the release-built `omux` binary, SwiftPM resource bundles needed by CLI commands such as `omux theme`, the release `VERSION`, and the repository license. The app bundle also includes `Contents/Resources/VERSION` so bundled tools can report their installed version offline.
+
+`checksums.txt` includes SHA-256 entries for both the app archive and CLI archive. `omux update` depends on the predictable app archive name and checksum entry to verify the downloaded app before it unarchives or installs anything.
 
 The app bundle also includes a bundled CLI binary at `OpenMUX.app/Contents/MacOS/omux`, so users who install only the app can:
 
@@ -62,6 +64,15 @@ The app bundle also includes a bundled CLI binary at `OpenMUX.app/Contents/MacOS
 ```
 
 By default that command installs `omux` into the first preferred directory already on `PATH`, or falls back to `~/.local/bin/omux` and prints the shell export line to add.
+
+Users can inspect and update installed releases with:
+
+```bash
+omux version
+omux update
+```
+
+`omux update` reads the latest GitHub Release metadata, downloads `OpenMUX-<version>-macos-unsigned.zip` plus `checksums.txt`, verifies the app archive checksum, stages the app under the user's temporary directory, validates `OpenMUX.app`, and installs it into the current app location when writable. If OpenMUX is running, it prompts before closing the app and hands off the final copy to a detached helper outside the app bundle being replaced. If `/Applications` is not writable and no current app target is available, it uses `~/Applications/OpenMUX.app` without invoking hidden privilege escalation.
 
 ## GitHub Release flow
 

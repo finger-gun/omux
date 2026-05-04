@@ -33,6 +33,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
+    private var updateAvailability: OpenMUXUpdateAvailability?
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
@@ -362,6 +363,25 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return lastNotification
+    }
+
+    func currentUpdateAvailability() -> OpenMUXUpdateAvailability? {
+        lock.lock()
+        defer { lock.unlock() }
+        return updateAvailability
+    }
+
+    func setUpdateAvailability(_ availability: OpenMUXUpdateAvailability?) {
+        lock.lock()
+        updateAvailability = availability
+        let workspace = activeWorkspaceID.flatMap { activeID in
+            workspaces.first { $0.id == activeID }
+        }
+        lock.unlock()
+
+        if let workspace {
+            onChange?(workspace)
+        }
     }
 
     public func canDeleteActiveWorkspace() -> Bool {

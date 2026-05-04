@@ -14,6 +14,7 @@ public struct OmuxCLICommand {
     private let configLoader: OmuxConfigLoader
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
+    private let versionProvider: OpenMUXVersionProvider
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
@@ -29,6 +30,7 @@ public struct OmuxCLICommand {
             configLoader: configLoader,
             themeRegistry: themeRegistry,
             installer: OmuxCLIInstaller(),
+            versionProvider: OpenMUXVersionProvider(),
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
             selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) }
         )
@@ -41,6 +43,7 @@ public struct OmuxCLICommand {
         configLoader: OmuxConfigLoader,
         themeRegistry: OmuxThemeRegistry,
         installer: OmuxCLIInstaller,
+        versionProvider: OpenMUXVersionProvider = OpenMUXVersionProvider(),
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
         selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
             try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1)
@@ -54,6 +57,7 @@ public struct OmuxCLICommand {
         self.configLoader = configLoader
         self.themeRegistry = themeRegistry
         self.installer = installer
+        self.versionProvider = versionProvider
     }
 
     @discardableResult
@@ -66,10 +70,21 @@ public struct OmuxCLICommand {
 
         do {
             switch command {
+            case "__update-helper":
+                guard commandArguments.count == 2 else {
+                    writeLine("usage: omux __update-helper <manifest-path>")
+                    return 1
+                }
+                return OmuxSelfUpdater(writeLine: writeLine, readInputLine: readInputLine)
+                    .runHelper(manifestPath: commandArguments[1])
             case "config":
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "theme":
                 return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
+            case "version", "--version":
+                writeLine(try versionProvider.currentVersion())
+            case "update":
+                return try runUpdateCommand(arguments: Array(commandArguments.dropFirst()))
             case "list":
                 let params: RPCValue? = commandArguments.dropFirst().contains("--full")
                     ? .object(["full": .bool(true)])
@@ -275,6 +290,8 @@ public struct OmuxCLICommand {
       omux config doctor
       omux config reload
       omux config init
+      omux version
+      omux update
       omux theme
       omux theme <name>
       omux theme list
@@ -712,6 +729,20 @@ public struct OmuxCLICommand {
             writeLine("omux error: \(error)")
             return 1
         }
+    }
+
+    private func runUpdateCommand(arguments: [String]) throws -> Int32 {
+        guard arguments.isEmpty else {
+            writeLine("usage: omux update")
+            return 1
+        }
+
+        _ = try OmuxSelfUpdater(
+            versionProvider: versionProvider,
+            writeLine: writeLine,
+            readInputLine: readInputLine
+        ).runUpdate()
+        return 0
     }
 
     private func applyTheme(_ theme: OmuxTheme) throws -> Int32 {

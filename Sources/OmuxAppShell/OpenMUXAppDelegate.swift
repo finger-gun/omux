@@ -112,6 +112,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             refreshMenuValidation()
             try controlPlaneService.start()
+            let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
+            Task { @MainActor in
+                await updateChecker.checkIfDue()
+            }
         } catch {
             assertionFailure("Failed to launch OpenMUX foundation: \(error)")
         }

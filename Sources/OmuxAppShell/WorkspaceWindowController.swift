@@ -209,6 +209,7 @@ final class WorkspaceShellViewController: NSViewController {
                 _ = try? self?.controller.deleteActiveWorkspace()
             },
             canDeleteWorkspace: controller.canDeleteActiveWorkspace(),
+            updateAvailability: controller.currentUpdateAvailability(),
             onMoveWorkspace: { [weak self] workspaceID, targetIndex in
                 _ = self?.controller.moveWorkspace(workspaceID, toDisplayIndex: targetIndex)
             },
@@ -611,6 +612,8 @@ private struct SidebarSectionAccessory {
 @MainActor
 final class WorkspaceSidebarView: NSView {
     private let workspacesSection = WorkspaceSidebarSectionView()
+    private let spacer = NSView()
+    private let updateNoticeView = SidebarUpdateNoticeView()
     private let container = NSStackView()
 
     override init(frame frameRect: NSRect) {
@@ -625,12 +628,18 @@ final class WorkspaceSidebarView: NSView {
 
         addSubview(container)
         container.addArrangedSubview(workspacesSection)
+        container.addArrangedSubview(spacer)
+        container.addArrangedSubview(updateNoticeView)
+        updateNoticeView.isHidden = true
 
         NSLayoutConstraint.activate([
             container.topAnchor.constraint(equalTo: topAnchor, constant: 14),
             container.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             container.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            container.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             workspacesSection.widthAnchor.constraint(equalTo: container.widthAnchor),
+            spacer.widthAnchor.constraint(equalTo: container.widthAnchor),
+            updateNoticeView.widthAnchor.constraint(equalTo: container.widthAnchor),
         ])
     }
 
@@ -645,6 +654,7 @@ final class WorkspaceSidebarView: NSView {
         layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
         layer?.borderWidth = 0
         workspacesSection.apply(theme: theme)
+        updateNoticeView.apply(theme: theme)
     }
 
     func render(
@@ -654,6 +664,7 @@ final class WorkspaceSidebarView: NSView {
         onCreateWorkspace: @escaping @MainActor () -> Void,
         onDeleteWorkspace: @escaping @MainActor () -> Void,
         canDeleteWorkspace: Bool,
+        updateAvailability: OpenMUXUpdateAvailability?,
         onMoveWorkspace: @escaping @MainActor (WorkspaceID, Int) -> Void,
         onSelectPane: @escaping @MainActor (PaneID) -> Void
     ) {
@@ -687,6 +698,75 @@ final class WorkspaceSidebarView: NSView {
                 }
             }
         )
+        updateNoticeView.render(updateAvailability: updateAvailability)
+    }
+
+    var updateNoticeTextForTesting: String? {
+        updateNoticeView.noticeTextForTesting
+    }
+}
+
+@MainActor
+private final class SidebarUpdateNoticeView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let commandLabel = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 10
+
+        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        commandLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        titleLabel.maximumNumberOfLines = 2
+        commandLabel.maximumNumberOfLines = 1
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        commandLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(titleLabel)
+        addSubview(commandLabel)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            commandLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
+            commandLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            commandLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            commandLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        titleLabel.textColor = theme.shell.textPrimary
+        commandLabel.textColor = theme.shell.textMuted
+        layer?.backgroundColor = theme.shell.canvasBackground.cgColor
+    }
+
+    func render(updateAvailability: OpenMUXUpdateAvailability?) {
+        guard let updateAvailability else {
+            isHidden = true
+            titleLabel.stringValue = ""
+            commandLabel.stringValue = ""
+            return
+        }
+
+        isHidden = false
+        titleLabel.stringValue = "New version \(updateAvailability.version)"
+        commandLabel.stringValue = "run: omux update"
+    }
+
+    var noticeTextForTesting: String? {
+        guard isHidden == false else {
+            return nil
+        }
+        return "\(titleLabel.stringValue) \(commandLabel.stringValue)"
     }
 }
 
