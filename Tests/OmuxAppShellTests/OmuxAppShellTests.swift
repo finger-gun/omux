@@ -65,20 +65,34 @@ final class OmuxAppShellTests: XCTestCase {
         delegate.configureMenus()
         delegate.applyKeyBindings(.defaults)
 
-        let viewMenu = NSApplication.shared.mainMenu?.items
+        let menus = NSApplication.shared.mainMenu?.items
             .compactMap(\.submenu)
-            .first { $0.title == "View" }
+        let workspaceMenu = menus?.first { $0.title == "Workspace" }
+        let paneMenu = menus?.first { $0.title == "Pane" }
+        let viewMenu = menus?.first { $0.title == "View" }
+        XCTAssertNotNil(workspaceMenu)
+        XCTAssertNotNil(paneMenu)
         XCTAssertNotNil(viewMenu)
 
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(workspaceMenu?.items.containsShortcut(
             title: "New Workspace",
             key: "n",
             modifiers: [.command]
         ) ?? false)
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(workspaceMenu?.items.containsShortcut(
             title: "Delete Workspace",
             key: "n",
             modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertFalse(viewMenu?.items.containsShortcut(
+            title: "New Workspace",
+            key: "n",
+            modifiers: [.command]
+        ) ?? true)
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Toggle Workspace Column",
+            key: "b",
+            modifiers: [.command]
         ) ?? false)
         XCTAssertFalse(viewMenu?.items.containsShortcut(
             title: "New Pane",
@@ -89,26 +103,26 @@ final class OmuxAppShellTests: XCTestCase {
             key: "t",
             modifiers: [.command, .shift]
         ) ?? true)
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(paneMenu?.items.containsShortcut(
             title: "Remove Active Pane",
             key: "w",
             modifiers: [.command, .shift]
         ) ?? false)
-        XCTAssertFalse(viewMenu?.items.containsShortcut(
+        XCTAssertFalse(paneMenu?.items.containsShortcut(
             title: "Remove Active Pane",
             key: "\u{8}",
             modifiers: [.command, .shift]
         ) ?? true)
-        XCTAssertFalse(viewMenu?.items.containsShortcut(
+        XCTAssertFalse(paneMenu?.items.containsShortcut(
             key: "\u{8}",
             modifiers: [.command, .shift]
         ) ?? true)
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(paneMenu?.items.containsShortcut(
             title: "New Pane Tab",
             key: "t",
             modifiers: [.command]
         ) ?? false)
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(paneMenu?.items.containsShortcut(
             title: "Close Pane Tab",
             key: "w",
             modifiers: [.command]
@@ -135,16 +149,16 @@ final class OmuxAppShellTests: XCTestCase {
             ])
         )
 
-        let viewMenu = NSApplication.shared.mainMenu?.items
+        let paneMenu = NSApplication.shared.mainMenu?.items
             .compactMap(\.submenu)
-            .first { $0.title == "View" }
+            .first { $0.title == "Pane" }
 
-        XCTAssertFalse(viewMenu?.items.containsShortcut(
+        XCTAssertFalse(paneMenu?.items.containsShortcut(
             title: "Remove Active Pane",
             key: "w",
             modifiers: [.command, .shift]
         ) ?? true)
-        XCTAssertTrue(viewMenu?.items.containsShortcut(
+        XCTAssertTrue(paneMenu?.items.containsShortcut(
             title: "Remove Active Pane",
             key: "p",
             modifiers: [.command, .shift]
@@ -168,6 +182,52 @@ final class OmuxAppShellTests: XCTestCase {
         let withSplit = try XCTUnwrap(controller.splitFocusedPane())
         XCTAssertEqual(withSplit.focusedTab?.panes.count, 2)
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
+    }
+
+    func testFocusPaneTabActivatesContainingWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp/first")
+        let firstPaneID = try XCTUnwrap(firstWorkspace.focusedPane?.id)
+        let secondWorkspace = try controller.createWorkspace()
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+        publishedEvents.removeAll()
+
+        let focusedWorkspace = try XCTUnwrap(controller.focusPaneTab(paneID: firstPaneID))
+
+        XCTAssertEqual(focusedWorkspace.id, firstWorkspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.id, firstWorkspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, firstPaneID)
+        XCTAssertEqual(publishedEvents.map(\.name), ["paneTab.focused"])
+        XCTAssertEqual(publishedEvents.first?.workspaceID, firstWorkspace.id)
+        XCTAssertEqual(publishedEvents.first?.paneID, firstPaneID)
+    }
+
+    func testFocusMissingPaneTabIsInert() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let focusedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        publishedEvents.removeAll()
+
+        XCTAssertNil(controller.focusPaneTab(paneID: PaneID(rawValue: "missing-pane")))
+        XCTAssertEqual(controller.activeWorkspace()?.id, workspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, focusedPaneID)
+        XCTAssertTrue(publishedEvents.isEmpty)
     }
 
     func testWorkspaceControllerUsesConfiguredDefaultRootForNewWorkspace() throws {
@@ -705,8 +765,8 @@ final class OmuxAppShellTests: XCTestCase {
                 try XCTUnwrap(splitWorkspace.focusedPane?.id),
             ]
         )
-        let secondWorkspace = try controller.createWorkspace()
         _ = controller.focus(paneID: try XCTUnwrap(splitWorkspace.focusedPane?.id))
+        let secondWorkspace = try controller.createWorkspace()
 
         let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
         let restoredController = WorkspaceController(
@@ -1689,6 +1749,33 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
         XCTAssertNotEqual(firstPane.id, secondPane.id)
+    }
+
+    @MainActor
+    func testWorkspaceWindowSidebarTerminalRowActivatesInactiveWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let firstWorkspace = try controller.openWorkspace(at: "/tmp/sidebar-first")
+        let firstPaneID = try XCTUnwrap(firstWorkspace.focusedPane?.id)
+        let secondWorkspace = try controller.openWorkspace(at: "/tmp/sidebar-second")
+        XCTAssertEqual(controller.activeWorkspace()?.id, secondWorkspace.id)
+
+        let windowController = WorkspaceWindowController(workspace: secondWorkspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        rootView.layoutSubtreeIfNeeded()
+        let firstPathLabel = try XCTUnwrap(findLabelView(withString: "/tmp/sidebar-first", in: sidebar))
+        let firstPathButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: firstPathLabel))
+
+        firstPathButton.mouseDown(with: makeMouseEvent(window: window))
+
+        XCTAssertEqual(controller.activeWorkspace()?.id, firstWorkspace.id)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, firstPaneID)
     }
 
     @MainActor

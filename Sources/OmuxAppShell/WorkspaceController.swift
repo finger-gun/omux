@@ -839,9 +839,25 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func focus(paneID: PaneID) -> Workspace? {
-        let updatedWorkspace = focusActiveWorkspace {
-            $0.focusedPane?.id != paneID && $0.focus(paneID: paneID)
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        for index in workspaces.indices {
+            guard workspaces[index].tabs.contains(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
+                continue
+            }
+
+            guard activeWorkspaceID != workspaces[index].id || workspaces[index].focusedPane?.id != paneID else {
+                lock.unlock()
+                return nil
+            }
+
+            if workspaces[index].focus(paneID: paneID) {
+                setActiveWorkspaceID(workspaces[index].id)
+                updatedWorkspace = workspaces[index]
+            }
+            break
         }
+        lock.unlock()
 
         if let updatedWorkspace {
             publishPaneFocusChange(updatedWorkspace, fallbackPaneID: paneID)
