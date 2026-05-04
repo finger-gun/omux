@@ -92,6 +92,10 @@ Themes are flat TOML files with a closed token set. Those tokens drive both the 
 OpenMUX currently ships:
 
 - `monokai-soda`
+- `atom-one-dark`
+- `atom-one-light`
+- `ayu`
+- `ayu-light`
 - `ayu-mirage`
 - `carbonfox`
 - `catppuccin`
@@ -103,6 +107,8 @@ OpenMUX currently ships:
 - `dracula`
 - `duskfox`
 - `everforest-dark`
+- `fairyfloss`
+- `firewatch`
 - `flexoki-dark`
 - `github-dark`
 - `github-dark-dimmed`
@@ -110,9 +116,11 @@ OpenMUX currently ships:
 - `github-light`
 - `gruvbox`
 - `gruvbox-dark-hard`
+- `gruvbox-light-hard`
 - `gruvbox-material-dark`
 - `horizon`
 - `kanagawa-wave`
+- `material-darker`
 - `material-ocean`
 - `monokai-pro`
 - `nightfox`
@@ -120,10 +128,12 @@ OpenMUX currently ships:
 - `one-dark`
 - `one-half-dark`
 - `one-half-light`
+- `onenord`
 - `rose-pine`
 - `snazzy`
 - `solarized-dark`
 - `solarized-light`
+- `synthwave`
 - `tokyo-night-storm`
 - `tokyonight-moon`
 - `tomorrow-night-eighties`

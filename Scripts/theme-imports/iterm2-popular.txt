@@ -29,3 +29,13 @@ snazzy | Snazzy | Snazzy
 tomorrow-night-eighties | Tomorrow Night Eighties | Tomorrow Night Eighties
 vesper | Vesper | Vesper
 wez | Wez | Wez
+atom-one-dark | Atom One Dark | Atom One Dark
+atom-one-light | Atom One Light | Atom One Light
+ayu | Ayu | Ayu
+ayu-light | Ayu Light | Ayu Light
+fairyfloss | Fairyfloss | Fairyfloss
+firewatch | Firewatch | Firewatch
+gruvbox-light-hard | Gruvbox Light Hard | Gruvbox Light Hard
+material-darker | Material Darker | Material Darker
+onenord | Onenord | Onenord
+synthwave | Synthwave | Synthwave
