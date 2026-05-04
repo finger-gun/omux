@@ -198,3 +198,64 @@ OpenMUX SHALL persist bounded history independently for each pane/pane-tab termi
 - **WHEN** a workspace with multiple pane tabs is persisted and restored
 - **THEN** `omux history <pane-id>` returns the bounded history for that pane ID without mixing output from sibling panes or pane tabs
 
+### Requirement: Control plane SHALL expose pane navigation capabilities
+The control plane SHALL expose capability-oriented JSON-RPC methods for cycling pane-local tabs and panes using OpenMUX-native workspace, tab, pane stack, pane, and session identifiers.
+
+#### Scenario: Pane-local tab next operation returns focused context
+- **WHEN** a client invokes the next pane-local tab operation
+- **THEN** the response identifies the focused workspace, tab, pane stack, pane, and session after navigation
+
+#### Scenario: Pane-local tab previous operation returns focused context
+- **WHEN** a client invokes the previous pane-local tab operation
+- **THEN** the response identifies the focused workspace, tab, pane stack, pane, and session after navigation
+
+#### Scenario: Pane next operation returns focused context
+- **WHEN** a client invokes the next pane operation
+- **THEN** the response identifies the focused workspace, tab, pane stack, pane, and session after navigation
+
+#### Scenario: Pane previous operation returns focused context
+- **WHEN** a client invokes the previous pane operation
+- **THEN** the response identifies the focused workspace, tab, pane stack, pane, and session after navigation
+
+#### Scenario: Navigation target failure is explicit
+- **WHEN** a navigation request cannot resolve a valid workspace, tab, pane stack, pane, or session target
+- **THEN** the control plane returns a structured failure instead of silently choosing another target
+
+### Requirement: CLI SHALL expose every new shared navigation action
+The `omux` CLI SHALL expose commands for opening the configured default root and for cycling pane-local tabs and panes through the public control-plane contract.
+
+#### Scenario: CLI opens configured root
+- **WHEN** the user runs `omux open` without a path
+- **THEN** the CLI sends a workspace open request that allows the app to resolve the configured default root
+
+#### Scenario: CLI cycles pane-local tabs
+- **WHEN** the user runs `omux pane-tab-next` or `omux pane-tab-prev`
+- **THEN** the CLI invokes the corresponding pane-local tab navigation method through the control plane
+
+#### Scenario: CLI cycles panes
+- **WHEN** the user runs `omux pane-next` or `omux pane-prev`
+- **THEN** the CLI invokes the corresponding pane navigation method through the control plane
+
+### Requirement: Control plane SHALL expose workspace close and pane remove commands
+The local JSON-RPC control plane and `omux` CLI SHALL expose additive commands for closing workspaces and removing panes.
+
+#### Scenario: CLI closes active workspace by default
+- **WHEN** a user runs `omux workspace-close` without a workspace ID
+- **THEN** the CLI requests closing the active workspace through the local control plane
+
+#### Scenario: CLI closes explicit workspace
+- **WHEN** a user runs `omux workspace-close <workspace-id>`
+- **THEN** the CLI requests closing that workspace ID through the local control plane
+
+#### Scenario: CLI removes focused pane by default
+- **WHEN** a user runs `omux pane-remove` without a target selector
+- **THEN** the CLI requests removal of the focused pane through the local control plane
+
+#### Scenario: CLI removes targetable pane
+- **WHEN** a user runs `omux pane-remove` with a supported terminal target selector
+- **THEN** the CLI requests removal of the resolved pane through the local control plane and receives structured success or failure
+
+#### Scenario: Existing creation commands remain available
+- **WHEN** users invoke existing creation commands including `omux open`, `omux split`, and `omux pane-tab`
+- **THEN** those commands continue to work without being replaced by the new close/remove commands
+

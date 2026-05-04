@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change macos-foundation. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Native app shell owns workspace structure
 The system SHALL provide a native macOS application shell that owns OpenMUX workspaces, windows, tabs, pane stacks, local pane tabs, and focus relationships independently of the terminal engine, even when each visible pane region hosts a real libghostty-backed terminal surface.
 
@@ -13,11 +11,15 @@ The system SHALL provide a native macOS application shell that owns OpenMUX work
 - **THEN** the system represents that structure using OpenMUX-native concepts rather than raw terminal-engine objects
 
 ### Requirement: Terminal hosting uses AppKit-first integration
-The system SHALL host terminal surfaces within an AppKit-first application shell, with SwiftUI limited to non-terminal chrome where it does not control terminal interaction semantics, and with real pane surfaces embedded as native AppKit-hosted views.
+The system SHALL host terminal surfaces within an AppKit-first application shell, with SwiftUI limited to non-terminal chrome where it does not control terminal interaction semantics, and with real pane surfaces embedded as native AppKit-hosted views. Sidebar terminal navigation SHALL restore native focus to the selected hosted terminal surface.
 
 #### Scenario: Terminal surfaces stay in native view ownership
 - **WHEN** a terminal pane is displayed in the desktop application
 - **THEN** the terminal surface is hosted within an AppKit-owned interaction model that preserves native focus, menus, event routing, and accessibility expectations
+
+#### Scenario: Sidebar terminal click restores terminal focus
+- **WHEN** the user clicks a sidebar terminal metadata row
+- **THEN** the selected hosted terminal pane becomes the active first-responder target after the workspace shell refreshes
 
 ### Requirement: App shell responsibilities remain separate from terminal rendering
 The system SHALL keep shell responsibilities such as window lifecycle, pane layout, pane-stack chrome, focus management, notifications, and workspace orchestration separate from terminal rendering and PTY behavior, even when the shell hosts real libghostty-backed surfaces.
@@ -91,3 +93,83 @@ The native macOS shell SHALL surface pane-local status for supported terminal ev
 #### Scenario: Pane shows session-ended or unhealthy state
 - **WHEN** OpenMUX receives a supported child-exited or renderer-health terminal event for a pane
 - **THEN** the shell updates pane-owned status to reflect the ended or unhealthy session state
+
+### Requirement: Native menus SHALL reflect effective keybindings
+The native macOS shell SHALL derive representable menu key equivalents from the effective OpenMUX keybinding registry.
+
+#### Scenario: Default menu shortcuts are shown
+- **WHEN** OpenMUX starts without user keybinding overrides
+- **THEN** native menu items show the documented default shortcuts
+
+#### Scenario: Rebound menu shortcut is shown
+- **WHEN** a user configures a supported representable chord for an action with a native menu item
+- **THEN** that menu item shows the configured chord
+
+#### Scenario: Unbound menu shortcut is cleared
+- **WHEN** a user configures an action's default chord as `"none"` and no replacement chord is configured
+- **THEN** the corresponding menu item does not show the unbound shortcut
+
+### Requirement: Menu and terminal interception SHALL stay coherent
+The native macOS shell SHALL keep menu key equivalents and terminal-pane shortcut classification synchronized with the same effective keybinding registry.
+
+#### Scenario: Menu shortcut triggers same action as terminal shortcut
+- **WHEN** a chord is displayed on a native menu item and the focused pane receives the same chord
+- **THEN** both paths resolve to the same OpenMUX shell action
+
+#### Scenario: Keybinding reload updates menus
+- **WHEN** configuration reload changes effective keybindings
+- **THEN** native menu key equivalents update without restarting existing terminal sessions
+
+### Requirement: Native shell SHALL route inline pane-tab controls through shared pane-stack actions
+The native macOS shell SHALL implement inline pane-tab add and close controls as AppKit-owned shell chrome that calls the existing shared pane-stack actions without involving terminal-engine internals.
+
+#### Scenario: Inline controls preserve the terminal bridge boundary
+- **WHEN** the user creates or closes a pane-local tab through inline pane-tab chrome
+- **THEN** the native shell routes the action through OpenMUX workspace/controller operations without requiring `libghostty` types outside the terminal bridge
+
+#### Scenario: Inline controls do not alter terminal keyboard ownership
+- **WHEN** inline pane-tab controls are added to pane chrome
+- **THEN** terminal keyboard input, IME composition, Option/right-Option input, and unrelated terminal pointer regions remain terminal-owned
+
+### Requirement: Native shell SHALL provide scoped structural shortcuts
+The native macOS shell SHALL expose scoped structural shortcuts for pane tabs, pane splitting/removal, and workspace create/delete actions while preserving existing shortcuts.
+
+#### Scenario: Pane remove shortcut is available
+- **WHEN** the user invokes `Cmd+Shift+W`
+- **THEN** the shell removes the active pane using the existing pane remove action
+
+#### Scenario: Workspace close shortcut is available
+- **WHEN** the user invokes `Cmd+Shift+N`
+- **THEN** the shell closes/deletes the active workspace using the existing workspace delete action
+
+#### Scenario: Existing structural shortcuts remain available
+- **WHEN** the user invokes existing structural shortcuts such as `Cmd+D`, `Cmd+Shift+D`, `Cmd+T`, `Cmd+W`, or `Cmd+N`
+- **THEN** the shell preserves their existing behavior
+
+#### Scenario: Legacy Backspace pane remove shortcut is not available
+- **WHEN** the user invokes `Cmd+Shift+Backspace`
+- **THEN** the shell does not claim that chord as a pane-remove shortcut
+
+#### Scenario: No duplicate pane-add shortcut is introduced
+- **WHEN** the user invokes `Cmd+Shift+T`
+- **THEN** the shell does not claim that chord as a pane-add shortcut
+
+### Requirement: App menus SHALL separate workspace, pane, and view responsibilities
+The native macOS shell SHALL organize menu actions by OpenMUX-native responsibility so model actions are discoverable without crowding the View menu.
+
+#### Scenario: Workspace actions live in Workspace menu
+- **WHEN** the app builds its main menu
+- **THEN** workspace lifecycle, workspace movement, previous-workspace, and direct workspace jump actions appear under a Workspace menu
+
+#### Scenario: Pane actions live in Pane menu
+- **WHEN** the app builds its main menu
+- **THEN** split, remove-pane, pane-tab, and pane navigation actions appear under a Pane menu
+
+#### Scenario: View menu remains for chrome visibility
+- **WHEN** the app builds its main menu
+- **THEN** the View menu contains visual shell/chrome controls such as toggling the workspace column rather than workspace or pane model actions
+
+#### Scenario: Menu split preserves shortcuts
+- **WHEN** keybindings are applied or rebound
+- **THEN** the moved menu items keep shortcuts from the shared keybinding registry
+

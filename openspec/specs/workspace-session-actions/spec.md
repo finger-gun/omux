@@ -131,3 +131,86 @@ The system SHALL create related panes, splits, and pane tabs using the latest kn
 - **WHEN** a user creates a pane tab in a pane stack
 - **THEN** the new pane tab launches in the stack's focused pane working directory
 
+### Requirement: Workspace open actions SHALL resolve missing paths from the configured default root
+The system SHALL use the configured workspace default root whenever a workspace-open action is invoked without an explicit path. This applies to first app launch without persisted workspaces, native shell workspace creation, control-plane workspace open requests, and `omux open` with no path.
+
+#### Scenario: First launch uses configured root
+- **WHEN** OpenMUX launches without persisted workspace state and the user configured a default workspace root
+- **THEN** the initial workspace opens at the configured default root
+
+#### Scenario: Sidebar create uses configured root
+- **WHEN** the user creates a workspace from native shell chrome without choosing a path
+- **THEN** the new workspace opens at the configured default root
+
+#### Scenario: CLI open without path uses configured root
+- **WHEN** the user runs `omux open` without a path
+- **THEN** the running app opens a workspace at the configured default root
+
+#### Scenario: Explicit open path wins
+- **WHEN** the user runs `omux open ~/repo`
+- **THEN** the running app opens a workspace at the explicit path instead of the configured default root
+
+### Requirement: Workspace actions SHALL support keyboard and CLI pane navigation
+The system SHALL expose shared actions for cycling pane-local tabs within the focused pane stack and cycling panes within the current workspace tab. These actions SHALL be invokable from native shortcuts, `omux` CLI commands, and the control plane.
+
+#### Scenario: Next pane-local tab cycles within focused stack
+- **WHEN** the user invokes next pane-local tab navigation from a focused pane stack with multiple pane-local tabs
+- **THEN** focus moves to the next pane-local tab in that stack, wrapping to the first pane-local tab after the last
+
+#### Scenario: Previous pane-local tab cycles within focused stack
+- **WHEN** the user invokes previous pane-local tab navigation from a focused pane stack with multiple pane-local tabs
+- **THEN** focus moves to the previous pane-local tab in that stack, wrapping to the last pane-local tab before the first
+
+#### Scenario: Next pane cycles in visible layout order
+- **WHEN** the user invokes next pane navigation in a workspace tab with multiple visible pane stacks
+- **THEN** focus moves to the next visible pane in split-tree order, wrapping to the first visible pane after the last
+
+#### Scenario: Previous pane cycles in visible layout order
+- **WHEN** the user invokes previous pane navigation in a workspace tab with multiple visible pane stacks
+- **THEN** focus moves to the previous visible pane in split-tree order, wrapping to the last visible pane before the first
+
+#### Scenario: Single target navigation is inert
+- **WHEN** the user invokes pane or pane-local tab navigation and there is only one valid target
+- **THEN** the active focus remains unchanged and no success-shaped state-change event is emitted
+
+### Requirement: Shared actions SHALL cover workspace and pane removal
+Workspace/session actions SHALL expose workspace close/delete and pane remove operations through shared OpenMUX operations that can be invoked by both the native shell and `omux`.
+
+#### Scenario: Workspace close is shared
+- **WHEN** the native shell or CLI requests closing a workspace
+- **THEN** OpenMUX closes the targeted workspace through the shared workspace action model
+
+#### Scenario: Pane remove is shared
+- **WHEN** the native shell or CLI requests removing a pane
+- **THEN** OpenMUX removes the targeted or focused pane through the shared workspace action model without bypassing pane-stack rules
+
+#### Scenario: Invalid remove action emits no success event
+- **WHEN** a workspace close or pane remove request is invalid or cannot change state
+- **THEN** OpenMUX returns a structured failure and does not emit a success-shaped action event
+
+### Requirement: Shared terminal input actions SHALL emit input-sent lifecycle events
+Workspace/session actions that forward terminal input SHALL emit `terminal.inputSent` after input is successfully delivered to the targeted live terminal session.
+
+#### Scenario: CLI run command emits input-sent
+- **WHEN** `omux run` successfully sends command text and Return to a resolved live pane or session
+- **THEN** OpenMUX emits one action-scoped `terminal.inputSent` event for the submitted command text
+
+#### Scenario: Send-text emits input-sent
+- **WHEN** `send-text` inserts arbitrary text into a terminal session
+- **THEN** OpenMUX emits `terminal.inputSent` for the forwarded text
+
+#### Scenario: UI typed input does not emit input-sent
+- **WHEN** a native terminal pane forwards user-typed text or terminal key input to Ghostty
+- **THEN** OpenMUX does not emit per-character or per-key `terminal.inputSent` events
+
+### Requirement: Failed input forwarding SHALL NOT emit input-sent
+Workspace/session actions SHALL emit input-sent only for successful input delivery to a live terminal session.
+
+#### Scenario: Missing target emits no input-sent
+- **WHEN** an input action targets a missing pane, session, workspace, or tab
+- **THEN** OpenMUX rejects the action without emitting `terminal.inputSent`
+
+#### Scenario: Bridge delivery failure emits no input-sent
+- **WHEN** the terminal bridge fails to deliver input to the runtime-backed pane
+- **THEN** OpenMUX does not emit `terminal.inputSent` and surfaces the failure through the existing action error path
+

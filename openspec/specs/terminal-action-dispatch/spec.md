@@ -44,7 +44,7 @@ Terminal action dispatch SHALL enrich command completion events with OpenMUX-own
 - **THEN** the OpenMUX-native event represents the command text as unavailable instead of fabricating a value
 
 ### Requirement: Command completion events include bounded output context
-Terminal action dispatch SHALL attach bounded OpenMUX-owned output context to command completion events when available, and SHALL expose an explicit unavailable value when output context is not available.
+Terminal action dispatch SHALL attach bounded OpenMUX-owned output context to command completion events when available, and SHALL expose an explicit unavailable value when output context is not available. The output context SHALL be derived after terminal-engine action translation from OpenMUX-native runtime snapshot or history data, not from raw terminal-engine action payloads.
 
 #### Scenario: Failure completion includes bounded output tail
 - **WHEN** OpenMUX has a bounded output tail for a completed command
@@ -53,6 +53,14 @@ Terminal action dispatch SHALL attach bounded OpenMUX-owned output context to co
 #### Scenario: Output context is unavailable
 - **WHEN** OpenMUX does not have output context for a completed command
 - **THEN** the command completion event marks output context unavailable without buffering unbounded terminal history
+
+#### Scenario: Output context uses bridge-owned snapshot text
+- **WHEN** a command completion event is enriched after runtime action translation
+- **THEN** OpenMUX derives output context from bounded OpenMUX-native snapshot or history data provided by the terminal bridge
+
+#### Scenario: Output context does not leak terminal-engine payloads
+- **WHEN** hooks or control-plane event subscribers consume command completion output context
+- **THEN** they receive OpenMUX-native output context values rather than Ghostty action payloads, text structs, or point-selection types
 
 ### Requirement: Command failure is derived after terminal-engine translation
 The system SHALL derive command-failure automation events from OpenMUX-native command completion data after terminal-engine action translation.
@@ -71,4 +79,33 @@ The system SHALL apply translated terminal cwd actions to the owning OpenMUX pan
 #### Scenario: Cwd action remains OpenMUX-native
 - **WHEN** app shell, hooks, or control-plane code observes a cwd change
 - **THEN** it receives OpenMUX-native pane/session IDs and path payloads rather than raw terminal-engine structs or enums
+
+### Requirement: Explicit terminal input actions SHALL emit OpenMUX-native input-sent events
+Terminal action dispatch SHALL support an OpenMUX-native `terminal.inputSent` event for explicit input actions that OpenMUX successfully delivers to a hosted runtime surface.
+
+#### Scenario: Action text input becomes input-sent event
+- **WHEN** OpenMUX successfully delivers action-scoped text to a live terminal-backed pane
+- **THEN** the system emits `terminal.inputSent` with OpenMUX-native workspace, tab, pane, session, text, and source fields
+
+#### Scenario: Native typed input is not streamed
+- **WHEN** a native terminal pane forwards user-typed text or normalized key input to Ghostty
+- **THEN** OpenMUX does not emit per-character or per-key `terminal.inputSent` events
+
+### Requirement: Input-sent payloads SHALL stay bridge-owned and OpenMUX-native
+Input-sent dispatch SHALL NOT expose raw AppKit event objects, Ghostty input structs, or terminal-engine enums outside `OmuxTerminalBridge`.
+
+#### Scenario: Input event avoids Ghostty leakage
+- **WHEN** app shell, hooks, or control-plane code consumes `terminal.inputSent`
+- **THEN** it receives only OpenMUX-native IDs and payload values rather than raw terminal-engine input objects
+
+### Requirement: Input events SHALL NOT fabricate shell command text
+Terminal action dispatch SHALL NOT treat terminal title changes, prompt rendering, scrollback text, or accumulated input fragments as authoritative shell command submissions.
+
+#### Scenario: Title change remains presentation event
+- **WHEN** the terminal runtime emits `terminal.titleChanged` with a value that resembles a command
+- **THEN** OpenMUX continues to publish it as title metadata and does not derive command text from that title
+
+#### Scenario: IME input is not command-parsed
+- **WHEN** a user enters text through IME composition, dead keys, Option-produced layout text, paste, or shell editing shortcuts
+- **THEN** OpenMUX forwards input through the runtime input path without emitting input-sent fragments or reconstructing a command line
 

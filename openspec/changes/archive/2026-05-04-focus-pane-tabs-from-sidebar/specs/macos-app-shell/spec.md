@@ -11,6 +11,8 @@ The system SHALL host terminal surfaces within an AppKit-first application shell
 - **WHEN** the user clicks a sidebar terminal metadata row
 - **THEN** the selected hosted terminal pane becomes the active first-responder target after the workspace shell refreshes
 
+## ADDED Requirements
+
 ### Requirement: App menus SHALL separate workspace, pane, and view responsibilities
 The native macOS shell SHALL organize menu actions by OpenMUX-native responsibility so model actions are discoverable without crowding the View menu.
 
