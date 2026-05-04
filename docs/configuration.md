@@ -97,6 +97,7 @@ OpenMUX currently ships:
 - `catppuccin`
 - `catppuccin-frappe`
 - `catppuccin-macchiato`
+- `catppuccin-mocha`
 - `cobalt2`
 - `doom-one`
 - `dracula`
@@ -105,7 +106,10 @@ OpenMUX currently ships:
 - `flexoki-dark`
 - `github-dark`
 - `github-dark-dimmed`
+- `github-dark-high-contrast`
+- `github-light`
 - `gruvbox`
+- `gruvbox-dark-hard`
 - `gruvbox-material-dark`
 - `horizon`
 - `kanagawa-wave`
@@ -114,11 +118,17 @@ OpenMUX currently ships:
 - `nightfox`
 - `nord`
 - `one-dark`
+- `one-half-dark`
+- `one-half-light`
 - `rose-pine`
+- `snazzy`
 - `solarized-dark`
 - `solarized-light`
 - `tokyo-night-storm`
 - `tokyonight-moon`
+- `tomorrow-night-eighties`
+- `vesper`
+- `wez`
 
 The additional imported presets are generated from selected Ghostty-format themes in the [iTerm2 Color Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) collection. Maintainers can refresh them with `make import-themes`, which uses `Scripts/theme-imports/iterm2-popular.txt` and the pinned ref in `Scripts/theme-imports/iterm2-colors-ref`.
 

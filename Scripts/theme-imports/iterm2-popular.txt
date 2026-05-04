@@ -19,3 +19,13 @@ material-ocean | Material Ocean | Material Ocean
 monokai-pro | Monokai Pro | Monokai Pro
 gruvbox-material-dark | Gruvbox Material Dark | Gruvbox Material Dark
 tokyonight-moon | TokyoNight Moon | TokyoNight Moon
+catppuccin-mocha | Catppuccin Mocha | Catppuccin Mocha
+github-dark-high-contrast | GitHub Dark High Contrast | GitHub Dark High Contrast
+github-light | GitHub Light Default | GitHub Light
+gruvbox-dark-hard | Gruvbox Dark Hard | Gruvbox Dark Hard
+one-half-dark | One Half Dark | One Half Dark
+one-half-light | One Half Light | One Half Light
+snazzy | Snazzy | Snazzy
+tomorrow-night-eighties | Tomorrow Night Eighties | Tomorrow Night Eighties
+vesper | Vesper | Vesper
+wez | Wez | Wez

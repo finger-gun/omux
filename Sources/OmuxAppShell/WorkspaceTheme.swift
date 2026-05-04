@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import OmuxTerminalBridge
 import OmuxTheme
 
@@ -21,6 +22,23 @@ struct WorkspaceShellTheme {
         let selection = NSColor(themeColor: resolvedTokens[.selectionBackground])
         let sidebarSelection = selection.blended(withFraction: 0.2, of: accent) ?? selection
         let chromeActive = sidebarSelection.blended(withFraction: 0.2, of: accent) ?? accent
+        let foregroundPrimary = NSColor(themeColor: resolvedTokens[.foregroundPrimary])
+        let foregroundSecondary = NSColor(themeColor: resolvedTokens[.foregroundSecondary])
+        let foregroundMuted = NSColor(themeColor: resolvedTokens[.foregroundMuted])
+        let selectionForeground = NSColor(themeColor: resolvedTokens[.selectionForeground])
+        let selectedText = Self.bestContrastingColor(
+            against: sidebarSelection,
+            candidates: [
+                selectionForeground,
+                foregroundPrimary,
+                foregroundSecondary,
+                foregroundMuted,
+                canvas,
+                surface,
+                .black,
+                .white,
+            ]
+        )
 
         self.shell = WorkspaceShellColors(
             windowBackground: canvas,
@@ -35,13 +53,14 @@ struct WorkspaceShellTheme {
             subduedBorder: NSColor(themeColor: resolvedTokens[.borderSubtle]),
             accent: accent,
             selection: sidebarSelection,
-            textPrimary: NSColor(themeColor: resolvedTokens[.foregroundPrimary]),
-            textSecondary: NSColor(themeColor: resolvedTokens[.foregroundSecondary]),
-            textMuted: NSColor(themeColor: resolvedTokens[.foregroundMuted])
+            textPrimary: foregroundPrimary,
+            textSecondary: foregroundSecondary,
+            textMuted: foregroundMuted,
+            selectedText: selectedText
         )
         self.terminalPalette = TerminalThemePalette(
             backgroundColor: canvas,
-            foregroundColor: NSColor(themeColor: resolvedTokens[.foregroundPrimary]),
+            foregroundColor: foregroundPrimary,
             cursorColor: NSColor(themeColor: resolvedTokens[.cursor]),
             selectionColor: NSColor(themeColor: resolvedTokens[.selectionBackground])
         )
@@ -111,6 +130,36 @@ struct WorkspaceShellTheme {
             ]
         )
     )
+
+    static func contrastRatio(_ first: NSColor, _ second: NSColor) -> CGFloat {
+        let firstLuminance = relativeLuminance(first)
+        let secondLuminance = relativeLuminance(second)
+        let lighter = max(firstLuminance, secondLuminance)
+        let darker = min(firstLuminance, secondLuminance)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func bestContrastingColor(against background: NSColor, candidates: [NSColor]) -> NSColor {
+        candidates.max(by: {
+            contrastRatio($0, background) < contrastRatio($1, background)
+        }) ?? candidates.first ?? .labelColor
+    }
+
+    private static func relativeLuminance(_ color: NSColor) -> CGFloat {
+        let rgb = color.usingColorSpace(.sRGB) ?? color.usingColorSpace(.deviceRGB) ?? color
+        let red = linearizedComponent(rgb.redComponent)
+        let green = linearizedComponent(rgb.greenComponent)
+        let blue = linearizedComponent(rgb.blueComponent)
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    }
+
+    private static func linearizedComponent(_ value: CGFloat) -> CGFloat {
+        let clamped = min(max(value, 0), 1)
+        if clamped <= 0.03928 {
+            return clamped / 12.92
+        }
+        return CGFloat(pow(Double((clamped + 0.055) / 1.055), 2.4))
+    }
 }
 
 struct WorkspaceShellColors {
@@ -129,6 +178,7 @@ struct WorkspaceShellColors {
     let textPrimary: NSColor
     let textSecondary: NSColor
     let textMuted: NSColor
+    let selectedText: NSColor
 }
 
 private extension NSColor {

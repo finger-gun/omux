@@ -1415,7 +1415,7 @@ private final class PaneTabButton: NSControl {
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
         titleLabel.lineBreakMode = .byTruncatingMiddle
         titleLabel.stringValue = pane.title
-        titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
+        titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(titleLabel)
 
@@ -1423,7 +1423,7 @@ private final class PaneTabButton: NSControl {
             closeButton.configure(
                 symbolName: "xmark",
                 accessibilityLabel: "Close \(pane.title)",
-                active: false,
+                active: active,
                 theme: theme,
                 compact: true
             )
@@ -1507,7 +1507,7 @@ private final class PaneTabButton: NSControl {
     }
 
     private func updateVisualState() {
-        titleLabel.textColor = isActiveTab ? currentTheme.shell.textPrimary : currentTheme.shell.textSecondary
+        titleLabel.textColor = isActiveTab ? currentTheme.shell.selectedText : currentTheme.shell.textSecondary
         layer?.backgroundColor = (isActiveTab ? currentTheme.shell.selection : NSColor.clear).cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
@@ -1607,7 +1607,7 @@ private class ChromePillButton: NSControl {
     }
 
     private func updateVisualState() {
-        let foreground = isActive ? currentTheme.shell.textPrimary : currentTheme.shell.textSecondary
+        let foreground = isActive ? currentTheme.shell.selectedText : currentTheme.shell.textSecondary
         titleLabel.textColor = foreground
         imageView.contentTintColor = foreground
         layer?.backgroundColor = (isActive ? currentTheme.shell.selection : NSColor.clear).cgColor
@@ -1731,7 +1731,7 @@ final class SidebarItemButton: NSView {
         titleField.stringValue = item.title
         titleField.textColor = item.kind == .terminal
             ? theme.shell.textMuted
-            : (item.isActive ? theme.shell.textPrimary : theme.shell.textSecondary)
+            : (item.isActive ? theme.shell.selectedText : theme.shell.textSecondary)
         subtitleField.stringValue = item.subtitle ?? ""
         subtitleField.textColor = theme.shell.textMuted
         subtitleField.isHidden = item.subtitle == nil

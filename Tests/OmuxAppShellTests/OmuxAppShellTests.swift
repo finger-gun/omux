@@ -1449,6 +1449,18 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    func testBuiltInThemesUseReadableSelectedShellText() {
+        let failures = WorkspaceShellTheme.builtInPresets.compactMap { theme -> String? in
+            let ratio = WorkspaceShellTheme.contrastRatio(theme.shell.selectedText, theme.shell.selection)
+            guard ratio < 4.5 else {
+                return nil
+            }
+            return "\(theme.identifier): \(ratio)"
+        }
+
+        XCTAssertTrue(failures.isEmpty, "Low selected shell contrast: \(failures.joined(separator: ", "))")
+    }
+
     func testTerminalActionCoordinatorUpdatesPaneStateAndPublishesControlPlaneEvent() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
