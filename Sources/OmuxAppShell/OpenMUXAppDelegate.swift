@@ -33,6 +33,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var moveWorkspaceDownMenuItem: NSMenuItem?
     private var workspaceJumpMenuItems: [NSMenuItem] = []
     private var keyBindingRegistry: OpenMUXKeyBindingRegistry
+    private let autoCheckUpdate: Bool
 
     public override init() {
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
@@ -62,6 +63,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
+        self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
         self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
         OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
@@ -112,9 +114,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             refreshMenuValidation()
             try controlPlaneService.start()
-            let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
-            Task { @MainActor in
-                await updateChecker.checkIfDue()
+            if autoCheckUpdate {
+                let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
+                Task { @MainActor in
+                    await updateChecker.checkIfDue()
+                }
             }
         } catch {
             assertionFailure("Failed to launch OpenMUX foundation: \(error)")

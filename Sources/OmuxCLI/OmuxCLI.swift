@@ -755,6 +755,7 @@ public struct OmuxCLICommand {
         let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
         let updated = OmuxConfig(
             schema: current.schema,
+            autoCheckUpdate: current.autoCheckUpdate,
             theme: OmuxConfigTheme(name: theme.name),
             terminal: current.terminal,
             workspace: current.workspace,
@@ -795,12 +796,15 @@ public struct OmuxCLICommand {
     private func render(config: OmuxConfig) -> String {
         var lines: [String] = [
             "schema = \(config.schema)",
-            "",
-            "[theme]",
-            "name = \(render(.string(config.theme.name)))",
-            "",
-            "[terminal]",
         ]
+        if config.autoCheckUpdate == false {
+            lines.append("auto_check_update = false")
+        }
+        lines.append("")
+        lines.append("[theme]")
+        lines.append("name = \(render(.string(config.theme.name)))")
+        lines.append("")
+        lines.append("[terminal]")
 
         if let fontFamily = config.terminal.fontFamily {
             lines.append("font_family = \(render(.string(fontFamily)))")

@@ -10,6 +10,7 @@ New to OpenMUX? Start with [Getting started](./getting-started.md), then return 
 
 ```toml
 schema = 1
+# auto_check_update = true
 
 [theme]
 name = "monokai-soda"
@@ -50,6 +51,15 @@ default_root_path = "~"
 [ghostty]
 # "copy-on-select" = false
 ```
+
+## Root settings
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `schema` | integer | Required config schema version. |
+| `auto_check_update` | boolean | Enables passive background checks for newer OpenMUX GitHub Releases. Defaults to `true`; set to `false` to opt out. |
+
+Update checks run in the background after app startup. Failed checks do not show user-facing errors.
 
 ## Token vocabulary
 

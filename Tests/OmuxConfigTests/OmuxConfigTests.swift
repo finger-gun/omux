@@ -39,8 +39,51 @@ struct OmuxConfigTests {
         let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
         #expect(result.hasErrors == false)
         #expect(result.config.theme.name == "nord")
+        #expect(result.config.autoCheckUpdate)
         #expect(result.config.terminal == OmuxConfig.defaults.terminal)
         #expect(result.config.workspace == OmuxConfig.defaults.workspace)
+    }
+
+    @Test
+    func loadsAutoCheckUpdateSetting() throws {
+        let cases = [
+            ("true", true),
+            ("false", false),
+        ]
+
+        for (literal, expected) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+                auto_check_update = \(literal)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors == false)
+            #expect(result.config.autoCheckUpdate == expected)
+        }
+    }
+
+    @Test
+    func rejectsInvalidAutoCheckUpdateSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+            auto_check_update = "nope"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors)
+        #expect(result.config.autoCheckUpdate)
+        #expect(result.diagnostics.contains(where: { $0.message.contains("auto_check_update must be a boolean") }))
     }
 
     @Test
@@ -301,6 +344,7 @@ struct OmuxConfigTests {
         try write(OmuxConfigTemplate.starter(), to: configURL)
 
         let contents = try String(contentsOf: configURL, encoding: .utf8)
+        #expect(contents.contains("# auto_check_update = true"))
         #expect(contents.contains("default_root_path = \"~\""))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {

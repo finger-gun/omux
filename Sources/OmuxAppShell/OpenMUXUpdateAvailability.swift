@@ -8,6 +8,7 @@ struct OpenMUXUpdateAvailability: Equatable {
 @MainActor
 final class OpenMUXUpdateAvailabilityChecker {
     private static let lastCheckKey = "OpenMUXUpdateAvailabilityChecker.lastCheck"
+    private static let lastCheckedInstalledVersionKey = "OpenMUXUpdateAvailabilityChecker.lastCheckedInstalledVersion"
 
     private unowned let controller: WorkspaceController
     private let versionProvider: OpenMUXVersionProvider
@@ -36,18 +37,21 @@ final class OpenMUXUpdateAvailabilityChecker {
 
     func checkIfDue() async {
         let currentTime = now()
-        if let lastCheck = defaults.object(forKey: Self.lastCheckKey) as? Date,
-           currentTime.timeIntervalSince(lastCheck) < interval {
-            return
-        }
-        defaults.set(currentTime, forKey: Self.lastCheckKey)
 
         do {
             let installedVersionString = try versionProvider.currentVersion()
             guard let installedVersion = OpenMUXSemanticVersion(parsing: installedVersionString) else {
                 return
             }
+            if let lastCheck = defaults.object(forKey: Self.lastCheckKey) as? Date,
+               defaults.string(forKey: Self.lastCheckedInstalledVersionKey) == installedVersion.description,
+               currentTime.timeIntervalSince(lastCheck) < interval {
+                return
+            }
+
             let release = try await latestRelease()
+            defaults.set(currentTime, forKey: Self.lastCheckKey)
+            defaults.set(installedVersion.description, forKey: Self.lastCheckedInstalledVersionKey)
             guard release.version > installedVersion else {
                 controller.setUpdateAvailability(nil)
                 return

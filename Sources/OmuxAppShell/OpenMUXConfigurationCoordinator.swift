@@ -7,11 +7,30 @@ import OmuxTheme
 @MainActor
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
+    let autoCheckUpdate: Bool
     let defaultWorkspaceRootPath: String
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
     let compiledConfigURL: URL?
     let compiledHash: String?
     let diagnostics: [OmuxConfigDiagnostic]
+
+    init(
+        theme: WorkspaceShellTheme,
+        autoCheckUpdate: Bool = true,
+        defaultWorkspaceRootPath: String,
+        keyBindingRegistry: OpenMUXKeyBindingRegistry,
+        compiledConfigURL: URL?,
+        compiledHash: String?,
+        diagnostics: [OmuxConfigDiagnostic]
+    ) {
+        self.theme = theme
+        self.autoCheckUpdate = autoCheckUpdate
+        self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
+        self.keyBindingRegistry = keyBindingRegistry
+        self.compiledConfigURL = compiledConfigURL
+        self.compiledHash = compiledHash
+        self.diagnostics = diagnostics
+    }
 }
 
 struct OpenMUXConfigurationReloadResult: Sendable {
@@ -62,6 +81,7 @@ final class OpenMUXConfigurationCoordinator {
         guard let output = evaluation.compilerOutput else {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
@@ -75,6 +95,7 @@ final class OpenMUXConfigurationCoordinator {
             evaluator.garbageCollect(activeFileURL: fileURL)
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: fileURL,
@@ -84,6 +105,7 @@ final class OpenMUXConfigurationCoordinator {
         } catch {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,

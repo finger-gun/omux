@@ -32,25 +32,24 @@ public struct OmuxCLIInstaller {
     private let environment: [String: String]
     private let executablePath: String?
     private let homeDirectoryURL: URL
+    private let appBundleSearchURLs: [URL]
 
     public init(
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executablePath: String? = nil,
-        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        appBundleSearchURLs: [URL]? = nil
     ) {
         self.fileManager = fileManager
         self.environment = environment
         self.executablePath = executablePath ?? Self.currentExecutablePath()
         self.homeDirectoryURL = homeDirectoryURL
+        self.appBundleSearchURLs = appBundleSearchURLs ?? Self.defaultAppBundleSearchURLs(homeDirectoryURL: homeDirectoryURL)
     }
 
     public func install(destinationPath: String? = nil) throws -> Result {
-        guard let executablePath, executablePath.isEmpty == false else {
-            throw InstallerError.missingExecutablePath
-        }
-
-        let sourceURL = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().standardizedFileURL
+        let sourceURL = try installSourceURL()
         guard fileManager.fileExists(atPath: sourceURL.path), fileManager.isExecutableFile(atPath: sourceURL.path) else {
             throw InstallerError.executableNotFound(sourceURL.path)
         }
@@ -110,6 +109,53 @@ public struct OmuxCLIInstaller {
             return homeDirectoryURL.appendingPathComponent(suffix, isDirectory: false).standardizedFileURL
         }
         return URL(fileURLWithPath: path).standardizedFileURL
+    }
+
+    private func installSourceURL() throws -> URL {
+        guard let executablePath, executablePath.isEmpty == false else {
+            throw InstallerError.missingExecutablePath
+        }
+
+        let executableURL = URL(fileURLWithPath: executablePath).standardizedFileURL
+        if let appCLIURL = Self.appBundleCLIURL(containingExecutableAt: executableURL),
+           fileManager.fileExists(atPath: appCLIURL.path) {
+            return appCLIURL
+        }
+
+        for appURL in appBundleSearchURLs {
+            let cliURL = appURL
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("omux", isDirectory: false)
+                .standardizedFileURL
+            if fileManager.fileExists(atPath: cliURL.path), fileManager.isExecutableFile(atPath: cliURL.path) {
+                return cliURL
+            }
+        }
+
+        return executableURL.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    private static func defaultAppBundleSearchURLs(homeDirectoryURL: URL) -> [URL] {
+        [
+            URL(fileURLWithPath: "/Applications/OpenMUX.app", isDirectory: true),
+            homeDirectoryURL
+                .appendingPathComponent("Applications", isDirectory: true)
+                .appendingPathComponent("OpenMUX.app", isDirectory: true),
+        ]
+    }
+
+    private static func appBundleCLIURL(containingExecutableAt executableURL: URL) -> URL? {
+        var components = executableURL.standardizedFileURL.pathComponents
+        guard let appIndex = components.lastIndex(where: { $0.hasSuffix(".app") }) else {
+            return nil
+        }
+        components = Array(components.prefix(appIndex + 1))
+        return URL(fileURLWithPath: NSString.path(withComponents: components), isDirectory: true)
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("omux", isDirectory: false)
+            .standardizedFileURL
     }
 
     private func isDirectoryOnPath(_ directoryPath: String) -> Bool {
