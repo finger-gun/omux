@@ -901,12 +901,19 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         let workingDirectory = state.reportedWorkingDirectory
             ?? inheritedWorkingDirectory
             ?? descriptor.workingDirectory
+        let textSnapshot = terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
+            maxLines: PaneScrollbackSnapshot.defaultMaxLines
+        )
         return TerminalSessionSnapshot(
             paneID: paneID,
             sessionID: sessionID,
             runtimeSurfaceID: runtimeSurfaceID,
-            transcript: "",
+            transcript: textSnapshot.text,
             currentInput: "",
+            textUnavailableReason: textSnapshot.unavailableReason,
+            textTruncated: textSnapshot.truncated,
             shell: descriptor.shell,
             workingDirectory: workingDirectory,
             columns: size.columns > 0 ? Int(size.columns) : defaultSize.columns,
@@ -919,10 +926,26 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         maxBytes: Int,
         maxLines: Int
     ) -> PaneScrollbackSnapshot? {
+        terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ).scrollbackSnapshot
+    }
+
+    public func terminalTextSnapshot(
+        runtimeSurfaceID: String,
+        maxBytes: Int,
+        maxLines: Int
+    ) -> TerminalTextSnapshot {
         guard let state = try? surfaceState(for: runtimeSurfaceID),
               let surface = state.surface
         else {
-            return nil
+            return .unavailable(
+                reason: "terminal session unavailable",
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
         }
 
         return mainActorValue {
@@ -938,21 +961,34 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 maxBytes: maxBytes,
                 maxLines: maxLines
             )
-            if let combined = PaneScrollbackSnapshot.combined(history, active, maxBytes: maxBytes, maxLines: maxLines) {
+            if let combined = TerminalTextSnapshot.combined(
+                history,
+                active,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            ) {
                 return combined
             }
 
-            return self.readSurfaceText(
+            if let screen = self.readSurfaceText(
                 surface,
                 tag: GHOSTTY_POINT_SCREEN,
                 maxBytes: maxBytes,
                 maxLines: maxLines
-            ) ?? self.readSurfaceText(
+            ) {
+                return screen
+            }
+
+            if let viewport = self.readSurfaceText(
                 surface,
                 tag: GHOSTTY_POINT_VIEWPORT,
                 maxBytes: maxBytes,
                 maxLines: maxLines
-            )
+            ) {
+                return viewport
+            }
+
+            return .unavailable(reason: "history unavailable", maxBytes: maxBytes, maxLines: maxLines)
         }
     }
 
@@ -962,7 +998,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         tag: ghostty_point_tag_e,
         maxBytes: Int,
         maxLines: Int
-    ) -> PaneScrollbackSnapshot? {
+    ) -> TerminalTextSnapshot? {
         var text = ghostty_text_s()
         let selection = ghostty_selection_s(
             top_left: ghostty_point_s(
@@ -986,13 +1022,13 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             ghostty_surface_free_text(surface, &text)
         }
         guard let pointer = text.text, text.text_len > 0 else {
-            return nil
+            return .available(text: "", maxBytes: maxBytes, maxLines: maxLines)
         }
         let bytes = UnsafeBufferPointer(
             start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
             count: Int(text.text_len)
         )
-        return PaneScrollbackSnapshot.bounded(
+        return TerminalTextSnapshot.bounded(
             text: String(decoding: bytes, as: UTF8.self),
             maxBytes: maxBytes,
             maxLines: maxLines

@@ -124,6 +124,8 @@ final class TerminalActionCoordinator {
 
     private func hookCategory(for action: TerminalAction) -> HookCategory {
         switch action {
+        case .inputSent:
+            return .input
         case .commandFinished:
             return .command
         case .openURL, .desktopNotification, .bell:
@@ -152,6 +154,8 @@ final class TerminalActionCoordinator {
             name = .desktopNotification
         case .bell:
             name = .bell
+        case .inputSent:
+            name = .inputSent
         case .commandFinished:
             name = .commandFinished
         case .progressReported:

@@ -52,6 +52,7 @@ public protocol GhosttyRuntime {
         runtimeSurfaceID: String,
         defaultSize: TerminalSize
     ) -> TerminalSessionSnapshot?
+    func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot?
 }
 
@@ -118,6 +119,22 @@ public extension GhosttyRuntime {
         return nil
     }
 
+    func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot {
+        if let scrollback = scrollbackSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ) {
+            return .available(
+                text: scrollback.text,
+                truncated: scrollback.truncated,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+        }
+        return .unavailable(reason: "history unavailable", maxBytes: maxBytes, maxLines: maxLines)
+    }
+
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
         _ = runtimeSurfaceID
         _ = maxBytes
@@ -132,12 +149,133 @@ public enum TerminalBridgeError: Error {
     case runtimeAttachFailed(String)
 }
 
+public struct TerminalTextSnapshot: Equatable, Sendable {
+    public let text: String
+    public let truncated: Bool
+    public let maxBytes: Int
+    public let maxLines: Int
+    public let unavailableReason: String?
+
+    public init(
+        text: String,
+        truncated: Bool = false,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines,
+        unavailableReason: String? = nil
+    ) {
+        self.text = text
+        self.truncated = truncated
+        self.maxBytes = max(0, maxBytes)
+        self.maxLines = max(0, maxLines)
+        self.unavailableReason = unavailableReason
+    }
+
+    public static func available(
+        text: String,
+        truncated: Bool = false,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalTextSnapshot {
+        TerminalTextSnapshot(
+            text: text,
+            truncated: truncated,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
+    }
+
+    public static func unavailable(
+        reason: String,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalTextSnapshot {
+        TerminalTextSnapshot(
+            text: "",
+            truncated: false,
+            maxBytes: maxBytes,
+            maxLines: maxLines,
+            unavailableReason: reason
+        )
+    }
+
+    public static func bounded(
+        text: String,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalTextSnapshot {
+        let snapshot = PaneScrollbackSnapshot.bounded(
+            text: text,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
+        return .available(
+            text: snapshot?.text ?? "",
+            truncated: snapshot?.truncated ?? false,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
+    }
+
+    public static func combined(
+        _ first: TerminalTextSnapshot?,
+        _ second: TerminalTextSnapshot?,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalTextSnapshot? {
+        let available = [first, second].compactMap { snapshot -> TerminalTextSnapshot? in
+            guard let snapshot, snapshot.isAvailable else {
+                return nil
+            }
+            return snapshot
+        }
+        guard available.isEmpty == false else {
+            return nil
+        }
+
+        let text = available
+            .map(\.text)
+            .filter { $0.isEmpty == false }
+            .joined(separator: "\n")
+        var combined = bounded(text: text, maxBytes: maxBytes, maxLines: maxLines)
+        if available.contains(where: \.truncated) {
+            combined = .available(
+                text: combined.text,
+                truncated: true,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+        }
+        return combined
+    }
+
+    public var isAvailable: Bool {
+        unavailableReason == nil
+    }
+
+    public var lineCount: Int {
+        text.isEmpty ? 0 : text.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    public var byteCount: Int {
+        text.utf8.count
+    }
+
+    public var scrollbackSnapshot: PaneScrollbackSnapshot? {
+        guard isAvailable, text.isEmpty == false else {
+            return nil
+        }
+        return PaneScrollbackSnapshot(text: text, truncated: truncated)
+    }
+}
+
 public struct TerminalSessionSnapshot: Equatable, Sendable {
     public let paneID: PaneID
     public let sessionID: SessionID
     public let runtimeSurfaceID: String
     public let transcript: String
     public let currentInput: String
+    public let textUnavailableReason: String?
+    public let textTruncated: Bool
     public let shell: String
     public let workingDirectory: String
     public let columns: Int
@@ -149,6 +287,8 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
         runtimeSurfaceID: String,
         transcript: String,
         currentInput: String,
+        textUnavailableReason: String? = nil,
+        textTruncated: Bool = false,
         shell: String,
         workingDirectory: String,
         columns: Int = 80,
@@ -159,6 +299,8 @@ public struct TerminalSessionSnapshot: Equatable, Sendable {
         self.runtimeSurfaceID = runtimeSurfaceID
         self.transcript = transcript
         self.currentInput = currentInput
+        self.textUnavailableReason = textUnavailableReason
+        self.textTruncated = textTruncated
         self.shell = shell
         self.workingDirectory = workingDirectory
         self.columns = columns
@@ -340,13 +482,21 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
         maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
     ) -> PaneScrollbackSnapshot? {
+        terminalTextSnapshot(for: paneID, maxBytes: maxBytes, maxLines: maxLines).scrollbackSnapshot
+    }
+
+    public func terminalTextSnapshot(
+        for paneID: PaneID,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalTextSnapshot {
         lock.lock()
         let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
         lock.unlock()
         guard let runtimeSurfaceID else {
-            return nil
+            return .unavailable(reason: "terminal session unavailable", maxBytes: maxBytes, maxLines: maxLines)
         }
-        return runtime.scrollbackSnapshot(
+        return runtime.terminalTextSnapshot(
             runtimeSurfaceID: runtimeSurfaceID,
             maxBytes: maxBytes,
             maxLines: maxLines

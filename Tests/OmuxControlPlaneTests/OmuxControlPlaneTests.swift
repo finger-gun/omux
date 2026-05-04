@@ -251,6 +251,44 @@ final class OmuxControlPlaneTests: XCTestCase {
         )
     }
 
+    func testInputSentTerminalEventUsesStructuredPayload() {
+        let event = ControlPlaneEvent(
+            name: .inputSent,
+            workspaceID: WorkspaceID(rawValue: "workspace-1"),
+            tabID: TabID(rawValue: "tab-1"),
+            paneID: PaneID(rawValue: "pane-1"),
+            sessionID: SessionID(rawValue: "session-1"),
+            payload: .object([
+                "text": .string("l"),
+                "key": .string("l"),
+                "keyCode": .integer(37),
+                "modifiers": .integer(0),
+                "route": .string("terminal"),
+                "source": .string("action.test"),
+            ])
+        )
+
+        XCTAssertEqual(event.name, "terminal.inputSent")
+        XCTAssertEqual(
+            event.rpcValue,
+            .object([
+                "name": .string("terminal.inputSent"),
+                "workspaceID": .string("workspace-1"),
+                "tabID": .string("tab-1"),
+                "paneID": .string("pane-1"),
+                "sessionID": .string("session-1"),
+                "payload": .object([
+                    "text": .string("l"),
+                    "key": .string("l"),
+                    "keyCode": .integer(37),
+                    "modifiers": .integer(0),
+                    "route": .string("terminal"),
+                    "source": .string("action.test"),
+                ]),
+            ])
+        )
+    }
+
     func testTerminalEventStreamDeliversMixedNotifications() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

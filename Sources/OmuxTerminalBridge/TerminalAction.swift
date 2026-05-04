@@ -22,6 +22,7 @@ public enum TerminalAction: Equatable, Codable, Sendable {
     case openURL(url: String, kind: TerminalOpenURLKind)
     case desktopNotification(title: String, body: String?)
     case bell
+    case inputSent(text: String?, key: String?, keyCode: UInt16?, modifiers: KeyModifiers, route: NormalizedInputRoute?, source: String)
     case commandFinished(exitCode: Int?, durationNanoseconds: UInt64)
     case progressReported(state: TerminalProgressState, progress: Int?)
     case childExited(exitCode: Int, elapsedMilliseconds: UInt64)
@@ -47,6 +48,15 @@ public enum TerminalAction: Equatable, Codable, Sendable {
             ])
         case .bell:
             return .object([:])
+        case .inputSent(let text, let key, let keyCode, let modifiers, let route, let source):
+            return .object([
+                "text": text.map(OmuxValue.string) ?? .null,
+                "key": key.map(OmuxValue.string) ?? .null,
+                "keyCode": keyCode.map { .integer(Int($0)) } ?? .null,
+                "modifiers": .integer(Int(modifiers.rawValue)),
+                "route": route.map { .string($0.rawValue) } ?? .null,
+                "source": .string(source),
+            ])
         case .commandFinished(let exitCode, let durationNanoseconds):
             return .object([
                 "exitCode": exitCode.map(OmuxValue.integer) ?? .null,
@@ -81,6 +91,8 @@ public enum TerminalAction: Equatable, Codable, Sendable {
             return "terminal-desktop-notification"
         case .bell:
             return "terminal-bell"
+        case .inputSent:
+            return "terminal-input-sent"
         case .commandFinished:
             return "terminal-command-finished"
         case .progressReported:

@@ -146,23 +146,28 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         let items = targets.map { target in
-            let liveSnapshot = bridge.scrollbackSnapshot(
+            let liveSnapshot = bridge.terminalTextSnapshot(
                 for: target.paneID,
                 maxBytes: request.maxBytes,
                 maxLines: request.maxLines
             )
-            if let snapshot = PaneScrollbackSnapshot.combined(
-                target.persistedHistory,
-                liveSnapshot,
-                maxBytes: request.maxBytes,
-                maxLines: request.maxLines
-            ) {
-                return target.historyItem(text: snapshot.text, truncated: snapshot.truncated)
+            if liveSnapshot.isAvailable {
+                if let snapshot = PaneScrollbackSnapshot.combined(
+                    target.persistedHistory,
+                    liveSnapshot.scrollbackSnapshot,
+                    maxBytes: request.maxBytes,
+                    maxLines: request.maxLines
+                ) {
+                    return target.historyItem(text: snapshot.text, truncated: snapshot.truncated)
+                }
+                return target.historyItem(text: "", truncated: false)
             }
 
-            let reason = bridge.surface(for: target.paneID) == nil
-                ? "terminal session unavailable"
-                : "history unavailable"
+            if let persistedHistory = target.persistedHistory {
+                return target.historyItem(text: persistedHistory.text, truncated: persistedHistory.truncated)
+            }
+
+            let reason = liveSnapshot.unavailableReason ?? "history unavailable"
             return target.historyItem(text: "", truncated: false, unavailable: reason)
         }
 
@@ -961,6 +966,12 @@ public final class WorkspaceController: @unchecked Sendable {
             lock.unlock()
             throw error
         }
+
+        emitInputSent(
+            context: context,
+            text: command,
+            source: "action.runCommand"
+        )
         publishControlPlaneEvent(
             ControlPlaneEvent(
                 name: .commandStarted,
@@ -987,6 +998,11 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         try bridge.send(text: text, toPane: context.paneID)
+        emitInputSent(
+            context: context,
+            text: text,
+            source: "action.sendText"
+        )
         return ControlPlaneActionResult(
             target: context,
             extra: ["textLength": .integer(text.count)]
@@ -1307,18 +1323,18 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private func outputContext(for paneID: PaneID) -> OmuxValue {
-        guard let snapshot = bridge.snapshot(for: paneID) else {
-            return .object(["kind": .string("unavailable")])
-        }
-
-        let renderedText = snapshot.renderedText
-        guard renderedText.isEmpty == false else {
-            return .object(["kind": .string("unavailable")])
+        let snapshot = bridge.terminalTextSnapshot(for: paneID, maxBytes: 4_000, maxLines: PaneScrollbackSnapshot.defaultMaxLines)
+        guard snapshot.isAvailable else {
+            return .object([
+                "kind": .string("unavailable"),
+                "reason": snapshot.unavailableReason.map(OmuxValue.string) ?? .null,
+            ])
         }
 
         return .object([
             "kind": .string("tail"),
-            "tail": .string(String(renderedText.suffix(4_000))),
+            "tail": .string(snapshot.text),
+            "truncated": .bool(snapshot.truncated),
         ])
     }
 
@@ -1336,6 +1352,36 @@ public final class WorkspaceController: @unchecked Sendable {
 
     func terminalActionCoordinatorHandle(_ event: TerminalActionEvent) {
         terminalActionCoordinator.handle(event)
+    }
+
+    private func emitInputSent(
+        context: ControlPlaneTerminalContext,
+        text: String?,
+        key: String? = nil,
+        keyCode: UInt16? = nil,
+        modifiers: KeyModifiers = [],
+        route: NormalizedInputRoute? = nil,
+        source: String
+    ) {
+        guard let surface = bridge.surface(for: context.paneID) else {
+            return
+        }
+
+        terminalActionCoordinatorHandle(
+            TerminalActionEvent(
+                paneID: context.paneID,
+                sessionID: context.sessionID,
+                runtimeSurfaceID: surface.runtimeSurfaceID,
+                action: .inputSent(
+                    text: text,
+                    key: key,
+                    keyCode: keyCode,
+                    modifiers: modifiers,
+                    route: route,
+                    source: source
+                )
+            )
+        )
     }
 
     func publishControlPlaneEvent(_ event: ControlPlaneEvent) {
@@ -1421,7 +1467,7 @@ public final class WorkspaceController: @unchecked Sendable {
                         pane.terminalState.rendererHealthy = isHealthy
                     }
                     updatedWorkspace = workspaces[workspaceIndex]
-                case .openURL, .desktopNotification, .bell, .commandFinished:
+                case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
                     break
                 }
 
@@ -1521,11 +1567,17 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if let workingDirectory = liveSnapshot?.workingDirectory, workingDirectory.isEmpty == false {
             session.workingDirectory = workingDirectory
         }
-        let restoredScrollback = bridge.scrollbackSnapshot(
+        let liveText = bridge.terminalTextSnapshot(
             for: pane.id,
             maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
             maxLines: PaneScrollbackSnapshot.defaultMaxLines
-        ) ?? pane.terminalState.restoredScrollback
+        )
+        let restoredScrollback: PaneScrollbackSnapshot?
+        if liveText.isAvailable {
+            restoredScrollback = liveText.scrollbackSnapshot
+        } else {
+            restoredScrollback = pane.terminalState.restoredScrollback
+        }
         return Pane(
             id: pane.id,
             title: pane.title,

@@ -156,6 +156,8 @@ This keeps the shell AppKit-first while preserving one narrow terminal-engine se
 
 `omux events` now streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events for the first wave of short `omux` commands.
 
+Explicit OpenMUX input actions such as `omux run` and `send-text` publish `terminal.inputSent` after successful delivery. Native pane typing is intentionally not streamed as `terminal.inputSent`, because per-key input is noisy, sensitive, and not an authoritative shell command record; terminal title updates remain presentation metadata and are not used as command text.
+
 Current first-wave shared action event names:
 
 - `workspace.opened`

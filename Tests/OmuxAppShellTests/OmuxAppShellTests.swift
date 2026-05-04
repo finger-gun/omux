@@ -518,6 +518,7 @@ final class OmuxAppShellTests: XCTestCase {
                 "paneTab.focused",
                 "paneTab.closed",
                 "session.focused",
+                "terminal.inputSent",
                 "command.started",
             ]
         )
@@ -525,6 +526,8 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvents[2].payload.objectValue?["axis"], .string("rows"))
         XCTAssertNotNil(publishedEvents[3].payload.objectValue?["paneStackID"])
         XCTAssertEqual(publishedEvents[4].paneID, splitPaneID)
+        XCTAssertEqual(publishedEvents[7].payload.objectValue?["text"], .string("pwd"))
+        XCTAssertEqual(publishedEvents[7].payload.objectValue?["source"], .string("action.runCommand"))
     }
 
     func testWorkspaceControllerPublishesSparseNotificationAndRestoreEvents() throws {
@@ -818,6 +821,35 @@ final class OmuxAppShellTests: XCTestCase {
 
         let history = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(pane.id))))
         XCTAssertEqual(history.items.first?.text, "previous output")
+
+        let persistedAgain = try XCTUnwrap(controller.persistenceSnapshot())
+        XCTAssertEqual(persistedAgain.workspaces.first?.focusedPane?.terminalState.restoredScrollback, scrollback)
+    }
+
+    func testWorkspacePersistenceDropsRestoredScrollbackWhenFreshRuntimeCaptureIsAvailableEmpty() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let scrollback = PaneScrollbackSnapshot(text: "previous output", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(
+            title: "project",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = ""
+
+        let persistedAgain = try XCTUnwrap(controller.persistenceSnapshot())
+
+        XCTAssertNil(persistedAgain.workspaces.first?.focusedPane?.terminalState.restoredScrollback)
     }
 
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
@@ -926,6 +958,103 @@ final class OmuxAppShellTests: XCTestCase {
         let workspace = try controller.openWorkspace(at: "/tmp")
         let sessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
         XCTAssertTrue(try controller.runCommand(in: sessionID, command: "printf 'hello'"))
+    }
+
+    func testRunCommandPublishesInputSentOnlyAfterBridgeDelivery() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onTerminalEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let sessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
+        publishedEvents.removeAll()
+
+        XCTAssertTrue(try controller.runCommand(in: sessionID, command: "ls"))
+
+        let inputSent = try XCTUnwrap(publishedEvents.first { $0.name == "terminal.inputSent" })
+        XCTAssertEqual(inputSent.workspaceID, workspace.id)
+        XCTAssertEqual(inputSent.paneID, workspace.focusedPane?.id)
+        XCTAssertEqual(inputSent.sessionID, sessionID)
+        XCTAssertEqual(inputSent.payload.objectValue?["text"], .string("ls"))
+        XCTAssertEqual(inputSent.payload.objectValue?["key"], .null)
+        XCTAssertEqual(inputSent.payload.objectValue?["source"], .string("action.runCommand"))
+    }
+
+    func testRunCommandDoesNotPublishInputSentWhenBridgeDeliveryFails() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onTerminalEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let sessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
+        runtime.failNextSend = true
+        publishedEvents.removeAll()
+
+        XCTAssertThrowsError(try controller.runCommand(in: sessionID, command: "ls"))
+        XCTAssertFalse(publishedEvents.contains { $0.name == "terminal.inputSent" })
+    }
+
+    func testSendTextPublishesInputSent() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onTerminalEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        publishedEvents.removeAll()
+
+        _ = try controller.sendText(target: .pane(paneID), text: "ls\n")
+
+        let inputSent = try XCTUnwrap(publishedEvents.first { $0.name == "terminal.inputSent" })
+        XCTAssertEqual(inputSent.payload.objectValue?["text"], .string("ls\n"))
+        XCTAssertEqual(inputSent.payload.objectValue?["source"], .string("action.sendText"))
+    }
+
+    func testTypedTerminalInputDoesNotPublishInputSent() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onTerminalEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        publishedEvents.removeAll()
+
+        try controller.handleInput(
+            NormalizedKeyEvent(
+                keyCode: 37,
+                key: "l",
+                text: "l",
+                modifiers: [],
+                phase: .keyDown,
+                isRepeat: false,
+                route: .terminal
+            ),
+            in: paneID
+        )
+
+        XCTAssertFalse(publishedEvents.contains { $0.name == "terminal.inputSent" })
     }
 
     @MainActor
@@ -1896,7 +2025,127 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(failed.payload.objectValue?["exitCode"], .integer(1))
         XCTAssertEqual(failed.payload.objectValue?["durationNanoseconds"], .integer(456))
         XCTAssertEqual(failed.payload.objectValue?["outputContext"]?.objectValue?["kind"], .string("tail"))
+        XCTAssertEqual(failed.payload.objectValue?["outputContext"]?.objectValue?["tail"], .string("runtime output tail"))
+        XCTAssertEqual(failed.payload.objectValue?["outputContext"]?.objectValue?["truncated"], .bool(false))
         XCTAssertEqual(launcher.invocations[0].payload.objectValue?["outputContext"]?.objectValue?["kind"], .string("unavailable"))
+    }
+
+    func testInputSentHookReceivesForwardedTerminalInput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .input,
+                name: "terminal-input-sent",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let sessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
+
+        XCTAssertTrue(try controller.runCommand(in: sessionID, command: "printf 'input-hook'"))
+
+        let invocation = try XCTUnwrap(launcher.invocations.first)
+        XCTAssertEqual(invocation.category, .input)
+        XCTAssertEqual(invocation.name, "terminal-input-sent")
+        XCTAssertEqual(invocation.payload.objectValue?["text"], .string("printf 'input-hook'"))
+        XCTAssertEqual(invocation.payload.objectValue?["source"], .string("action.runCommand"))
+    }
+
+    func testInputSentHookFailureDoesNotCancelForwardedInput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .input,
+                name: "terminal-input-sent",
+                executableURL: URL(fileURLWithPath: "/usr/bin/false")
+            )
+        )
+        let runner = ExternalHookRunner(
+            registry: registry,
+            launcher: ClosureHookLauncher { throw ProcessHookLauncherError.nonZeroExit(executablePath: "/usr/bin/false", status: 1) },
+            warningHandler: { _ in }
+        )
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: runner
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let sessionID = try XCTUnwrap(workspace.focusedPane?.session.id)
+
+        XCTAssertTrue(try controller.runCommand(in: sessionID, command: "printf 'still-runs'"))
+        XCTAssertEqual(runtime.sentTextCount, 1)
+    }
+
+    func testTitleChangedDoesNotPublishInputSentOrHook() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .input,
+                name: "terminal-input-sent",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onTerminalEvent = { event in
+            publishedEvents.append(event)
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        publishedEvents.removeAll()
+
+        runtime.emit(.titleChanged("ls"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(publishedEvents.map(\.name), ["terminal.titleChanged"])
+        XCTAssertTrue(launcher.invocations.isEmpty)
+    }
+
+    func testCommandFinishedControlPlaneEventCarriesBoundedOutputContext() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = (1...500).map { "event-\($0)" }.joined(separator: "\n")
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvent: ControlPlaneTerminalEvent?
+        controller.onTerminalEvent = { event in
+            if event.name == "terminal.commandFinished" {
+                publishedEvent = event
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.commandFinished(exitCode: 0, durationNanoseconds: 123), on: runtimeSurfaceID)
+
+        let payload = try XCTUnwrap(publishedEvent?.payload.objectValue)
+        let outputContext = try XCTUnwrap(payload["outputContext"]?.objectValue)
+        XCTAssertEqual(outputContext["kind"], .string("tail"))
+        XCTAssertEqual(outputContext["truncated"], .bool(true))
+        XCTAssertTrue(outputContext["tail"]?.stringValue?.contains("event-500") == true)
+        XCTAssertEqual(publishedEvent?.paneID, pane.id)
+        XCTAssertEqual(publishedEvent?.sessionID, pane.session.id)
     }
 
     func testSuccessfulCommandCompletionDoesNotEmitCommandFailedHook() throws {
@@ -2482,6 +2731,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
         "action:\(paneID.rawValue)"
@@ -2510,6 +2760,10 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
 
     func send(text: String, to runtimeSurfaceID: String) throws {
         guard sessions[runtimeSurfaceID] != nil else {
+            throw TerminalBridgeError.runtimeAttachFailed(runtimeSurfaceID)
+        }
+        if failNextSend {
+            failNextSend = false
             throw TerminalBridgeError.runtimeAttachFailed(runtimeSurfaceID)
         }
 
@@ -2563,8 +2817,29 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     }
 
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
-        PaneScrollbackSnapshot.bounded(
-            text: scrollbackBySurface[runtimeSurfaceID] ?? "",
+        terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ).scrollbackSnapshot
+    }
+
+    func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot {
+        if let scrollback = scrollbackBySurface[runtimeSurfaceID] {
+            return TerminalTextSnapshot.bounded(
+                text: scrollback,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+        }
+
+        let surfaceText = transcript + transcriptBySurface[runtimeSurfaceID, default: ""]
+        guard surfaceText.isEmpty == false || inputBySurface[runtimeSurfaceID]?.isEmpty == false else {
+            return .unavailable(reason: "history unavailable", maxBytes: maxBytes, maxLines: maxLines)
+        }
+
+        return TerminalTextSnapshot.bounded(
+            text: surfaceText + inputBySurface[runtimeSurfaceID, default: ""],
             maxBytes: maxBytes,
             maxLines: maxLines
         )

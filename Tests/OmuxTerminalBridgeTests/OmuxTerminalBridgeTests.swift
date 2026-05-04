@@ -143,7 +143,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         _ = try bridge.attach(session: session, to: pane)
 
         XCTAssertEqual(runtime.attachAttempts, 3)
-        XCTAssertEqual(bridge.snapshot(for: pane.id)?.transcript, "runtime session")
+        XCTAssertEqual(bridge.snapshot(for: pane.id)?.textUnavailableReason, "history unavailable")
     }
 
     @MainActor
@@ -1092,6 +1092,40 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated)
     }
 
+    func testBridgeReturnsAvailableEmptyTerminalTextSnapshot() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = ""
+
+        let textSnapshot = bridge.terminalTextSnapshot(for: pane.id)
+        XCTAssertTrue(textSnapshot.isAvailable)
+        XCTAssertEqual(textSnapshot.text, "")
+        XCTAssertNil(textSnapshot.unavailableReason)
+        XCTAssertNil(bridge.scrollbackSnapshot(for: pane.id))
+    }
+
+    func testBridgeSessionSnapshotUsesBoundedRuntimeText() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = (1...500).map { "line-\($0)" }.joined(separator: "\n")
+
+        let snapshot = try XCTUnwrap(bridge.snapshot(for: pane.id))
+        XCTAssertEqual(snapshot.transcript.split(separator: "\n").count, 400)
+        XCTAssertEqual(snapshot.transcript.split(separator: "\n").first, "line-101")
+        XCTAssertTrue(snapshot.textTruncated)
+        XCTAssertNil(snapshot.textUnavailableReason)
+        XCTAssertEqual(snapshot.shell, "/bin/sh")
+        XCTAssertEqual(snapshot.workingDirectory, "/tmp")
+    }
+
     func testBridgeReturnsNilWhenScrollbackUnavailable() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1101,6 +1135,9 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         _ = try bridge.attach(session: session, to: pane)
 
         XCTAssertNil(bridge.scrollbackSnapshot(for: pane.id))
+        let textSnapshot = bridge.terminalTextSnapshot(for: pane.id)
+        XCTAssertFalse(textSnapshot.isAvailable)
+        XCTAssertEqual(textSnapshot.unavailableReason, "history unavailable")
     }
 
     func testBridgeReturnsNilWhenScrollbackSurfaceMissing() throws {
@@ -1303,8 +1340,19 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     }
 
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
-        PaneScrollbackSnapshot.bounded(
-            text: scrollbackBySurface[runtimeSurfaceID] ?? "",
+        terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ).scrollbackSnapshot
+    }
+
+    func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot {
+        guard let text = scrollbackBySurface[runtimeSurfaceID] else {
+            return .unavailable(reason: "history unavailable", maxBytes: maxBytes, maxLines: maxLines)
+        }
+        return TerminalTextSnapshot.bounded(
+            text: text,
             maxBytes: maxBytes,
             maxLines: maxLines
         )
@@ -1338,12 +1386,19 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
             return nil
         }
 
+        let textSnapshot = terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
+            maxLines: PaneScrollbackSnapshot.defaultMaxLines
+        )
         return TerminalSessionSnapshot(
             paneID: paneID,
             sessionID: sessionID,
             runtimeSurfaceID: runtimeSurfaceID,
-            transcript: "runtime session",
+            transcript: textSnapshot.text,
             currentInput: "",
+            textUnavailableReason: textSnapshot.unavailableReason,
+            textTruncated: textSnapshot.truncated,
             shell: descriptor.shell,
             workingDirectory: descriptor.workingDirectory,
             columns: defaultSize.columns,

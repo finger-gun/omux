@@ -204,6 +204,14 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | `{ "kind": "tail", "tail": string }` | OpenMUX has a bounded tail of OpenMUX-owned terminal output. |
 | `{ "kind": "unavailable" }` | No output context is available. Hooks should not assume a transcript exists. |
 
+### Input hooks
+
+| Hook | Emitted when | Context | Payload |
+| --- | --- | --- | --- |
+| `terminal-input-sent` | OpenMUX successfully delivers an explicit input action such as `omux run` or `send-text`. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "text": string \| null, "key": string \| null, "keyCode": integer \| null, "modifiers": integer, "route": string \| null, "source": string }` |
+
+`terminal-input-sent` reports action-scoped input OpenMUX deliberately sent, not native per-keystroke typing and not parsed shell commands. Hooks should treat payloads as local-sensitive data and must not infer authoritative command text from `terminal-title-changed`; title changes remain presentation metadata.
+
 ### UI hooks
 
 | Hook | Emitted when | Context | Payload |
