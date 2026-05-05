@@ -103,7 +103,7 @@ final class OmuxCLITests: XCTestCase {
             temporaryDirectoryURL: fixture.tempURL,
             executablePath: fixture.executableURL.path,
             appManager: appManager,
-            download: { source, destination in
+            download: { source, destination, _ in
                 try FileManager.default.copyItem(at: source, to: destination)
             },
             launchDetachedHelper: { _, _ in helperLaunched = true },
@@ -124,6 +124,7 @@ final class OmuxCLITests: XCTestCase {
         let appManager = FakeRunningAppManager()
         var manifestURL: URL?
         var helperURL: URL?
+        var output = [String]()
 
         let updater = OmuxSelfUpdater(
             versionProvider: fixture.versionProvider,
@@ -133,14 +134,16 @@ final class OmuxCLITests: XCTestCase {
             temporaryDirectoryURL: fixture.tempURL,
             executablePath: fixture.executableURL.path,
             appManager: appManager,
-            download: { source, destination in
+            download: { source, destination, progress in
+                progress(OmuxDownloadProgress(bytesDownloaded: 5, totalBytes: 10))
+                progress(OmuxDownloadProgress(bytesDownloaded: 10, totalBytes: 10))
                 try FileManager.default.copyItem(at: source, to: destination)
             },
             launchDetachedHelper: { helper, manifest in
                 helperURL = helper
                 manifestURL = manifest
             },
-            writeLine: { _ in },
+            writeLine: { output.append($0) },
             readInputLine: { nil }
         )
 
@@ -161,6 +164,8 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: helperDirectoryURL.appendingPathComponent("OpenMUX_OmuxTheme.bundle", isDirectory: true).path
         ))
+        XCTAssertTrue(output.contains("OpenMUX 0.5.0 [##########----------] 50% 5 B / 10 B"))
+        XCTAssertTrue(output.contains("OpenMUX 0.5.0 [####################] 100% 10 B / 10 B"))
     }
 
     private func makeUpdateFixture(
@@ -575,7 +580,12 @@ final class OmuxCLITests: XCTestCase {
         var output = [String]()
         let command = OmuxCLICommand(
             client: OmuxControlClient(socketPath: socketPath),
-            writeLine: { output.append($0) }
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: { [:] }
         )
 
         XCTAssertEqual(command.run(arguments: ["omux", "history", "clear"]), 0)

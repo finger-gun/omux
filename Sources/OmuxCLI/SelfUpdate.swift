@@ -13,6 +13,11 @@ struct OmuxSelfUpdateOutcome: Equatable {
     let state: State
 }
 
+struct OmuxDownloadProgress: Equatable {
+    let bytesDownloaded: Int64
+    let totalBytes: Int64?
+}
+
 protocol OmuxRunningApplicationManaging {
     func runningApplications(bundleIdentifier: String) -> [OmuxRunningApplication]
     func terminate(bundleIdentifier: String)
@@ -59,6 +64,7 @@ final class OmuxSelfUpdater {
         case missingExecutablePath
         case helperLaunchFailed(String)
         case helperTimedOut
+        case downloadFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -82,6 +88,8 @@ final class OmuxSelfUpdater {
                 return "failed to start update helper: \(message)"
             case .helperTimedOut:
                 return "OpenMUX did not quit before the update timeout"
+            case .downloadFailed(let message):
+                return "download failed: \(message)"
             }
         }
     }
@@ -93,7 +101,7 @@ final class OmuxSelfUpdater {
     private let temporaryDirectoryURL: URL
     private let executablePath: String?
     private let appManager: OmuxRunningApplicationManaging
-    private let download: (URL, URL) throws -> Void
+    private let download: (URL, URL, @escaping (OmuxDownloadProgress) -> Void) throws -> Void
     private let launchDetachedHelper: (URL, URL) throws -> Void
     private let writeLine: (String) -> Void
     private let readInputLine: () -> String?
@@ -106,7 +114,7 @@ final class OmuxSelfUpdater {
         temporaryDirectoryURL: URL = FileManager.default.temporaryDirectory,
         executablePath: String? = OmuxSelfUpdater.currentExecutablePath(),
         appManager: OmuxRunningApplicationManaging = DefaultOmuxRunningApplicationManager(),
-        download: @escaping (URL, URL) throws -> Void = OmuxSelfUpdater.download,
+        download: @escaping (URL, URL, @escaping (OmuxDownloadProgress) -> Void) throws -> Void = OmuxSelfUpdater.downloadFile,
         launchDetachedHelper: @escaping (URL, URL) throws -> Void = OmuxSelfUpdater.launchDetachedHelper,
         writeLine: @escaping (String) -> Void,
         readInputLine: @escaping () -> String?
@@ -161,8 +169,15 @@ final class OmuxSelfUpdater {
             let archiveURL = downloadsURL.appendingPathComponent(appAsset.name, isDirectory: false)
             let checksumURL = downloadsURL.appendingPathComponent(checksumAsset.name, isDirectory: false)
             writeLine("Downloading OpenMUX \(release.version)...")
-            try download(appAsset.downloadURL, archiveURL)
-            try download(checksumAsset.downloadURL, checksumURL)
+            let progressReporter = OmuxDownloadProgressReporter(
+                label: "OpenMUX \(release.version)",
+                writeLine: writeLine
+            )
+            try download(appAsset.downloadURL, archiveURL) { progress in
+                progressReporter.report(progress)
+            }
+            progressReporter.finish()
+            try download(checksumAsset.downloadURL, checksumURL) { _ in }
             try verifyChecksum(archiveURL: archiveURL, checksumURL: checksumURL)
 
             try unarchiveApp(archiveURL: archiveURL, destinationURL: unpackURL)
@@ -423,9 +438,78 @@ final class OmuxSelfUpdater {
         }
     }
 
-    private static func download(from url: URL, to destinationURL: URL) throws {
-        let data = try Data(contentsOf: url)
-        try data.write(to: destinationURL, options: .atomic)
+    private static func downloadFile(
+        from url: URL,
+        to destinationURL: URL,
+        progress: @escaping (OmuxDownloadProgress) -> Void
+    ) throws {
+        let temporaryURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).download", isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if FileManager.default.fileExists(atPath: temporaryURL.path) {
+            try FileManager.default.removeItem(at: temporaryURL)
+        }
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        do {
+            if url.isFileURL {
+                try copyLocalFile(from: url, to: temporaryURL, progress: progress)
+            } else {
+                try downloadRemoteFile(from: url, to: temporaryURL, progress: progress)
+            }
+            try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
+    private static func copyLocalFile(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        progress: (OmuxDownloadProgress) -> Void
+    ) throws {
+        let totalBytes = try sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
+        _ = FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
+        let input = try FileHandle(forReadingFrom: sourceURL)
+        let output = try FileHandle(forWritingTo: destinationURL)
+        defer {
+            try? input.close()
+            try? output.close()
+        }
+
+        var bytesDownloaded: Int64 = 0
+        while let data = try input.read(upToCount: 64 * 1024), data.isEmpty == false {
+            try output.write(contentsOf: data)
+            bytesDownloaded += Int64(data.count)
+            progress(OmuxDownloadProgress(bytesDownloaded: bytesDownloaded, totalBytes: totalBytes))
+        }
+
+        if bytesDownloaded == 0 {
+            progress(OmuxDownloadProgress(bytesDownloaded: 0, totalBytes: totalBytes))
+        }
+    }
+
+    private static func downloadRemoteFile(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        progress: @escaping (OmuxDownloadProgress) -> Void
+    ) throws {
+        let delegate = try OmuxURLSessionDownloadDelegate(destinationURL: destinationURL, progress: progress)
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: queue)
+        let task = session.dataTask(with: sourceURL)
+        task.resume()
+        delegate.waitUntilComplete()
+        session.finishTasksAndInvalidate()
+        try delegate.getResult()
     }
 
     private static func launchDetachedHelper(helperURL: URL, manifestURL: URL) throws {
@@ -459,6 +543,193 @@ final class OmuxSelfUpdater {
     }
 
     static let bundleIdentifier = "dev.fingergun.omux"
+}
+
+private final class OmuxDownloadProgressReporter {
+    private static let progressBarWidth = 20
+    private static let unknownTotalStepBytes: Int64 = 5 * 1024 * 1024
+
+    private let label: String
+    private let writeLine: (String) -> Void
+    private var lastProgress: OmuxDownloadProgress?
+    private var lastRenderedBytes: Int64?
+    private var lastRenderedTotalBytes: Int64?
+    private var lastPercentBucket: Int?
+    private var lastUnknownBucket: Int64?
+
+    init(label: String, writeLine: @escaping (String) -> Void) {
+        self.label = label
+        self.writeLine = writeLine
+    }
+
+    func report(_ progress: OmuxDownloadProgress) {
+        lastProgress = progress
+        guard shouldRender(progress) else {
+            return
+        }
+        render(progress)
+    }
+
+    func finish() {
+        guard let lastProgress,
+              lastRenderedBytes != lastProgress.bytesDownloaded
+                || lastRenderedTotalBytes != lastProgress.totalBytes
+        else {
+            return
+        }
+        render(lastProgress)
+    }
+
+    private func shouldRender(_ progress: OmuxDownloadProgress) -> Bool {
+        guard let totalBytes = progress.totalBytes, totalBytes > 0 else {
+            let bucket = progress.bytesDownloaded / Self.unknownTotalStepBytes
+            if bucket != lastUnknownBucket || progress.bytesDownloaded == 0 {
+                lastUnknownBucket = bucket
+                return true
+            }
+            return false
+        }
+
+        let percent = Self.percentage(downloaded: progress.bytesDownloaded, total: totalBytes)
+        let bucket = percent / 5
+        if bucket != lastPercentBucket || progress.bytesDownloaded >= totalBytes {
+            lastPercentBucket = bucket
+            return true
+        }
+        return false
+    }
+
+    private func render(_ progress: OmuxDownloadProgress) {
+        lastRenderedBytes = progress.bytesDownloaded
+        lastRenderedTotalBytes = progress.totalBytes
+        writeLine(Self.renderedLine(label: label, progress: progress))
+    }
+
+    private static func renderedLine(label: String, progress: OmuxDownloadProgress) -> String {
+        guard let totalBytes = progress.totalBytes, totalBytes > 0 else {
+            return "\(label) \(formatByteCount(progress.bytesDownloaded)) downloaded"
+        }
+
+        let percent = percentage(downloaded: progress.bytesDownloaded, total: totalBytes)
+        let bar = progressBar(downloaded: progress.bytesDownloaded, total: totalBytes)
+        return "\(label) [\(bar)] \(percent)% \(formatByteCount(progress.bytesDownloaded)) / \(formatByteCount(totalBytes))"
+    }
+
+    private static func progressBar(downloaded: Int64, total: Int64) -> String {
+        let clampedFraction = min(max(Double(downloaded) / Double(total), 0), 1)
+        var filledWidth = Int((clampedFraction * Double(progressBarWidth)).rounded(.down))
+        if downloaded >= total {
+            filledWidth = progressBarWidth
+        }
+        return String(repeating: "#", count: filledWidth)
+            + String(repeating: "-", count: progressBarWidth - filledWidth)
+    }
+
+    private static func percentage(downloaded: Int64, total: Int64) -> Int {
+        let clampedFraction = min(max(Double(downloaded) / Double(total), 0), 1)
+        return Int((clampedFraction * 100).rounded(.down))
+    }
+
+    private static func formatByteCount(_ bytes: Int64) -> String {
+        guard bytes >= 1024 else {
+            return "\(bytes) B"
+        }
+
+        let units = ["KB", "MB", "GB", "TB"]
+        var value = Double(bytes) / 1024
+        var unitIndex = 0
+        while value >= 1024, unitIndex < units.count - 1 {
+            value /= 1024
+            unitIndex += 1
+        }
+        return "\(String(format: "%.1f", value)) \(units[unitIndex])"
+    }
+}
+
+private final class OmuxURLSessionDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let semaphore = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let fileHandle: FileHandle
+    private let progress: (OmuxDownloadProgress) -> Void
+    private var bytesDownloaded: Int64 = 0
+    private var totalBytes: Int64?
+    private var result: Result<Void, Error>?
+
+    init(destinationURL: URL, progress: @escaping (OmuxDownloadProgress) -> Void) throws {
+        self.progress = progress
+        _ = FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
+        self.fileHandle = try FileHandle(forWritingTo: destinationURL)
+        super.init()
+    }
+
+    func waitUntilComplete() {
+        semaphore.wait()
+    }
+
+    func getResult() throws {
+        switch lockedResult() {
+        case .success:
+            return
+        case .failure(let error):
+            throw error
+        case nil:
+            throw OmuxSelfUpdater.UpdateError.downloadFailed("download did not complete")
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        if let httpResponse = response as? HTTPURLResponse,
+           (200..<300).contains(httpResponse.statusCode) == false {
+            setResult(.failure(OmuxSelfUpdater.UpdateError.downloadFailed("HTTP \(httpResponse.statusCode)")))
+            completionHandler(.cancel)
+            return
+        }
+
+        if response.expectedContentLength > 0 {
+            totalBytes = response.expectedContentLength
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        do {
+            try fileHandle.write(contentsOf: data)
+            bytesDownloaded += Int64(data.count)
+            progress(OmuxDownloadProgress(bytesDownloaded: bytesDownloaded, totalBytes: totalBytes))
+        } catch {
+            setResult(.failure(error))
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        try? fileHandle.close()
+        if let error {
+            setResult(.failure(error))
+        } else if lockedResult() == nil {
+            setResult(.success(()))
+        }
+        semaphore.signal()
+    }
+
+    private func setResult(_ newResult: Result<Void, Error>) {
+        lock.lock()
+        if result == nil {
+            result = newResult
+        }
+        lock.unlock()
+    }
+
+    private func lockedResult() -> Result<Void, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return result
+    }
 }
 
 private final class HelperLogger {
