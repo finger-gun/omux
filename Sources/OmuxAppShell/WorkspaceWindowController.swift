@@ -1414,6 +1414,8 @@ final class PaneHeaderView: NSView {
         tabStrip.alignment = .centerY
         tabStrip.spacing = 6
         tabStrip.identifier = NSUserInterfaceItemIdentifier("pane-tab-strip-\(paneStack.id.rawValue)")
+        tabStrip.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        tabStrip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         for pane in paneStack.panes {
             let button = PaneTabButton(
@@ -1456,6 +1458,37 @@ final class PaneHeaderView: NSView {
     }
 }
 
+struct PaneTabTitleFormatter {
+    static let defaultMaximumLength = 44
+    private static let truncationMarker = "..."
+
+    static func displayTitle(
+        _ title: String,
+        maximumLength: Int = defaultMaximumLength
+    ) -> String {
+        guard maximumLength > 0 else {
+            return ""
+        }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayTitle = trimmedTitle.isEmpty ? title : trimmedTitle
+        guard displayTitle.count > maximumLength else {
+            return displayTitle
+        }
+
+        guard maximumLength > truncationMarker.count + 1 else {
+            return String(displayTitle.prefix(maximumLength))
+        }
+
+        let remainingLength = maximumLength - truncationMarker.count
+        let leadingLength = max(1, remainingLength / 2)
+        let trailingLength = max(1, remainingLength - leadingLength)
+        return String(displayTitle.prefix(leadingLength))
+            + truncationMarker
+            + String(displayTitle.suffix(trailingLength))
+    }
+}
+
 @MainActor
 private final class PaneTabButton: NSControl {
     var onPress: (() -> Void)?
@@ -1490,11 +1523,15 @@ private final class PaneTabButton: NSControl {
         layer?.cornerRadius = 3
         identifier = NSUserInterfaceItemIdentifier("pane-tab-\(pane.id.rawValue)")
         setAccessibilityLabel(pane.title)
+        toolTip = pane.title
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
         titleLabel.lineBreakMode = .byTruncatingMiddle
-        titleLabel.stringValue = pane.title
+        titleLabel.stringValue = PaneTabTitleFormatter.displayTitle(pane.title)
+        titleLabel.toolTip = pane.title
         titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(titleLabel)
