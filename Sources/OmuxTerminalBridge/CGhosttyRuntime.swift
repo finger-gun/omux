@@ -147,6 +147,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         var descriptor: SessionDescriptor?
         var reportedWorkingDirectory: String?
         var retainedCStringPointers: [UnsafeMutablePointer<CChar>] = []
+        var retainedEnvVarPointer: UnsafeMutablePointer<ghostty_env_var_s>?
+        var retainedEnvVarCount = 0
         var size: TerminalSize = .default
 
         init(paneID: PaneID, hostView: GhosttyHostedSurfaceView) {
@@ -155,7 +157,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
 
         deinit {
-            retainedCStringPointers.forEach { free($0) }
+            resetRetainedLaunchStorage()
         }
 
         func retainCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
@@ -164,6 +166,33 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             }
             retainedCStringPointers.append(pointer)
             return pointer
+        }
+
+        func retainEnvironment(_ environment: [String: String]) -> UnsafeMutablePointer<ghostty_env_var_s>? {
+            guard environment.isEmpty == false else {
+                retainedEnvVarCount = 0
+                return nil
+            }
+
+            let sortedEnvironment = environment.sorted { lhs, rhs in lhs.key < rhs.key }
+            let pointer = UnsafeMutablePointer<ghostty_env_var_s>.allocate(capacity: sortedEnvironment.count)
+            for (index, entry) in sortedEnvironment.enumerated() {
+                pointer[index] = ghostty_env_var_s(
+                    key: UnsafePointer(retainCString(entry.key)),
+                    value: UnsafePointer(retainCString(entry.value))
+                )
+            }
+            retainedEnvVarPointer = pointer
+            retainedEnvVarCount = sortedEnvironment.count
+            return pointer
+        }
+
+        func resetRetainedLaunchStorage() {
+            retainedCStringPointers.forEach { free($0) }
+            retainedCStringPointers.removeAll(keepingCapacity: false)
+            retainedEnvVarPointer?.deallocate()
+            retainedEnvVarPointer = nil
+            retainedEnvVarCount = 0
         }
     }
 
@@ -286,8 +315,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         if let existingSurface = state.surface {
             ghostty_surface_free(existingSurface)
             state.surface = nil
-            state.retainedCStringPointers.removeAll(keepingCapacity: false)
         }
+        state.resetRetainedLaunchStorage()
 
         let (width, height, scale, isWindowFocused) = mainActorValue {
             let backingBounds = state.hostView.convertToBacking(state.hostView.bounds)
@@ -308,6 +337,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         config.font_size = 12
         config.working_directory = UnsafePointer(state.retainCString(session.workingDirectory))
         config.command = UnsafePointer(state.retainCString(session.shell))
+        config.env_vars = state.retainEnvironment(session.environment)
+        config.env_var_count = state.retainedEnvVarCount
         config.initial_input = nil
         config.wait_after_command = false
         config.context = GHOSTTY_SURFACE_CONTEXT_SPLIT

@@ -91,6 +91,8 @@ swift run omux panes
 swift run omux history
 swift run omux history <pane-id>
 swift run omux history all --json
+swift run omux history clear
+swift run omux history clear --workspace <workspace-id>
 swift run omux run <session-id> "pwd"
 swift run omux run --pane <pane-id> -- "pwd"
 swift run omux send-text --session <session-id> -- "hello"

@@ -19,6 +19,9 @@ name = "monokai-soda"
 # font_size = 13
 # scrollback_lines = 100000
 # option_as_alt = "right"
+# persist_scrollback = true
+# persist_scrollback_lines = 4000
+# persist_scrollback_bytes = 1048576
 
 [workspace]
 default_root_path = "~"
@@ -152,8 +155,32 @@ OpenMUX currently models these terminal settings directly:
 | `font_size` | integer | Terminal font size in points. |
 | `scrollback_lines` | integer | Maximum scrollback preserved by the terminal. |
 | `option_as_alt` | `false` \| `true` \| `"left"` \| `"right"` | OpenMUX-owned macOS Option-key behavior, compiled to Ghostty-compatible `macos-option-as-alt` semantics. |
+| `persist_scrollback` | boolean | Enables OpenMUX persisted pane scrollback across app restarts. Defaults to `true`. |
+| `persist_scrollback_lines` | integer | Maximum lines of per-pane scrollback OpenMUX persists for restart restore. Defaults to `4000`. |
+| `persist_scrollback_bytes` | integer | Maximum bytes of per-pane scrollback OpenMUX persists for restart restore. Defaults to `1048576`. |
 
 Older configs may contain `keyboard_selection`; current OpenMUX ignores that deprecated key and removes it the next time `omux theme` rewrites the config.
+
+### Persisted scrollback
+
+OpenMUX persists bounded per-pane scrollback locally so restored workspaces can show useful terminal history after app restart. This is best-effort history: OpenMUX starts a fresh shell and does not restore running commands, SSH connections, TUI processes, or exact scroll position.
+
+Persisted scrollback is enabled by default and stored only in OpenMUX-managed local persistence under `~/Library/Application Support/OpenMUX/`. Workspace state is stored as JSON, while larger scrollback payloads are stored separately so terminal history does not live in `UserDefaults`.
+
+OpenMUX stores and replays raw terminal output where safe, including ANSI color and styling sequences. On restore, OpenMUX replays the saved output before the fresh shell prompt appears, then resets terminal formatting before starting the shell. Full-screen terminal apps such as Vim, less, htop, and other alternate-screen TUIs are handled as best-effort history only; OpenMUX does not resume their process state.
+
+Because terminal output can contain secrets, set `persist_scrollback = false` to opt out.
+
+Use `omux history clear` to remove persisted scrollback for all panes. Scope cleanup with `--pane <id>`, `--pane-tab <id>`, `--tab <id>`, `--workspace <id>`, `--session <id>`, or `--focused` when only part of the restored history should be cleared.
+
+Example:
+
+```toml
+[terminal]
+persist_scrollback = true
+persist_scrollback_lines = 4000
+persist_scrollback_bytes = 1048576
+```
 
 ### `terminal.option_as_alt`
 

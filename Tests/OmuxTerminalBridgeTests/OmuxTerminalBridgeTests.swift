@@ -25,6 +25,141 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertNil(bridge.surface(for: pane.id))
     }
 
+    func testBridgePreservesSessionEnvironmentOnAttach() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(
+            shell: "/bin/sh",
+            workingDirectory: "/tmp",
+            environment: ["OMUX_RESTORE_SCROLLBACK_FILE": "/tmp/replay.ansi", "SHELL": "/bin/zsh"]
+        )
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+
+        XCTAssertEqual(runtime.session(for: attachment.runtimeSurfaceID)?.environment, session.environment)
+    }
+
+    func testScrollbackReplayStoreWritesRawANSIReplayFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let scrollback = PaneScrollbackSnapshot(text: "\u{001B}[31mred\u{001B}[0m\nplain", truncated: false)
+
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+
+        XCTAssertEqual(replay.environment[ScrollbackReplayStore.environmentKey], replay.fileURL.path)
+        XCTAssertEqual(try String(contentsOf: replay.fileURL, encoding: .utf8), scrollback.text)
+        let attributes = try FileManager.default.attributesOfItem(atPath: replay.fileURL.path)
+        XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o600)
+    }
+
+    func testScrollbackReplayStoreSkipsEmptyReplayAndCleansStaleFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+
+        XCTAssertNil(store.prepareReplay(for: PaneScrollbackSnapshot(text: "\n\n", truncated: false)))
+        let stale = try XCTUnwrap(store.prepareReplay(for: PaneScrollbackSnapshot(text: "stale", truncated: false)))
+        let fresh = try XCTUnwrap(store.prepareReplay(for: PaneScrollbackSnapshot(text: "fresh", truncated: false)))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1)],
+            ofItemAtPath: stale.fileURL.path
+        )
+
+        store.cleanupStaleFiles(olderThan: Date(timeIntervalSince1970: 2))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.fileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.fileURL.path))
+    }
+
+    func testScrollbackReplayStoreStripsUnsafeAlternateScreenSequences() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let scrollback = PaneScrollbackSnapshot(
+            text: "\u{001B}[?1049h\u{001B}[31mred\u{001B}[0m\u{001B}[?1049l",
+            truncated: false
+        )
+
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+        let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
+
+        XCTAssertFalse(replayText.contains("\u{001B}[?1049h"))
+        XCTAssertFalse(replayText.contains("\u{001B}[?1049l"))
+        XCTAssertTrue(replayText.contains("\u{001B}[31mred\u{001B}[0m"))
+    }
+
+    func testScrollbackReplayStoreDeduplicatesRepeatedTailPromptLines() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let prompt = "omux [\u{001B}[35mbug-fix-auto-updater\u{001B}[0m][$!?][v6.3][aws]"
+        let plainPrompt = "omux [bug-fix-auto-updater][$!?][v6.3][aws]"
+        let scrollback = PaneScrollbackSnapshot(
+            text: """
+            real output
+            \(plainPrompt)
+            \(plainPrompt)
+            \(prompt)
+            """,
+            truncated: false
+        )
+
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+        let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
+
+        XCTAssertEqual(replayText, "real output\n\(prompt)")
+        XCTAssertTrue(replayText.contains("\u{001B}[35m"))
+    }
+
+    func testScrollbackReplayStoreKeepsPlainRepeatedTailOutput() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let scrollback = PaneScrollbackSnapshot(text: "line\nsame\nsame\nsame", truncated: false)
+
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+        let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
+
+        XCTAssertEqual(replayText, scrollback.text)
+    }
+
+    func testScrollbackReplayWrapperPreparesShellQuotedLaunchSession() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Scrollback Replay Wrapper Tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wrapperStore = ScrollbackReplayWrapperStore(directoryURL: root)
+        let replay = TerminalScrollbackReplay(fileURL: root.appendingPathComponent("replay.ansi"))
+        let baseSession = SessionDescriptor(
+            shell: "/bin/zsh",
+            workingDirectory: "/tmp/project",
+            environment: ["EXISTING": "1", "SHELL": "/bin/bash"]
+        )
+
+        let launch = try XCTUnwrap(wrapperStore.prepareLaunch(baseSession: baseSession, replay: replay))
+
+        XCTAssertEqual(launch.session.id, baseSession.id)
+        XCTAssertEqual(launch.session.workingDirectory, "/tmp/project")
+        XCTAssertEqual(launch.session.shell, "/bin/sh '\(launch.wrapperURL.path)'")
+        XCTAssertFalse(launch.session.shell.contains("direct:"))
+        XCTAssertEqual(launch.session.environment["EXISTING"], "1")
+        XCTAssertEqual(launch.session.environment["SHELL"], "/bin/zsh")
+        XCTAssertEqual(launch.session.environment[ScrollbackReplayStore.environmentKey], replay.fileURL.path)
+        let script = try String(contentsOf: launch.wrapperURL, encoding: .utf8)
+        XCTAssertTrue(script.contains("cat \"$OMUX_RESTORE_SCROLLBACK_FILE\""))
+        XCTAssertTrue(script.contains("printf '\\033[0m'"))
+        XCTAssertTrue(script.contains("printf '\\033[?25h'"))
+        XCTAssertTrue(script.contains("exec \"${SHELL:-/bin/sh}\" -l"))
+        let attributes = try FileManager.default.attributesOfItem(atPath: launch.wrapperURL.path)
+        XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+    }
+
     func testSurfaceCreationDoesNotHoldBridgeLockWhileRuntimeCreatesSurface() throws {
         let runtime = BlockingCreateSurfaceRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1115,11 +1250,11 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         let pane = Pane(title: "Main", session: session)
 
         let attachment = try bridge.attach(session: session, to: pane)
-        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = (1...500).map { "line-\($0)" }.joined(separator: "\n")
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = (1...4_500).map { "line-\($0)" }.joined(separator: "\n")
 
         let snapshot = try XCTUnwrap(bridge.snapshot(for: pane.id))
-        XCTAssertEqual(snapshot.transcript.split(separator: "\n").count, 400)
-        XCTAssertEqual(snapshot.transcript.split(separator: "\n").first, "line-101")
+        XCTAssertEqual(snapshot.transcript.split(separator: "\n").count, 4_000)
+        XCTAssertEqual(snapshot.transcript.split(separator: "\n").first, "line-501")
         XCTAssertTrue(snapshot.textTruncated)
         XCTAssertNil(snapshot.textUnavailableReason)
         XCTAssertEqual(snapshot.shell, "/bin/sh")
@@ -1260,6 +1395,10 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
         }
 
         sessions[runtimeSurfaceID] = session
+    }
+
+    func session(for runtimeSurfaceID: String) -> SessionDescriptor? {
+        sessions[runtimeSurfaceID]
     }
 
     func destroySurface(runtimeSurfaceID: String) throws {

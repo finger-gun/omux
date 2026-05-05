@@ -7,6 +7,7 @@ import OmuxTheme
 @MainActor
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
+    let persistedScrollback: OmuxConfigTerminal.PersistedScrollback
     let defaultWorkspaceRootPath: String
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
     let compiledConfigURL: URL?
@@ -23,6 +24,7 @@ struct OpenMUXConfigurationReloadResult: Sendable {
 final class OpenMUXConfigurationCoordinator {
     var onThemeChange: ((WorkspaceShellTheme) -> Void)?
     var onWorkspaceDefaultRootChange: ((String) -> Void)?
+    var onPersistedScrollbackChange: ((OmuxConfigTerminal.PersistedScrollback) -> Void)?
     var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
 
@@ -32,6 +34,7 @@ final class OpenMUXConfigurationCoordinator {
     private let stateLock = NSLock()
     private var currentTheme: WorkspaceShellTheme
     private var currentDefaultWorkspaceRootPath: String
+    private var currentPersistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var currentKeyBindingRegistry: OpenMUXKeyBindingRegistry
     private var currentCompiledConfigURL: URL?
     private var currentCompiledHash: String?
@@ -46,6 +49,7 @@ final class OpenMUXConfigurationCoordinator {
         self.evaluator = evaluator
         self.currentTheme = initialState.theme
         self.currentDefaultWorkspaceRootPath = initialState.defaultWorkspaceRootPath
+        self.currentPersistedScrollback = initialState.persistedScrollback
         self.currentKeyBindingRegistry = initialState.keyBindingRegistry
         self.currentCompiledConfigURL = initialState.compiledConfigURL
         self.currentCompiledHash = initialState.compiledHash
@@ -62,6 +66,7 @@ final class OpenMUXConfigurationCoordinator {
         guard let output = evaluation.compilerOutput else {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
@@ -75,6 +80,7 @@ final class OpenMUXConfigurationCoordinator {
             evaluator.garbageCollect(activeFileURL: fileURL)
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: fileURL,
@@ -84,6 +90,7 @@ final class OpenMUXConfigurationCoordinator {
         } catch {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
+                persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
@@ -137,14 +144,17 @@ final class OpenMUXConfigurationCoordinator {
                 (
                     hash: currentCompiledHash,
                     defaultWorkspaceRootPath: currentDefaultWorkspaceRootPath,
+                    persistedScrollback: currentPersistedScrollback,
                     keyBindingRegistry: currentKeyBindingRegistry
                 )
             }
             let keyBindingRegistry = OpenMUXKeyBindingRegistry.effective(overrides: evaluation.config.keyBindings)
             let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
+            let persistedScrollback = evaluation.config.terminal.persistedScrollback
             let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
             let shouldApply = shouldRefresh
                 || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
+                || previousState.persistedScrollback != persistedScrollback
                 || previousState.keyBindingRegistry != keyBindingRegistry
             let fileURL: URL
             var diagnostics = evaluation.diagnostics
@@ -161,12 +171,19 @@ final class OpenMUXConfigurationCoordinator {
             stateLock.withLock {
                 currentTheme = shellTheme
                 currentDefaultWorkspaceRootPath = defaultWorkspaceRootPath
+                currentPersistedScrollback = persistedScrollback
                 currentKeyBindingRegistry = keyBindingRegistry
                 currentCompiledConfigURL = fileURL
                 currentCompiledHash = output.hash
                 currentDiagnostics = diagnostics
             }
-            publish(theme: shellTheme, defaultWorkspaceRootPath: defaultWorkspaceRootPath, keyBindingRegistry: keyBindingRegistry, diagnostics: diagnostics)
+            publish(
+                theme: shellTheme,
+                defaultWorkspaceRootPath: defaultWorkspaceRootPath,
+                persistedScrollback: persistedScrollback,
+                keyBindingRegistry: keyBindingRegistry,
+                diagnostics: diagnostics
+            )
             return OpenMUXConfigurationReloadResult(applied: shouldApply, diagnostics: diagnostics)
         } catch {
             let diagnostics = evaluation.diagnostics + [
@@ -184,12 +201,13 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.withLock {
             currentDiagnostics = diagnostics
         }
-        publish(theme: nil, defaultWorkspaceRootPath: nil, keyBindingRegistry: nil, diagnostics: diagnostics)
+        publish(theme: nil, defaultWorkspaceRootPath: nil, persistedScrollback: nil, keyBindingRegistry: nil, diagnostics: diagnostics)
     }
 
     private func publish(
         theme: WorkspaceShellTheme?,
         defaultWorkspaceRootPath: String?,
+        persistedScrollback: OmuxConfigTerminal.PersistedScrollback?,
         keyBindingRegistry: OpenMUXKeyBindingRegistry?,
         diagnostics: [OmuxConfigDiagnostic]
     ) {
@@ -198,6 +216,9 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let defaultWorkspaceRootPath {
             onWorkspaceDefaultRootChange?(defaultWorkspaceRootPath)
+        }
+        if let persistedScrollback {
+            onPersistedScrollbackChange?(persistedScrollback)
         }
         if let keyBindingRegistry {
             OpenMUXShortcutClassifier.updateKeyBindings(keyBindingRegistry)

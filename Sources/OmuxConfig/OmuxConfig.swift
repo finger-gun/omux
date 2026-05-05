@@ -170,21 +170,44 @@ public struct OmuxConfigTerminal: Equatable, Sendable {
         }
     }
 
+    public struct PersistedScrollback: Equatable, Sendable {
+        public static let defaultEnabled = true
+        public static let defaultMaxLines = PaneScrollbackSnapshot.defaultMaxLines
+        public static let defaultMaxBytes = PaneScrollbackSnapshot.defaultMaxBytes
+
+        public let enabled: Bool
+        public let maxLines: Int
+        public let maxBytes: Int
+
+        public init(
+            enabled: Bool = defaultEnabled,
+            maxLines: Int = defaultMaxLines,
+            maxBytes: Int = defaultMaxBytes
+        ) {
+            self.enabled = enabled
+            self.maxLines = maxLines
+            self.maxBytes = maxBytes
+        }
+    }
+
     public let fontFamily: String?
     public let fontSize: Int?
     public let scrollbackLines: Int?
     public let optionAsAlt: OptionAsAlt?
+    public let persistedScrollback: PersistedScrollback
 
     public init(
         fontFamily: String? = nil,
         fontSize: Int? = nil,
         scrollbackLines: Int? = nil,
-        optionAsAlt: OptionAsAlt? = nil
+        optionAsAlt: OptionAsAlt? = nil,
+        persistedScrollback: PersistedScrollback = PersistedScrollback()
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.scrollbackLines = scrollbackLines
         self.optionAsAlt = optionAsAlt
+        self.persistedScrollback = persistedScrollback
     }
 }
 
@@ -335,6 +358,9 @@ public enum OmuxConfigTemplate {
         # font_size = 13
         # scrollback_lines = 100000
         # option_as_alt = "right"
+        # persist_scrollback = true
+        # persist_scrollback_lines = 4000
+        # persist_scrollback_bytes = 1048576
 
         [workspace]
         default_root_path = "~"
@@ -794,12 +820,18 @@ public struct OmuxConfigLoader {
             "font_size",
             "scrollback_lines",
             "option_as_alt",
+            "persist_scrollback",
+            "persist_scrollback_lines",
+            "persist_scrollback_bytes",
             "keyboard_selection",
         ]
         var fontFamily = config.terminal.fontFamily
         var fontSize = config.terminal.fontSize
         var scrollbackLines = config.terminal.scrollbackLines
         var optionAsAlt = config.terminal.optionAsAlt
+        var persistedScrollbackEnabled = config.terminal.persistedScrollback.enabled
+        var persistedScrollbackMaxLines = config.terminal.persistedScrollback.maxLines
+        var persistedScrollbackMaxBytes = config.terminal.persistedScrollback.maxBytes
 
         for entry in document.entries(in: "terminal") {
             guard terminalAllowedKeys.contains(entry.key) else {
@@ -863,6 +895,67 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 scrollbackLines = value
+            case "persist_scrollback":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.persist_scrollback must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                persistedScrollbackEnabled = value
+            case "persist_scrollback_lines":
+                guard let value = entry.value.intValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.persist_scrollback_lines must be an integer.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard value > 0 else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.persist_scrollback_lines must be greater than zero.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                persistedScrollbackMaxLines = value
+            case "persist_scrollback_bytes":
+                guard let value = entry.value.intValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.persist_scrollback_bytes must be an integer.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard value > 0 else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "terminal.persist_scrollback_bytes must be greater than zero.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                persistedScrollbackMaxBytes = value
             case "option_as_alt":
                 switch entry.value {
                 case .bool(false):
@@ -1015,7 +1108,12 @@ public struct OmuxConfigLoader {
                 fontFamily: fontFamily,
                 fontSize: fontSize,
                 scrollbackLines: scrollbackLines,
-                optionAsAlt: optionAsAlt
+                optionAsAlt: optionAsAlt,
+                persistedScrollback: OmuxConfigTerminal.PersistedScrollback(
+                    enabled: persistedScrollbackEnabled,
+                    maxLines: persistedScrollbackMaxLines,
+                    maxBytes: persistedScrollbackMaxBytes
+                )
             ),
             workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
             keyBindings: keyBindings,

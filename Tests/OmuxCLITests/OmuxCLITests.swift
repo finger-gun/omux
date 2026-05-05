@@ -460,8 +460,8 @@ final class OmuxCLITests: XCTestCase {
         try server.start { request in
             requests.value.append((request.method, request.params))
             return JSONRPCResponse(id: request.id, result: .object([
-                "maxBytes": .integer(16_384),
-                "maxLines": .integer(400),
+                "maxBytes": .integer(1_048_576),
+                "maxLines": .integer(4_000),
                 "items": .array([
                     .object([
                         "workspaceID": .string("workspace-1"),
@@ -540,6 +540,56 @@ final class OmuxCLITests: XCTestCase {
         output.removeAll()
         XCTAssertEqual(command.run(arguments: ["omux", "history", "--max-lines"]), 1)
         XCTAssertEqual(output, ["usage: omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]"])
+    }
+
+    func testCLIHistoryClearSupportsScopedTargets() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "hc.sock")
+            .path(percentEncoded: false)
+
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .object([
+                "ok": .bool(true),
+                "clearedCount": .integer(2),
+                "target": .null,
+            ]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear", "--workspace", "workspace-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear", "--pane-tab", "pane-1", "--json"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear", "--all", "--pane", "pane-1"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), Array(repeating: ControlMethod.clearTerminalHistory.rawValue, count: 3))
+        XCTAssertEqual(output[0], "Cleared history for 2 panes.")
+        XCTAssertTrue(output[2].contains("\"clearedCount\" : 2"))
+        XCTAssertEqual(output[3], "usage: omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]")
+
+        guard case .object(let allParams)? = requests.value[0].params,
+              case .object(let workspaceParams)? = requests.value[1].params,
+              case .object(let paneTabParams)? = requests.value[2].params,
+              case .object(let workspaceTarget)? = workspaceParams["target"],
+              case .object(let paneTabTarget)? = paneTabParams["target"]
+        else {
+            return XCTFail("expected history clear params")
+        }
+
+        XCTAssertEqual(allParams["scope"], .string("all"))
+        XCTAssertEqual(workspaceTarget["type"], .string("workspace"))
+        XCTAssertEqual(workspaceTarget["id"], .string("workspace-1"))
+        XCTAssertEqual(paneTabTarget["type"], .string("pane"))
+        XCTAssertEqual(paneTabTarget["id"], .string("pane-1"))
     }
 
     func testCLIHistoryPrintsUnavailablePane() throws {

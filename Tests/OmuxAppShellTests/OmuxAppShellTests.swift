@@ -879,15 +879,91 @@ final class OmuxAppShellTests: XCTestCase {
         let workspace = try controller.openWorkspace(at: "/tmp/project")
         let pane = try XCTUnwrap(workspace.focusedPane)
         let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
-        runtime.scrollbackBySurface[surfaceID] = (1...500).map { "line-\($0)" }.joined(separator: "\n")
+        runtime.scrollbackBySurface[surfaceID] = (1...4_500).map { "line-\($0)" }.joined(separator: "\n")
 
         let snapshot = try XCTUnwrap(controller.persistenceSnapshot())
         let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
 
-        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").count, 400)
-        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").first, "line-101")
-        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").last, "line-500")
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").count, 4_000)
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").first, "line-501")
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text.split(separator: "\n").last, "line-4500")
         XCTAssertTrue(persistedPane.terminalState.restoredScrollback?.truncated == true)
+    }
+
+    func testWorkspacePersistenceLayoutOnlyModeSkipsPaneScrollbackCapture() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let scrollback = PaneScrollbackSnapshot(text: "previous output", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(
+            title: "project",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = "fresh output"
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .layoutOnly))
+        let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, 0)
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback, scrollback)
+    }
+
+    func testWorkspacePersistenceScrollbackModeUsesConfiguredBounds() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = (1...10).map { "line-\($0)" }.joined(separator: "\n")
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback(maxBytes: 1_024, maxLines: 3)))
+        let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, 1)
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text, "line-8\nline-9\nline-10")
+        XCTAssertTrue(persistedPane.terminalState.restoredScrollback?.truncated == true)
+    }
+
+    func testHistoryClearSuppressesImmediateScrollbackRecaptureUntilTextChanges() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = "secret history"
+
+        let result = try XCTUnwrap(controller.clearTerminalHistory(ControlPlaneHistoryClearRequest()))
+        let clearedSnapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
+        let clearedPane = try XCTUnwrap(clearedSnapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(result.clearedCount, 1)
+        XCTAssertNil(clearedPane.terminalState.restoredScrollback)
+
+        runtime.scrollbackBySurface[surfaceID] = "new history"
+        let updatedSnapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
+        let updatedPane = try XCTUnwrap(updatedSnapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(updatedPane.terminalState.restoredScrollback?.text, "new history")
     }
 
     func testWorkspaceRestoreKeepsSavedScrollbackForHistoryCommandWithoutRenderingIt() throws {
@@ -915,6 +991,70 @@ final class OmuxAppShellTests: XCTestCase {
 
         let persistedAgain = try XCTUnwrap(controller.persistenceSnapshot())
         XCTAssertEqual(persistedAgain.workspaces.first?.focusedPane?.terminalState.restoredScrollback, scrollback)
+    }
+
+    func testWorkspaceRestoreLaunchesReplayWrapperWhenPersistedScrollbackIsEnabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Workspace Replay Tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let scrollback = PaneScrollbackSnapshot(text: "\u{001B}[32mrestored output\u{001B}[0m", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(
+            title: "project",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: true, maxLines: 4_000, maxBytes: 1_048_576),
+            scrollbackReplayStore: ScrollbackReplayStore(directoryURL: root.appendingPathComponent("Replay", isDirectory: true)),
+            scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: root.appendingPathComponent("Replay", isDirectory: true))
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchSession = try XCTUnwrap(runtime.session(for: surfaceID))
+
+        XCTAssertTrue(launchSession.shell.hasPrefix("/bin/sh '"))
+        XCTAssertFalse(launchSession.shell.contains("direct:"))
+        XCTAssertEqual(launchSession.environment["SHELL"], "/bin/zsh")
+        let replayPath = try XCTUnwrap(launchSession.environment[ScrollbackReplayStore.environmentKey])
+        XCTAssertEqual(try String(contentsOfFile: replayPath, encoding: .utf8), scrollback.text)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.shell, "/bin/zsh")
+    }
+
+    func testWorkspaceRestoreSkipsReplayWrapperWhenPersistedScrollbackIsDisabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceReplayTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let scrollback = PaneScrollbackSnapshot(text: "previous output", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(
+            title: "project",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            scrollbackReplayStore: ScrollbackReplayStore(directoryURL: root.appendingPathComponent("Replay", isDirectory: true)),
+            scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: root.appendingPathComponent("Replay", isDirectory: true))
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        XCTAssertEqual(runtime.session(for: surfaceID), session)
     }
 
     func testWorkspacePersistenceDropsRestoredScrollbackWhenFreshRuntimeCaptureIsAvailableEmpty() throws {
@@ -1375,6 +1515,61 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertTrue(result.applied)
         XCTAssertEqual(coordinator.keyBindingRegistry().chord(for: .paneRemove)?.description, "cmd+shift+p")
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
+    func testConfigurationCoordinatorReloadPublishesPersistedScrollbackChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        let expectation = expectation(description: "persisted scrollback changed")
+        coordinator.onPersistedScrollbackChange = { persistedScrollback in
+            if persistedScrollback.enabled == false,
+               persistedScrollback.maxLines == 200,
+               persistedScrollback.maxBytes == 4096 {
+                expectation.fulfill()
+            }
+        }
+
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [terminal]
+        persist_scrollback = false
+        persist_scrollback_lines = 200
+        persist_scrollback_bytes = 4096
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let result = coordinator.reload()
+
+        XCTAssertTrue(result.applied)
         waitForExpectations(timeout: 2)
     }
 
@@ -2849,6 +3044,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    private(set) var terminalTextSnapshotCount = 0
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
@@ -2857,6 +3053,10 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
 
     func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {
         sessions[runtimeSurfaceID] = session
+    }
+
+    func session(for runtimeSurfaceID: String) -> SessionDescriptor? {
+        sessions[runtimeSurfaceID]
     }
 
     func destroySurface(runtimeSurfaceID: String) throws {
@@ -2943,6 +3143,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     }
 
     func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot {
+        terminalTextSnapshotCount += 1
         if let scrollback = scrollbackBySurface[runtimeSurfaceID] {
             return TerminalTextSnapshot.bounded(
                 text: scrollback,

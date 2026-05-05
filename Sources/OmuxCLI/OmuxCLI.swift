@@ -300,6 +300,7 @@ public struct OmuxCLICommand {
       omux panes
       omux events
       omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
+      omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]
       omux open [path]
       omux workspace-close [workspace-id]
       omux tab
@@ -424,7 +425,7 @@ public struct OmuxCLICommand {
                 guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
                 target = .session(SessionID(rawValue: arguments[index + 1]))
                 index += 2
-            case "--pane":
+            case "--pane", "--pane-tab":
                 guard index + 1 < arguments.count else { return (target, Array(arguments.dropFirst(index))) }
                 target = .pane(PaneID(rawValue: arguments[index + 1]))
                 index += 2
@@ -456,6 +457,10 @@ public struct OmuxCLICommand {
     }
 
     private func runHistoryCommand(arguments: [String]) throws -> Int32 {
+        if arguments.first == "clear" {
+            return try runHistoryClearCommand(arguments: Array(arguments.dropFirst()))
+        }
+
         guard let parsed = parseHistoryRequest(arguments) else {
             writeLine("usage: omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]")
             return 1
@@ -481,6 +486,73 @@ public struct OmuxCLICommand {
             printHistory(result)
         }
         return 0
+    }
+
+    private func runHistoryClearCommand(arguments: [String]) throws -> Int32 {
+        guard let parsed = parseHistoryClearRequest(arguments) else {
+            writeLine("usage: omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]")
+            return 1
+        }
+
+        let response = try client.request(
+            method: .clearTerminalHistory,
+            params: parsed.request.rpcValue
+        )
+        if let error = response.error {
+            writeLine("omux error: \(error.message)")
+            return 1
+        }
+
+        guard let result = response.result else {
+            writeLine(parsed.json ? "{}" : "Cleared history for 0 panes.")
+            return 0
+        }
+
+        if parsed.json {
+            writeLine(result.prettyPrinted)
+        } else {
+            let count = result.objectValue?["clearedCount"]?.integerValue ?? 0
+            writeLine("Cleared history for \(count) \(count == 1 ? "pane" : "panes").")
+        }
+        return 0
+    }
+
+    private func parseHistoryClearRequest(
+        _ arguments: [String]
+    ) -> (request: ControlPlaneHistoryClearRequest, json: Bool)? {
+        var json = false
+        var targetArguments: [String] = []
+        var all = false
+        var index = 0
+
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--json":
+                json = true
+                index += 1
+            case "--all":
+                all = true
+                index += 1
+            default:
+                targetArguments.append(arguments[index])
+                index += 1
+            }
+        }
+
+        guard all == false || targetArguments.isEmpty else {
+            return nil
+        }
+
+        if all || targetArguments.isEmpty {
+            return (ControlPlaneHistoryClearRequest(), json)
+        }
+
+        let parsed = parseTargetPrefix(targetArguments)
+        guard let target = parsed.target, parsed.remaining.isEmpty else {
+            return nil
+        }
+
+        return (ControlPlaneHistoryClearRequest(target: target), json)
     }
 
     private func parseHistoryRequest(
@@ -822,6 +894,16 @@ public struct OmuxCLICommand {
             case .right:
                 lines.append("option_as_alt = \"right\"")
             }
+        }
+        let persistedScrollback = config.terminal.persistedScrollback
+        if persistedScrollback.enabled != OmuxConfigTerminal.PersistedScrollback.defaultEnabled {
+            lines.append("persist_scrollback = \(persistedScrollback.enabled ? "true" : "false")")
+        }
+        if persistedScrollback.maxLines != OmuxConfigTerminal.PersistedScrollback.defaultMaxLines {
+            lines.append("persist_scrollback_lines = \(persistedScrollback.maxLines)")
+        }
+        if persistedScrollback.maxBytes != OmuxConfigTerminal.PersistedScrollback.defaultMaxBytes {
+            lines.append("persist_scrollback_bytes = \(persistedScrollback.maxBytes)")
         }
 
         lines.append("")

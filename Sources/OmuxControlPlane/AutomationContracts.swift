@@ -50,6 +50,10 @@ public enum ControlPlaneTerminalTarget: Equatable, Sendable {
             self = .pane(PaneID(rawValue: id))
             return
         }
+        if case .string(let id)? = object["paneTabID"] {
+            self = .pane(PaneID(rawValue: id))
+            return
+        }
         if case .string(let id)? = object["tabID"] {
             self = .tab(TabID(rawValue: id))
             return
@@ -357,6 +361,58 @@ public struct ControlPlaneHistoryResponse: Equatable, Sendable {
             "maxLines": .integer(maxLines),
             "items": .array(items.map(\.rpcValue)),
         ])
+    }
+}
+
+public struct ControlPlaneHistoryClearRequest: Equatable, Sendable {
+    public let target: ControlPlaneTerminalTarget?
+
+    public init(target: ControlPlaneTerminalTarget? = nil) {
+        self.target = target
+    }
+
+    public init?(rpcValue: RPCValue?) {
+        guard let rpcValue else {
+            self.init()
+            return
+        }
+
+        guard case .object(let object) = rpcValue else {
+            return nil
+        }
+
+        if case .string("all")? = object["scope"] ?? object["type"] {
+            self.init()
+            return
+        }
+
+        self.init(target: ControlPlaneTerminalTarget(rpcValue: rpcValue))
+    }
+
+    public var rpcValue: RPCValue {
+        guard let target else {
+            return .object(["scope": .string("all")])
+        }
+        return .object(["target": target.rpcValue])
+    }
+}
+
+public struct ControlPlaneHistoryClearResponse: Equatable, Sendable {
+    public let clearedCount: Int
+    public let target: ControlPlaneTerminalTarget?
+
+    public init(clearedCount: Int, target: ControlPlaneTerminalTarget? = nil) {
+        self.clearedCount = clearedCount
+        self.target = target
+    }
+
+    public var rpcValue: RPCValue {
+        var object: [String: RPCValue] = [
+            "ok": .bool(true),
+            "clearedCount": .integer(clearedCount),
+        ]
+        object["target"] = target?.rpcValue ?? .null
+        return .object(object)
     }
 }
 

@@ -33,6 +33,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var moveWorkspaceDownMenuItem: NSMenuItem?
     private var workspaceJumpMenuItems: [NSMenuItem] = []
     private var keyBindingRegistry: OpenMUXKeyBindingRegistry
+    private var scrollbackAutosaveTask: Task<Void, Never>?
 
     public override init() {
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
@@ -49,7 +50,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let workspaceController = WorkspaceController(
             bridge: bridge,
             hookRunner: hookRunner,
-            defaultWorkspaceRootPath: preparedConfiguration.defaultWorkspaceRootPath
+            defaultWorkspaceRootPath: preparedConfiguration.defaultWorkspaceRootPath,
+            persistedScrollback: preparedConfiguration.persistedScrollback,
+            scrollbackReplayStore: ScrollbackReplayStore(directoryURL: Self.appReplayDirectory()),
+            scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
         )
         self.workspaceController = workspaceController
         self.configurationCoordinator = OpenMUXConfigurationCoordinator(
@@ -74,7 +78,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         configureMenus()
         workspaceController.onChange = { [weak self] workspace in
             Task { @MainActor in
-                self?.persistWorkspaceState()
+                self?.persistWorkspaceLayoutState()
                 self?.windowController?.update(workspace: workspace)
                 self?.refreshMenuValidation()
             }
@@ -101,6 +105,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             configurationCoordinator.onWorkspaceDefaultRootChange = { [weak self] path in
                 self?.workspaceController.updateDefaultWorkspaceRootPath(path)
             }
+            configurationCoordinator.onPersistedScrollbackChange = { [weak self] persistedScrollback in
+                self?.workspaceController.updatePersistedScrollback(persistedScrollback)
+            }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
                 self?.applyKeyBindings(registry)
             }
@@ -111,6 +118,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 }
             }
             refreshMenuValidation()
+            startScrollbackAutosave()
+            NSWorkspace.shared.notificationCenter.addObserver(
+                self,
+                selector: #selector(workspaceWillPowerOff),
+                name: NSWorkspace.willPowerOffNotification,
+                object: nil
+            )
             try controlPlaneService.start()
             let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
             Task { @MainActor in
@@ -128,19 +142,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         _ = sender
-        persistWorkspaceState()
+        persistWorkspaceStateIncludingScrollback()
         return .terminateNow
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
         _ = notification
-        persistWorkspaceState()
+        scrollbackAutosaveTask?.cancel()
+        scrollbackAutosaveTask = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        persistWorkspaceStateIncludingScrollback()
         controlPlaneService.stop()
     }
 
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         _ = sender
-        persistWorkspaceState()
+        persistWorkspaceStateIncludingScrollback()
         return true
     }
 
@@ -592,7 +609,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         if let snapshot = workspacePersistenceStore.load() {
             do {
                 if let restoredWorkspace = try workspaceController.restorePersistedState(snapshot) {
-                    persistWorkspaceState()
+                    persistWorkspaceStateIncludingScrollback()
                     return restoredWorkspace
             }
         } catch {
@@ -601,12 +618,43 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
         let workspace = try workspaceController.createWorkspace()
-        persistWorkspaceState()
+        persistWorkspaceStateIncludingScrollback()
         return workspace
     }
 
-    private func persistWorkspaceState() {
-        workspacePersistenceStore.save(workspaceController.persistenceSnapshot())
+    private func persistWorkspaceLayoutState() {
+        workspacePersistenceStore.save(workspaceController.persistenceSnapshot(mode: .layoutOnly))
+    }
+
+    private func persistWorkspaceStateIncludingScrollback() {
+        workspacePersistenceStore.save(workspaceController.persistenceSnapshotForConfiguredPersistence())
+    }
+
+    private func startScrollbackAutosave() {
+        guard scrollbackAutosaveTask == nil else {
+            return
+        }
+
+        scrollbackAutosaveTask = Task { @MainActor [weak self] in
+            while Task.isCancelled == false {
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                guard Task.isCancelled == false else {
+                    return
+                }
+                self?.persistWorkspaceStateIncludingScrollback()
+            }
+        }
+    }
+
+    @objc private func workspaceWillPowerOff(_ notification: Notification) {
+        _ = notification
+        persistWorkspaceStateIncludingScrollback()
+    }
+
+    private static func appReplayDirectory() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenMUX", isDirectory: true)
+            .appendingPathComponent("Replay", isDirectory: true)
     }
 
     private func bundledCLIExecutablePath() -> String? {

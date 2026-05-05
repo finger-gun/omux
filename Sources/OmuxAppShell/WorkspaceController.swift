@@ -28,6 +28,9 @@ public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
     private let hookRunner: ExternalHookRunner
+    private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    private let scrollbackReplayStore: ScrollbackReplayStore?
+    private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
     private var workspaces: [Workspace] = []
     private var activeWorkspaceID: WorkspaceID?
@@ -35,6 +38,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var lastNotification: NotificationRequest?
     private var updateAvailability: OpenMUXUpdateAvailability?
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
+    private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
@@ -55,10 +59,16 @@ public final class WorkspaceController: @unchecked Sendable {
     public init(
         bridge: GhosttyTerminalBridge,
         hookRunner: ExternalHookRunner,
-        defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath
+        defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
+        persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        scrollbackReplayStore: ScrollbackReplayStore? = nil,
+        scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
+        self.persistedScrollback = persistedScrollback
+        self.scrollbackReplayStore = scrollbackReplayStore
+        self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         _ = terminalActionCoordinator
     }
@@ -180,19 +190,69 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    public func clearTerminalHistory(_ request: ControlPlaneHistoryClearRequest) -> ControlPlaneHistoryClearResponse? {
+        lock.lock()
+        guard let paneIDs = historyClearPaneIDsLocked(target: request.target) else {
+            lock.unlock()
+            return nil
+        }
+        lock.unlock()
+
+        let fingerprints = Dictionary(uniqueKeysWithValues: paneIDs.map { paneID in
+            let text = bridge.terminalTextSnapshot(
+                for: paneID,
+                maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
+                maxLines: PaneScrollbackSnapshot.defaultMaxLines
+            ).scrollbackSnapshot?.text ?? ""
+            return (paneID, text)
+        })
+
+        lock.lock()
+        var clearedCount = 0
+        var changedWorkspace: Workspace?
+        for paneID in paneIDs {
+            for workspaceIndex in workspaces.indices {
+                guard workspaces[workspaceIndex].updatePane(paneID, transform: { pane in
+                    pane.terminalState.restoredScrollback = nil
+                }) else {
+                    continue
+                }
+
+                historyClearSuppressionByPane[paneID] = fingerprints[paneID] ?? ""
+                clearedCount += 1
+                if workspaces[workspaceIndex].id == activeWorkspaceID || changedWorkspace == nil {
+                    changedWorkspace = workspaces[workspaceIndex]
+                }
+                break
+            }
+        }
+        lock.unlock()
+
+        if let changedWorkspace {
+            onChange?(changedWorkspace)
+        }
+
+        return ControlPlaneHistoryClearResponse(clearedCount: clearedCount, target: request.target)
+    }
+
     public func resolveTerminalTarget(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
         lock.lock()
         defer { lock.unlock() }
         return resolveTerminalTargetLocked(target)
     }
 
-    func persistenceSnapshot() -> WorkspacePersistenceSnapshot? {
+    func persistenceSnapshot(
+        mode: WorkspacePersistenceSnapshotMode = .includeScrollback()
+    ) -> WorkspacePersistenceSnapshot? {
         lock.lock()
         let currentWorkspaces = workspaces
         let storedActiveWorkspaceID = activeWorkspaceID
+        let historyClearSuppression = historyClearSuppressionByPane
         lock.unlock()
 
-        let storedWorkspaces = currentWorkspaces.map(sanitizedWorkspaceForPersistence)
+        let storedWorkspaces = currentWorkspaces.map {
+            sanitizedWorkspaceForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
+        }
 
         guard storedWorkspaces.isEmpty == false else {
             return nil
@@ -202,6 +262,14 @@ public final class WorkspaceController: @unchecked Sendable {
             workspaces: storedWorkspaces,
             activeWorkspaceID: storedActiveWorkspaceID
         )
+    }
+
+    func persistenceSnapshotForConfiguredPersistence() -> WorkspacePersistenceSnapshot? {
+        let persistedScrollback = currentPersistedScrollback()
+        let mode: WorkspacePersistenceSnapshotMode = persistedScrollback.enabled
+            ? .includeScrollback(maxBytes: persistedScrollback.maxBytes, maxLines: persistedScrollback.maxLines)
+            : .layoutOnly
+        return persistenceSnapshot(mode: mode)
     }
 
     @discardableResult
@@ -219,7 +287,7 @@ public final class WorkspaceController: @unchecked Sendable {
         for workspace in restoredWorkspaces {
             for pane in workspace.tabs.flatMap(\.panes) {
                 _ = try bridge.createSurface(for: pane)
-                _ = try bridge.attach(session: pane.session, to: pane)
+                _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
             }
         }
 
@@ -243,6 +311,30 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return updatedWorkspace
+    }
+
+    private func launchSession(forRestoredPane pane: Pane) -> SessionDescriptor {
+        let persistedScrollback = currentPersistedScrollback()
+        guard persistedScrollback.enabled,
+              let scrollbackReplayStore,
+              let scrollbackReplayWrapperStore,
+              let replay = scrollbackReplayStore.prepareReplay(
+                  for: pane.terminalState.restoredScrollback,
+                  maxBytes: persistedScrollback.maxBytes,
+                  maxLines: persistedScrollback.maxLines
+              ),
+              let launch = scrollbackReplayWrapperStore.prepareLaunch(baseSession: pane.session, replay: replay)
+        else {
+            return pane.session
+        }
+
+        return launch.session
+    }
+
+    private func currentPersistedScrollback() -> OmuxConfigTerminal.PersistedScrollback {
+        lock.lock()
+        defer { lock.unlock() }
+        return persistedScrollback
     }
 
     @discardableResult
@@ -453,6 +545,12 @@ public final class WorkspaceController: @unchecked Sendable {
     public func updateDefaultWorkspaceRootPath(_ path: String) {
         lock.lock()
         defaultWorkspaceRootPath = path
+        lock.unlock()
+    }
+
+    public func updatePersistedScrollback(_ persistedScrollback: OmuxConfigTerminal.PersistedScrollback) {
+        lock.lock()
+        self.persistedScrollback = persistedScrollback
         lock.unlock()
     }
 
@@ -1290,6 +1388,29 @@ public final class WorkspaceController: @unchecked Sendable {
         return nil
     }
 
+    private func historyClearPaneIDsLocked(target: ControlPlaneTerminalTarget?) -> [PaneID]? {
+        guard let target else {
+            return workspaces.flatMap { $0.tabs.flatMap(\.panes).map(\.id) }
+        }
+
+        switch target {
+        case .session, .pane, .focused:
+            return resolveTerminalTargetLocked(target).map { [$0.paneID] }
+        case .tab(let tabID):
+            for workspace in workspaces {
+                if let tab = workspace.tabs.first(where: { $0.id == tabID }) {
+                    return tab.panes.map(\.id)
+                }
+            }
+            return nil
+        case .workspace(let workspaceID):
+            guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
+                return nil
+            }
+            return workspace.tabs.flatMap(\.panes).map(\.id)
+        }
+    }
+
     private func terminalContext(workspace: Workspace, tab: Tab, pane: Pane) -> ControlPlaneTerminalContext {
         ControlPlaneTerminalContext(
             workspaceID: workspace.id,
@@ -1555,30 +1676,50 @@ public final class WorkspaceController: @unchecked Sendable {
         return Pane(title: title, session: session)
     }
 
-    private func sanitizedWorkspaceForPersistence(_ workspace: Workspace) -> Workspace {
+    private func sanitizedWorkspaceForPersistence(
+        _ workspace: Workspace,
+        mode: WorkspacePersistenceSnapshotMode,
+        historyClearSuppression: [PaneID: String]
+    ) -> Workspace {
         Workspace(
             id: workspace.id,
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
-            tabs: workspace.tabs.map(sanitizedTabForPersistence),
+            tabs: workspace.tabs.map {
+                sanitizedTabForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
+            },
             focusedTabID: workspace.focusedTabID
         )
     }
 
-    private func sanitizedTabForPersistence(_ tab: Tab) -> Tab {
+    private func sanitizedTabForPersistence(
+        _ tab: Tab,
+        mode: WorkspacePersistenceSnapshotMode,
+        historyClearSuppression: [PaneID: String]
+    ) -> Tab {
         Tab(
             id: tab.id,
             title: tab.title,
-            rootLayout: sanitizedLayoutNodeForPersistence(tab.rootLayout),
+            rootLayout: sanitizedLayoutNodeForPersistence(
+                tab.rootLayout,
+                mode: mode,
+                historyClearSuppression: historyClearSuppression
+            ),
             focusedPaneID: tab.focusedPaneID
         )
     }
 
-    private func sanitizedLayoutNodeForPersistence(_ node: TabLayoutNode) -> TabLayoutNode {
+    private func sanitizedLayoutNodeForPersistence(
+        _ node: TabLayoutNode,
+        mode: WorkspacePersistenceSnapshotMode,
+        historyClearSuppression: [PaneID: String]
+    ) -> TabLayoutNode {
         switch node {
         case .paneStack(let paneStack):
-            let panes = paneStack.panes.map(sanitizedPaneForPersistence)
+            let panes = paneStack.panes.map {
+                sanitizedPaneForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
+            }
             return .paneStack(
                 PaneStack(
                     id: paneStack.id,
@@ -1590,12 +1731,22 @@ public final class WorkspaceController: @unchecked Sendable {
             return .split(
                 axis: axis,
                 proportions: proportions,
-                children: children.map(sanitizedLayoutNodeForPersistence)
+                children: children.map {
+                    sanitizedLayoutNodeForPersistence(
+                        $0,
+                        mode: mode,
+                        historyClearSuppression: historyClearSuppression
+                    )
+                }
             )
         }
     }
 
-    private func sanitizedPaneForPersistence(_ pane: Pane) -> Pane {
+    private func sanitizedPaneForPersistence(
+        _ pane: Pane,
+        mode: WorkspacePersistenceSnapshotMode,
+        historyClearSuppression: [PaneID: String]
+    ) -> Pane {
         let liveSnapshot = bridge.snapshot(for: pane.id)
         var session = pane.session
         if let workingDirectory = pane.terminalState.reportedWorkingDirectory, workingDirectory.isEmpty == false {
@@ -1603,16 +1754,25 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if let workingDirectory = liveSnapshot?.workingDirectory, workingDirectory.isEmpty == false {
             session.workingDirectory = workingDirectory
         }
-        let liveText = bridge.terminalTextSnapshot(
-            for: pane.id,
-            maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
-            maxLines: PaneScrollbackSnapshot.defaultMaxLines
-        )
         let restoredScrollback: PaneScrollbackSnapshot?
-        if liveText.isAvailable {
-            restoredScrollback = liveText.scrollbackSnapshot
-        } else {
+        switch mode {
+        case .layoutOnly:
             restoredScrollback = pane.terminalState.restoredScrollback
+        case .includeScrollback(let maxBytes, let maxLines):
+            let liveText = bridge.terminalTextSnapshot(
+                for: pane.id,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+            if liveText.isAvailable {
+                if liveText.scrollbackSnapshot?.text == historyClearSuppression[pane.id] {
+                    restoredScrollback = nil
+                } else {
+                    restoredScrollback = liveText.scrollbackSnapshot
+                }
+            } else {
+                restoredScrollback = historyClearSuppression[pane.id] == nil ? pane.terminalState.restoredScrollback : nil
+            }
         }
         return Pane(
             id: pane.id,

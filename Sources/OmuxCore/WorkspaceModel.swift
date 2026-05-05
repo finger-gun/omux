@@ -66,15 +66,17 @@ public struct PaneExitStatus: Equatable, Codable, Sendable {
 }
 
 public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
-    public static let defaultMaxBytes = 16_384
-    public static let defaultMaxLines = 400
+    public static let defaultMaxBytes = 1_048_576
+    public static let defaultMaxLines = 4_000
 
     public var text: String
     public var truncated: Bool
+    public var storageIdentifier: String?
 
-    public init(text: String, truncated: Bool = false) {
+    public init(text: String, truncated: Bool = false, storageIdentifier: String? = nil) {
         self.text = text
         self.truncated = truncated
+        self.storageIdentifier = storageIdentifier
     }
 
     public static func bounded(
@@ -121,11 +123,7 @@ public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
         maxBytes: Int = defaultMaxBytes,
         maxLines: Int = defaultMaxLines
     ) -> PaneScrollbackSnapshot? {
-        let parts = [first?.text, second?.text]
-            .compactMap { text -> String? in
-                let trimmed = text?.trimmingCharacters(in: .newlines) ?? ""
-                return trimmed.isEmpty ? nil : trimmed
-            }
+        let parts = combinedParts(first?.text, second?.text)
         guard parts.isEmpty == false else {
             return nil
         }
@@ -139,6 +137,40 @@ public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
         }
         snapshot.truncated = snapshot.truncated || first?.truncated == true || second?.truncated == true
         return snapshot
+    }
+
+    private static func combinedParts(_ first: String?, _ second: String?) -> [String] {
+        let firstText = first?.trimmingCharacters(in: .newlines) ?? ""
+        let secondText = second?.trimmingCharacters(in: .newlines) ?? ""
+        guard firstText.isEmpty == false else {
+            return secondText.isEmpty ? [] : [secondText]
+        }
+        guard secondText.isEmpty == false else {
+            return [firstText]
+        }
+
+        let firstLines = firstText.split(separator: "\n", omittingEmptySubsequences: false)
+        let secondLines = secondText.split(separator: "\n", omittingEmptySubsequences: false)
+        let overlap = overlappingLineCount(firstLines: firstLines, secondLines: secondLines)
+        let remainingSecond = secondLines.dropFirst(overlap).joined(separator: "\n")
+        return remainingSecond.isEmpty ? [firstText] : [firstText, remainingSecond]
+    }
+
+    private static func overlappingLineCount(
+        firstLines: [String.SubSequence],
+        secondLines: [String.SubSequence]
+    ) -> Int {
+        let maxOverlap = min(firstLines.count, secondLines.count)
+        guard maxOverlap > 0 else {
+            return 0
+        }
+
+        for count in stride(from: maxOverlap, through: 1, by: -1) {
+            if Array(firstLines.suffix(count)) == Array(secondLines.prefix(count)) {
+                return count
+            }
+        }
+        return 0
     }
 }
 

@@ -341,6 +341,14 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane not found"))
             }
             return JSONRPCResponse(id: request.id, result: history.rpcValue)
+        case .clearTerminalHistory:
+            guard let clearRequest = ControlPlaneHistoryClearRequest(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid history clear request"))
+            }
+            guard let result = controller.clearTerminalHistory(clearRequest) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
         case .sendNotification:
             let title = request.params?.objectValue?["title"]?.stringValue ?? "OpenMUX"
             let body = request.params?.objectValue?["body"]?.stringValue ?? ""

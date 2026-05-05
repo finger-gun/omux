@@ -43,6 +43,68 @@ struct OmuxConfigTests {
         #expect(result.config.workspace == OmuxConfig.defaults.workspace)
     }
 
+    func loadsPersistedScrollbackTerminalSettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [terminal]
+            persist_scrollback = false
+            persist_scrollback_lines = 8000
+            persist_scrollback_bytes = 2097152
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.terminal.persistedScrollback.enabled == false)
+        #expect(result.config.terminal.persistedScrollback.maxLines == 8000)
+        #expect(result.config.terminal.persistedScrollback.maxBytes == 2_097_152)
+    }
+
+    @Test
+    func defaultsPersistedScrollbackTerminalSettings() throws {
+        let result = OmuxConfigLoader(configURL: temporaryMissingConfigURL()).load()
+
+        #expect(result.hasErrors == false)
+        #expect(result.config.terminal.persistedScrollback.enabled)
+        #expect(result.config.terminal.persistedScrollback.maxLines == 4_000)
+        #expect(result.config.terminal.persistedScrollback.maxBytes == 1_048_576)
+    }
+
+    @Test
+    func rejectsInvalidPersistedScrollbackTerminalSettings() throws {
+        let cases = [
+            ("persist_scrollback = \"yes\"", "terminal.persist_scrollback must be a boolean"),
+            ("persist_scrollback_lines = \"many\"", "terminal.persist_scrollback_lines must be an integer"),
+            ("persist_scrollback_lines = 0", "terminal.persist_scrollback_lines must be greater than zero"),
+            ("persist_scrollback_bytes = \"lots\"", "terminal.persist_scrollback_bytes must be an integer"),
+            ("persist_scrollback_bytes = -1", "terminal.persist_scrollback_bytes must be greater than zero"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [terminal]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+            #expect(result.config.terminal.persistedScrollback == OmuxConfig.defaults.terminal.persistedScrollback)
+        }
+    }
+
     @Test
     func extractsGhosttyPassThroughInFileOrder() throws {
         let home = try temporaryHome()
@@ -301,6 +363,9 @@ struct OmuxConfigTests {
         try write(OmuxConfigTemplate.starter(), to: configURL)
 
         let contents = try String(contentsOf: configURL, encoding: .utf8)
+        #expect(contents.contains("# persist_scrollback = true"))
+        #expect(contents.contains("# persist_scrollback_lines = 4000"))
+        #expect(contents.contains("# persist_scrollback_bytes = 1048576"))
         #expect(contents.contains("default_root_path = \"~\""))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
@@ -311,6 +376,12 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(OpenMUXKeyBindingRegistry.effective(overrides: result.config.keyBindings).chord(for: .paneRemove)?.description == "cmd+shift+w")
     }
+}
+
+private func temporaryMissingConfigURL() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        .appendingPathComponent("config.toml")
 }
 
 private func temporaryHome() throws -> URL {

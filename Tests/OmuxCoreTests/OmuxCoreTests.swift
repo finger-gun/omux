@@ -52,6 +52,24 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(try provider.currentVersion(), "9.8.7")
     }
 
+    func testScrollbackSnapshotCombinedDeduplicatesOverlappingSurfaceAndActiveText() {
+        let history = PaneScrollbackSnapshot(text: "first\nprompt\ncontinued", truncated: false)
+        let active = PaneScrollbackSnapshot(text: "prompt\ncontinued", truncated: false)
+
+        let combined = PaneScrollbackSnapshot.combined(history, active)
+
+        XCTAssertEqual(combined?.text, "first\nprompt\ncontinued")
+    }
+
+    func testScrollbackSnapshotCombinedKeepsNonOverlappingText() {
+        let history = PaneScrollbackSnapshot(text: "first\nsecond", truncated: false)
+        let active = PaneScrollbackSnapshot(text: "third", truncated: false)
+
+        let combined = PaneScrollbackSnapshot.combined(history, active)
+
+        XCTAssertEqual(combined?.text, "first\nsecond\nthird")
+    }
+
     func testReleaseMetadataParserFindsRequiredAssets() throws {
         let data = Data("""
         {
