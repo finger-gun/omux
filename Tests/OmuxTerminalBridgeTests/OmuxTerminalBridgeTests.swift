@@ -37,7 +37,10 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         let attachment = try bridge.attach(session: session, to: pane)
 
-        XCTAssertEqual(runtime.session(for: attachment.runtimeSurfaceID)?.environment, session.environment)
+        var expectedEnvironment = session.environment
+        expectedEnvironment[OpenMUXTerminalEnvironment.paneIDKey] = pane.id.rawValue
+        expectedEnvironment[OpenMUXTerminalEnvironment.sessionIDKey] = session.id.rawValue
+        XCTAssertEqual(runtime.session(for: attachment.runtimeSurfaceID)?.environment, expectedEnvironment)
     }
 
     func testScrollbackReplayStoreWritesRawANSIReplayFile() throws {
@@ -113,8 +116,8 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
         let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
 
-        XCTAssertEqual(replayText, "real output\n\(prompt)")
-        XCTAssertTrue(replayText.contains("\u{001B}[35m"))
+        XCTAssertEqual(replayText, "real output")
+        XCTAssertFalse(replayText.contains("\u{001B}[35m"))
     }
 
     func testScrollbackReplayStoreKeepsPlainRepeatedTailOutput() throws {
@@ -128,6 +131,48 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
 
         XCTAssertEqual(replayText, scrollback.text)
+    }
+
+    func testScrollbackReplayStoreDeduplicatesPlainPromptAndLoginTailNoise() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let prompt = "omux [bug-fix-auto-updater][$!?][v6.3][aws]"
+        let scrollback = PaneScrollbackSnapshot(
+            text: """
+            useful output
+            Last login: Tue May 5 09:00:00 on ttys001
+            \(prompt)
+            Last login: Tue May 5 10:00:00 on ttys002
+            \(prompt)
+            """,
+            truncated: false
+        )
+
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+        let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
+
+        XCTAssertEqual(
+            replayText,
+            """
+            useful output
+            Last login: Tue May 5 10:00:00 on ttys002
+            """
+        )
+    }
+
+    func testScrollbackReplayStoreSkipsPromptOnlyReplay() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let scrollback = PaneScrollbackSnapshot(
+            text: "omux [bug-fix-auto-updater][$!?][v6.3][aws]",
+            truncated: false
+        )
+
+        XCTAssertNil(store.prepareReplay(for: scrollback))
     }
 
     func testScrollbackReplayWrapperPreparesShellQuotedLaunchSession() throws {

@@ -544,6 +544,24 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         scheduleTick()
     }
 
+    public func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool {
+        let state = try surfaceState(for: runtimeSurfaceID)
+        guard let surface = state.surface else {
+            throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
+        }
+
+        return mainActorValue {
+            let action = "clear_screen"
+            let handled = action.withCString { ptr in
+                ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+            }
+            if handled {
+                self.scheduleTick()
+            }
+            return handled
+        }
+    }
+
     public func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         let state = try surfaceState(for: runtimeSurfaceID)
         guard let surface = state.surface else {

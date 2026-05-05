@@ -171,7 +171,7 @@ OpenMUX stores and replays raw terminal output where safe, including ANSI color 
 
 Because terminal output can contain secrets, set `persist_scrollback = false` to opt out.
 
-Use `omux history clear` to remove persisted scrollback for all panes. Scope cleanup with `--pane <id>`, `--pane-tab <id>`, `--tab <id>`, `--workspace <id>`, `--session <id>`, or `--focused` when only part of the restored history should be cleared.
+Use `omux history clear` to remove persisted scrollback for all panes and clear live screen/scrollback for currently running panes when available. When the command runs inside an OpenMUX-launched pane, the CLI also clears that pane's terminal buffer locally after the control-plane clear succeeds. Scope cleanup with `--pane <id>`, `--pane-tab <id>`, `--tab <id>`, `--workspace <id>`, `--session <id>`, or `--focused` when only part of the restored history should be cleared.
 
 Example:
 

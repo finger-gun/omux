@@ -86,7 +86,7 @@ The system SHALL treat alternate-screen and full-screen TUI output as best-effor
 - **THEN** OpenMUX omits or bounds that replay rather than producing a broken prompt
 
 ### Requirement: Persisted scrollback SHALL be clearable by users
-The system SHALL provide a CLI-accessible control-plane operation to clear persisted scrollback. Clearing history SHALL remove model-level restored scrollback for targeted panes, SHALL remove unreferenced persisted scrollback payload files, and SHALL avoid immediately re-persisting unchanged live terminal text for panes whose history was just cleared.
+The system SHALL provide a CLI-accessible control-plane operation to clear persisted scrollback. Clearing history SHALL remove model-level restored scrollback for targeted panes, SHALL clear live screen/scrollback for running targeted panes when the terminal runtime supports it, SHALL locally clear the invoking pane's terminal buffer when the CLI is running inside a targeted OpenMUX-launched pane, SHALL remove unreferenced persisted scrollback payload files, and SHALL avoid immediately re-persisting unchanged live terminal text for panes whose history was just cleared.
 
 #### Scenario: All persisted history is cleared
 - **WHEN** the user runs the history clear command without a scope
@@ -99,3 +99,7 @@ The system SHALL provide a CLI-accessible control-plane operation to clear persi
 #### Scenario: Unchanged live text is not immediately recaptured
 - **WHEN** a pane's history is cleared while the live terminal still contains the same text
 - **THEN** the next scrollback-inclusive persistence pass does not re-save that unchanged text as restored scrollback
+
+#### Scenario: Repeated shell startup and prompt tail noise is not persisted
+- **WHEN** scrollback capture contains repeated shell login banners or prompt-only tail lines from prior visual replays
+- **THEN** OpenMUX stores a cleaned bounded payload that keeps the latest shell startup line, drops stale trailing prompt-only lines, and preserves non-prompt repeated output

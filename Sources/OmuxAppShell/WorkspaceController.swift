@@ -206,6 +206,9 @@ public final class WorkspaceController: @unchecked Sendable {
             ).scrollbackSnapshot?.text ?? ""
             return (paneID, text)
         })
+        for paneID in paneIDs {
+            _ = try? bridge.clearScreenAndScrollback(for: paneID)
+        }
 
         lock.lock()
         var clearedCount = 0
@@ -1768,7 +1771,19 @@ public final class WorkspaceController: @unchecked Sendable {
                 if liveText.scrollbackSnapshot?.text == historyClearSuppression[pane.id] {
                     restoredScrollback = nil
                 } else {
-                    restoredScrollback = liveText.scrollbackSnapshot
+                    restoredScrollback = liveText.scrollbackSnapshot.flatMap { snapshot in
+                        PaneScrollbackSnapshot.bounded(
+                            text: TerminalScrollbackTextSanitizer.sanitizedForReplayOrPersistence(snapshot.text),
+                            maxBytes: maxBytes,
+                            maxLines: maxLines
+                        ).map { sanitized in
+                            PaneScrollbackSnapshot(
+                                text: sanitized.text,
+                                truncated: sanitized.truncated || snapshot.truncated,
+                                storageIdentifier: snapshot.storageIdentifier
+                            )
+                        }
+                    }
                 }
             } else {
                 restoredScrollback = historyClearSuppression[pane.id] == nil ? pane.terminalState.restoredScrollback : nil

@@ -958,12 +958,46 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertEqual(result.clearedCount, 1)
         XCTAssertNil(clearedPane.terminalState.restoredScrollback)
+        XCTAssertEqual(runtime.clearedScreenAndScrollbackSurfaceIDs, [surfaceID])
+        XCTAssertEqual(runtime.scrollbackBySurface[surfaceID], "")
 
         runtime.scrollbackBySurface[surfaceID] = "new history"
         let updatedSnapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
         let updatedPane = try XCTUnwrap(updatedSnapshot.workspaces.first?.focusedPane)
 
         XCTAssertEqual(updatedPane.terminalState.restoredScrollback?.text, "new history")
+    }
+
+    func testPersistenceSanitizesRepeatedPromptAndLoginTailNoise() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let prompt = "omux [bug-fix-auto-updater][$!?][v6.3][aws]"
+        runtime.scrollbackBySurface[surfaceID] = """
+        useful output
+        Last login: Tue May 5 09:00:00 on ttys001
+        \(prompt)
+        Last login: Tue May 5 10:00:00 on ttys002
+        \(prompt)
+        """
+
+        let snapshot = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
+        let persistedPane = try XCTUnwrap(snapshot.workspaces.first?.focusedPane)
+
+        XCTAssertEqual(
+            persistedPane.terminalState.restoredScrollback?.text,
+            """
+            useful output
+            Last login: Tue May 5 10:00:00 on ttys002
+            """
+        )
     }
 
     func testWorkspaceRestoreKeepsSavedScrollbackForHistoryCommandWithoutRenderingIt() throws {
@@ -1054,7 +1088,18 @@ final class OmuxAppShellTests: XCTestCase {
         _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
         let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
-        XCTAssertEqual(runtime.session(for: surfaceID), session)
+        var expectedEnvironment = session.environment
+        expectedEnvironment[OpenMUXTerminalEnvironment.paneIDKey] = pane.id.rawValue
+        expectedEnvironment[OpenMUXTerminalEnvironment.sessionIDKey] = session.id.rawValue
+        XCTAssertEqual(
+            runtime.session(for: surfaceID),
+            SessionDescriptor(
+                id: session.id,
+                shell: session.shell,
+                workingDirectory: session.workingDirectory,
+                environment: expectedEnvironment
+            )
+        )
     }
 
     func testWorkspacePersistenceDropsRestoredScrollbackWhenFreshRuntimeCaptureIsAvailableEmpty() throws {
@@ -3045,6 +3090,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var transcript = ""
     var sentTextCount = 0
     private(set) var terminalTextSnapshotCount = 0
+    private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
@@ -3140,6 +3186,17 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
             maxBytes: maxBytes,
             maxLines: maxLines
         ).scrollbackSnapshot
+    }
+
+    func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool {
+        guard sessions[runtimeSurfaceID] != nil else {
+            throw TerminalBridgeError.runtimeAttachFailed(runtimeSurfaceID)
+        }
+        clearedScreenAndScrollbackSurfaceIDs.append(runtimeSurfaceID)
+        scrollbackBySurface[runtimeSurfaceID] = ""
+        transcriptBySurface[runtimeSurfaceID] = ""
+        inputBySurface[runtimeSurfaceID] = ""
+        return true
     }
 
     func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot {

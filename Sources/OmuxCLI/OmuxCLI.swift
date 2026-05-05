@@ -15,6 +15,7 @@ public struct OmuxCLICommand {
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
     private let versionProvider: OpenMUXVersionProvider
+    private let environment: () -> [String: String]
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
@@ -31,6 +32,7 @@ public struct OmuxCLICommand {
             themeRegistry: themeRegistry,
             installer: OmuxCLIInstaller(),
             versionProvider: OpenMUXVersionProvider(),
+            environment: { ProcessInfo.processInfo.environment },
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
             selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) }
         )
@@ -44,6 +46,7 @@ public struct OmuxCLICommand {
         themeRegistry: OmuxThemeRegistry,
         installer: OmuxCLIInstaller,
         versionProvider: OpenMUXVersionProvider = OpenMUXVersionProvider(),
+        environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
         selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
             try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1)
@@ -58,6 +61,7 @@ public struct OmuxCLICommand {
         self.themeRegistry = themeRegistry
         self.installer = installer
         self.versionProvider = versionProvider
+        self.environment = environment
     }
 
     @discardableResult
@@ -504,7 +508,7 @@ public struct OmuxCLICommand {
         }
 
         guard let result = response.result else {
-            writeLine(parsed.json ? "{}" : "Cleared history for 0 panes.")
+            writeLine(parsed.json ? "{}" : activePaneTerminalClearPrefix(for: parsed.request) + "Cleared history for 0 panes.")
             return 0
         }
 
@@ -512,9 +516,41 @@ public struct OmuxCLICommand {
             writeLine(result.prettyPrinted)
         } else {
             let count = result.objectValue?["clearedCount"]?.integerValue ?? 0
-            writeLine("Cleared history for \(count) \(count == 1 ? "pane" : "panes").")
+            let message = "Cleared history for \(count) \(count == 1 ? "pane" : "panes")."
+            writeLine(activePaneTerminalClearPrefix(for: parsed.request) + message)
         }
         return 0
+    }
+
+    private func activePaneTerminalClearPrefix(for request: ControlPlaneHistoryClearRequest) -> String {
+        let currentEnvironment = environment()
+        guard let paneID = currentEnvironment["OMUX_PANE_ID"], paneID.isEmpty == false else {
+            return ""
+        }
+        guard historyClearTargetsCurrentPane(request, environment: currentEnvironment) else {
+            return ""
+        }
+        return "\u{001B}[H\u{001B}[2J\u{001B}[3J"
+    }
+
+    private func historyClearTargetsCurrentPane(
+        _ request: ControlPlaneHistoryClearRequest,
+        environment: [String: String]
+    ) -> Bool {
+        guard let target = request.target else {
+            return true
+        }
+
+        switch target {
+        case .focused:
+            return true
+        case .pane(let id):
+            return environment["OMUX_PANE_ID"] == id.rawValue
+        case .session(let id):
+            return environment["OMUX_SESSION_ID"] == id.rawValue
+        case .tab, .workspace:
+            return false
+        }
     }
 
     private func parseHistoryClearRequest(

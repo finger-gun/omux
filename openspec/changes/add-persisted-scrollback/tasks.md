@@ -39,3 +39,6 @@
 - [x] 6.2 Clear model-level restored scrollback and suppress immediate recapture of unchanged live terminal text for targeted panes.
 - [x] 6.3 Prune unreferenced scrollback payload files after history cleanup.
 - [x] 6.4 Document history cleanup and add CLI/app-shell/persistence tests.
+- [x] 6.5 Clear live Ghostty screen/scrollback for running targeted panes and dedupe repeated replay tail prompt/login noise.
+- [x] 6.6 Add active-pane terminal-local clear fallback and sanitize repeated prompt/login noise before persistence writes.
+- [x] 6.7 Drop stale trailing prompt-only lines from persisted/replayed scrollback.

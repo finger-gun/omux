@@ -592,6 +592,46 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(paneTabTarget["id"], .string("pane-1"))
     }
 
+    func testCLIHistoryClearEmitsLocalTerminalClearWhenCurrentOpenMUXPaneIsTargeted() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "hc-local.sock")
+            .path(percentEncoded: false)
+
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            JSONRPCResponse(id: request.id, result: .object([
+                "ok": .bool(true),
+                "clearedCount": .integer(1),
+                "target": .null,
+            ]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: {
+                [
+                    "OMUX_PANE_ID": "pane-1",
+                    "OMUX_SESSION_ID": "session-1",
+                ]
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear", "--pane", "pane-1"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "history", "clear", "--pane", "pane-2"]), 0)
+
+        XCTAssertTrue(output[0].hasPrefix("\u{001B}[H\u{001B}[2J\u{001B}[3J"))
+        XCTAssertEqual(output[0].replacingOccurrences(of: "\u{001B}[H\u{001B}[2J\u{001B}[3J", with: ""), "Cleared history for 1 pane.")
+        XCTAssertEqual(output[1], "Cleared history for 1 pane.")
+    }
+
     func testCLIHistoryPrintsUnavailablePane() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

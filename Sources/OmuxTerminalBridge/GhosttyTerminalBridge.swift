@@ -26,6 +26,11 @@ public struct TerminalSessionAttachment: Equatable, Sendable {
     }
 }
 
+public enum OpenMUXTerminalEnvironment {
+    public static let paneIDKey = "OMUX_PANE_ID"
+    public static let sessionIDKey = "OMUX_SESSION_ID"
+}
+
 public protocol GhosttyRuntime {
     func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic]
     func refreshCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic]
@@ -54,6 +59,7 @@ public protocol GhosttyRuntime {
     ) -> TerminalSessionSnapshot?
     func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot?
+    func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool
 }
 
 public extension GhosttyRuntime {
@@ -140,6 +146,25 @@ public extension GhosttyRuntime {
         _ = maxBytes
         _ = maxLines
         return nil
+    }
+
+    func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool {
+        _ = runtimeSurfaceID
+        return false
+    }
+}
+
+private extension SessionDescriptor {
+    func withOpenMUXEnvironment(for paneID: PaneID) -> SessionDescriptor {
+        var environment = environment
+        environment[OpenMUXTerminalEnvironment.paneIDKey] = paneID.rawValue
+        environment[OpenMUXTerminalEnvironment.sessionIDKey] = id.rawValue
+        return SessionDescriptor(
+            id: id,
+            shell: shell,
+            workingDirectory: workingDirectory,
+            environment: environment
+        )
     }
 }
 
@@ -424,12 +449,13 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     public func attach(session: SessionDescriptor, to pane: Pane) throws -> TerminalSessionAttachment {
         let surface = try createSurface(for: pane)
-        try attachRuntimeSession(session, to: surface.runtimeSurfaceID)
+        let runtimeSession = session.withOpenMUXEnvironment(for: pane.id)
+        try attachRuntimeSession(runtimeSession, to: surface.runtimeSurfaceID)
 
         lock.lock()
-        sessionsByPane[pane.id] = session.id
+        sessionsByPane[pane.id] = runtimeSession.id
         sessionStateByPane[pane.id] = SessionState(
-            descriptor: session,
+            descriptor: runtimeSession,
             runtimeSurfaceID: surface.runtimeSurfaceID
         )
         lock.unlock()
@@ -437,7 +463,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         publishSnapshot(for: pane.id)
 
         return TerminalSessionAttachment(
-            sessionID: session.id,
+            sessionID: runtimeSession.id,
             paneID: pane.id,
             runtimeSurfaceID: surface.runtimeSurfaceID
         )
@@ -483,6 +509,17 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
     ) -> PaneScrollbackSnapshot? {
         terminalTextSnapshot(for: paneID, maxBytes: maxBytes, maxLines: maxLines).scrollbackSnapshot
+    }
+
+    @discardableResult
+    public func clearScreenAndScrollback(for paneID: PaneID) throws -> Bool {
+        lock.lock()
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let runtimeSurfaceID else {
+            throw TerminalBridgeError.missingSession(paneID)
+        }
+        return try runtime.clearScreenAndScrollback(runtimeSurfaceID: runtimeSurfaceID)
     }
 
     public func terminalTextSnapshot(

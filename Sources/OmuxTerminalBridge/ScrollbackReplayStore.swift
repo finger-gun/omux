@@ -23,85 +23,8 @@ public struct TerminalScrollbackReplayLaunch: Equatable, Sendable {
     }
 }
 
-public final class ScrollbackReplayStore: @unchecked Sendable {
-    public static let environmentKey = "OMUX_RESTORE_SCROLLBACK_FILE"
-
-    private let directoryURL: URL
-    private let fileManager: FileManager
-
-    public init(
-        directoryURL: URL,
-        fileManager: FileManager = .default
-    ) {
-        self.directoryURL = directoryURL
-        self.fileManager = fileManager
-    }
-
-    public func prepareReplay(
-        for scrollback: PaneScrollbackSnapshot?,
-        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
-        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
-    ) -> TerminalScrollbackReplay? {
-        guard let scrollback,
-              let bounded = PaneScrollbackSnapshot.bounded(
-                  text: scrollback.text,
-                  maxBytes: maxBytes,
-                  maxLines: maxLines
-              )
-        else {
-            return nil
-        }
-
-        let fileURL = directoryURL.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: false)
-            .appendingPathExtension("ansi")
-        do {
-            try fileManager.createDirectory(
-                at: directoryURL,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try Data(Self.sanitizedReplayText(bounded.text).utf8).write(to: fileURL, options: .atomic)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-            return TerminalScrollbackReplay(fileURL: fileURL)
-        } catch {
-            fputs("warning: failed to prepare scrollback replay file \(fileURL.path): \(error)\n", stderr)
-            return nil
-        }
-    }
-
-    public func removeReplayFile(_ fileURL: URL) {
-        guard fileURL.standardizedFileURL.path.hasPrefix(directoryURL.standardizedFileURL.path + "/"),
-              fileManager.fileExists(atPath: fileURL.path)
-        else {
-            return
-        }
-
-        do {
-            try fileManager.removeItem(at: fileURL)
-        } catch {
-            fputs("warning: failed to remove scrollback replay file \(fileURL.path): \(error)\n", stderr)
-        }
-    }
-
-    public func cleanupStaleFiles(olderThan cutoff: Date) {
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-
-        for fileURL in files where fileURL.pathExtension == "ansi" {
-            let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            guard modified < cutoff else {
-                continue
-            }
-            removeReplayFile(fileURL)
-        }
-    }
-
-    private static func sanitizedReplayText(_ text: String) -> String {
+public enum TerminalScrollbackTextSanitizer {
+    public static func sanitizedForReplayOrPersistence(_ text: String) -> String {
         let unsafeSequences = [
             "\u{001B}[?1049h",
             "\u{001B}[?1049l",
@@ -113,10 +36,10 @@ public final class ScrollbackReplayStore: @unchecked Sendable {
         let withoutUnsafeSequences = unsafeSequences.reduce(text) { result, sequence in
             result.replacingOccurrences(of: sequence, with: "")
         }
-        return deduplicatedTailPromptLines(withoutUnsafeSequences)
+        return droppingTrailingPromptLine(deduplicatedTailPromptLines(withoutUnsafeSequences))
     }
 
-    private static func deduplicatedTailPromptLines(_ text: String, tailLineLimit: Int = 24) -> String {
+    private static func deduplicatedTailPromptLines(_ text: String, tailLineLimit: Int = 80) -> String {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard lines.count > 1 else {
             return text
@@ -125,7 +48,7 @@ public final class ScrollbackReplayStore: @unchecked Sendable {
         let tailStart = max(0, lines.count - tailLineLimit)
         let prefix = lines[..<tailStart]
         let tail = Array(lines[tailStart...])
-        let duplicateKeys = duplicateANSILineKeys(in: tail)
+        let duplicateKeys = duplicateShellNoiseLineKeys(in: tail)
         var seen = Set<String>()
         var deduplicatedReversed: [String] = []
 
@@ -142,26 +65,67 @@ public final class ScrollbackReplayStore: @unchecked Sendable {
         return (Array(prefix) + Array(deduplicatedReversed.reversed())).joined(separator: "\n")
     }
 
-    private static func duplicateANSILineKeys(in lines: [String]) -> Set<String> {
+    private static func duplicateShellNoiseLineKeys(in lines: [String]) -> Set<String> {
         var counts: [String: Int] = [:]
-        var hasANSI: [String: Bool] = [:]
+        var isShellNoise: [String: Bool] = [:]
         for line in lines {
             let key = replayDuplicateComparisonKey(for: line)
             guard key.isEmpty == false else {
                 continue
             }
             counts[key, default: 0] += 1
-            hasANSI[key, default: false] = hasANSI[key, default: false] || line.contains("\u{001B}")
+            isShellNoise[key, default: false] = isShellNoise[key, default: false]
+                || line.contains("\u{001B}")
+                || isShellStartupOrPromptLine(key)
         }
         return Set(counts.compactMap { key, count in
-            count > 1 && hasANSI[key] == true ? key : nil
+            count > 1 && isShellNoise[key] == true ? key : nil
         })
+    }
+
+    private static func isShellStartupOrPromptLine(_ line: String) -> Bool {
+        if line.hasPrefix("Last login:") {
+            return true
+        }
+        if line.contains("][$!?]") || line.contains("[\u{e0a0} ") {
+            return true
+        }
+        if line.hasPrefix("("), line.hasSuffix(")]") {
+            return true
+        }
+        if [" $", " %", " >", " #"].contains(where: line.hasSuffix) {
+            return true
+        }
+        return false
+    }
+
+    private static func droppingTrailingPromptLine(_ text: String) -> String {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.isEmpty == false else {
+            return text
+        }
+
+        while lines.last == "" {
+            lines.removeLast()
+        }
+        guard let lastLine = lines.last else {
+            return ""
+        }
+        let key = replayDuplicateComparisonKey(for: lastLine)
+        guard key.isEmpty == false, isShellStartupOrPromptLine(key), key.hasPrefix("Last login:") == false else {
+            return text
+        }
+        lines.removeLast()
+        return lines.joined(separator: "\n")
     }
 
     private static func replayDuplicateComparisonKey(for line: String) -> String {
         let stripped = ansiStripped(line).trimmingCharacters(in: .whitespaces)
         guard stripped.isEmpty == false else {
             return ""
+        }
+        if stripped.hasPrefix("Last login:") {
+            return "Last login:"
         }
         return stripped
     }
@@ -204,6 +168,93 @@ public final class ScrollbackReplayStore: @unchecked Sendable {
             }
         }
         return result
+    }
+}
+
+public final class ScrollbackReplayStore: @unchecked Sendable {
+    public static let environmentKey = "OMUX_RESTORE_SCROLLBACK_FILE"
+
+    private let directoryURL: URL
+    private let fileManager: FileManager
+
+    public init(
+        directoryURL: URL,
+        fileManager: FileManager = .default
+    ) {
+        self.directoryURL = directoryURL
+        self.fileManager = fileManager
+    }
+
+    public func prepareReplay(
+        for scrollback: PaneScrollbackSnapshot?,
+        maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
+        maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
+    ) -> TerminalScrollbackReplay? {
+        guard let scrollback,
+              let bounded = PaneScrollbackSnapshot.bounded(
+                  text: scrollback.text,
+                  maxBytes: maxBytes,
+                  maxLines: maxLines
+              )
+        else {
+            return nil
+        }
+
+        let fileURL = directoryURL.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: false)
+            .appendingPathExtension("ansi")
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let replayText = Self.sanitizedReplayText(bounded.text)
+            guard replayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return nil
+            }
+            try Data(replayText.utf8).write(to: fileURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            return TerminalScrollbackReplay(fileURL: fileURL)
+        } catch {
+            fputs("warning: failed to prepare scrollback replay file \(fileURL.path): \(error)\n", stderr)
+            return nil
+        }
+    }
+
+    public func removeReplayFile(_ fileURL: URL) {
+        guard fileURL.standardizedFileURL.path.hasPrefix(directoryURL.standardizedFileURL.path + "/"),
+              fileManager.fileExists(atPath: fileURL.path)
+        else {
+            return
+        }
+
+        do {
+            try fileManager.removeItem(at: fileURL)
+        } catch {
+            fputs("warning: failed to remove scrollback replay file \(fileURL.path): \(error)\n", stderr)
+        }
+    }
+
+    public func cleanupStaleFiles(olderThan cutoff: Date) {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        for fileURL in files where fileURL.pathExtension == "ansi" {
+            let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            guard modified < cutoff else {
+                continue
+            }
+            removeReplayFile(fileURL)
+        }
+    }
+
+    private static func sanitizedReplayText(_ text: String) -> String {
+        TerminalScrollbackTextSanitizer.sanitizedForReplayOrPersistence(text)
     }
 }
 

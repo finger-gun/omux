@@ -88,7 +88,9 @@ OpenMUX will not attempt to reconstruct alternate-screen process state. It will 
 
 ### Expose explicit history cleanup
 
-Persisted scrollback can contain sensitive output. In addition to config opt-out, OpenMUX exposes `omux history clear` through the control plane so users can remove saved scrollback without manually editing Application Support files. The default clears all panes, and scoped cleanup can target a pane/pane-tab, top-level tab, workspace, session, or focused pane. Clearing history removes model-level restored scrollback immediately, prunes unreferenced payload files on the next persistence write, and suppresses immediate recapture of unchanged live terminal text so the clear remains durable.
+Persisted scrollback can contain sensitive output. In addition to config opt-out, OpenMUX exposes `omux history clear` through the control plane so users can remove saved scrollback without manually editing Application Support files. The default clears all panes, and scoped cleanup can target a pane/pane-tab, top-level tab, workspace, session, or focused pane. Clearing history removes model-level restored scrollback immediately, asks Ghostty to clear live screen/scrollback for running panes when available, prunes unreferenced payload files on the next persistence write, and suppresses immediate recapture of unchanged live terminal text so the clear remains durable. OpenMUX-launched shells also receive pane/session environment identifiers; when `omux history clear` is run from a targeted OpenMUX pane, the CLI emits terminal erase sequences locally after the control-plane clear succeeds so the invoking pane's visible buffer clears even if the runtime action is delayed.
+
+Repeated prompt-only tails can accumulate because restored visual history is replayed before each fresh login shell draws its own login banner and prompt. OpenMUX sanitizes replay files and scrollback-inclusive persistence writes with the same tail-only cleanup: repeated `Last login:` lines collapse to the latest occurrence, stale trailing prompt-shaped lines are dropped, and ordinary repeated command output is preserved.
 
 ## Risks / Trade-offs
 
