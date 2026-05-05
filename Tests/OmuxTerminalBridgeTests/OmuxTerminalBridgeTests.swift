@@ -727,6 +727,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         _ = bridge.makeHostedPaneView(for: pane, isFocused: true) { _ in }
         let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
         runtimeView.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        runtimeView.pressedMouseButtonsProvider = { 0 }
 
         let moved = try XCTUnwrap(
             NSEvent.mouseEvent(

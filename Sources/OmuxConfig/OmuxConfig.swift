@@ -219,6 +219,39 @@ public struct OmuxConfigWorkspace: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigUI: Equatable, Sendable {
+    public struct Icons: Equatable, Sendable {
+        public enum Provider: String, Equatable, Sendable {
+            case nerdFont = "nerd-font"
+            case text
+            case sfSymbols = "sf-symbols"
+        }
+
+        public let enabled: Bool
+        public let provider: Provider
+        public let fontFamily: String?
+        public let colorsEnabled: Bool
+
+        public init(
+            enabled: Bool = true,
+            provider: Provider = .nerdFont,
+            fontFamily: String? = nil,
+            colorsEnabled: Bool = true
+        ) {
+            self.enabled = enabled
+            self.provider = provider
+            self.fontFamily = fontFamily
+            self.colorsEnabled = colorsEnabled
+        }
+    }
+
+    public let icons: Icons
+
+    public init(icons: Icons = Icons()) {
+        self.icons = icons
+    }
+}
+
 public struct OmuxGhosttyConfigEntry: Equatable, Sendable {
     public let key: String
     public let value: OmuxTOMLValue
@@ -237,6 +270,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let theme: OmuxConfigTheme
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
+    public let ui: OmuxConfigUI
     public let keyBindings: [OpenMUXKeyBindingOverride]
     public let ghostty: [OmuxGhosttyConfigEntry]
     public let sourceURL: URL?
@@ -247,6 +281,7 @@ public struct OmuxConfig: Equatable, Sendable {
         theme: OmuxConfigTheme,
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
+        ui: OmuxConfigUI = OmuxConfigUI(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
         ghostty: [OmuxGhosttyConfigEntry],
         sourceURL: URL? = nil
@@ -256,6 +291,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.theme = theme
         self.terminal = terminal
         self.workspace = workspace
+        self.ui = ui
         self.keyBindings = keyBindings
         self.ghostty = ghostty
         self.sourceURL = sourceURL
@@ -267,6 +303,7 @@ public struct OmuxConfig: Equatable, Sendable {
         theme: OmuxConfigTheme(name: "monokai-soda"),
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
+        ui: OmuxConfigUI(),
         keyBindings: [],
         ghostty: []
     )
@@ -369,6 +406,12 @@ public enum OmuxConfigTemplate {
 
         [workspace]
         default_root_path = "~"
+
+        [ui.icons]
+        # enabled = true
+        # provider = "nerd-font"
+        # colors_enabled = true
+        # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
         [keys]
         \(OpenMUXKeyBindingRegistry.defaultBindingPairs.map { "\"\($0.0.description)\" = \"\($0.1.rawValue)\"" }.joined(separator: "\n"))
@@ -727,7 +770,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "keys", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.icons", "keys", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -809,6 +852,7 @@ public struct OmuxConfigLoader {
                 theme: OmuxConfigTheme(name: themeName),
                 terminal: config.terminal,
                 workspace: config.workspace,
+                ui: config.ui,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -820,6 +864,7 @@ public struct OmuxConfigLoader {
                 theme: config.theme,
                 terminal: config.terminal,
                 workspace: config.workspace,
+                ui: config.ui,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -1062,6 +1107,84 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let iconAllowedKeys: Set<String> = ["enabled", "provider", "colors_enabled", "font_family"]
+        var iconsEnabled = config.ui.icons.enabled
+        var iconsProvider = config.ui.icons.provider
+        var iconsFontFamily = config.ui.icons.fontFamily
+        var iconsColorsEnabled = config.ui.icons.colorsEnabled
+        for entry in document.entries(in: "ui.icons") {
+            guard iconAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [ui.icons] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.icons.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                iconsEnabled = value
+            case "provider":
+                guard let rawValue = entry.value.stringValue,
+                      let value = OmuxConfigUI.Icons.Provider(rawValue: rawValue)
+                else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.icons.provider must be \"nerd-font\", \"sf-symbols\", or \"text\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                iconsProvider = value
+            case "colors_enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.icons.colors_enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                iconsColorsEnabled = value
+            case "font_family":
+                guard let value = entry.value.stringValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.icons.font_family must be a string.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                iconsFontFamily = value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+            default:
+                break
+            }
+        }
+
         var keyBindings: [OpenMUXKeyBindingOverride] = []
         var seenKeyChords = Set<OpenMUXKeyChord>()
         for entry in document.entries(in: "keys") {
@@ -1140,6 +1263,14 @@ public struct OmuxConfigLoader {
                 )
             ),
             workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
+            ui: OmuxConfigUI(
+                icons: OmuxConfigUI.Icons(
+                    enabled: iconsEnabled,
+                    provider: iconsProvider,
+                    fontFamily: iconsFontFamily,
+                    colorsEnabled: iconsColorsEnabled
+                )
+            ),
             keyBindings: keyBindings,
             ghostty: ghosttyEntries,
             sourceURL: sourceURL

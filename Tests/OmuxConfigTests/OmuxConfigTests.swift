@@ -347,6 +347,57 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func loadsIconUISettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [ui.icons]
+            enabled = false
+            provider = "text"
+            font_family = "Symbols Nerd Font Mono"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.ui.icons.enabled == false)
+        #expect(result.config.ui.icons.provider == .text)
+        #expect(result.config.ui.icons.fontFamily == "Symbols Nerd Font Mono")
+    }
+
+    @Test
+    func rejectsInvalidIconUISettings() throws {
+        let cases = [
+            ("enabled = \"yes\"", "ui.icons.enabled must be a boolean"),
+            ("provider = \"emoji\"", "ui.icons.provider must be"),
+            ("font_family = 123", "ui.icons.font_family must be a string"),
+            ("unknown = true", "Unknown [ui.icons] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [ui.icons]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
     func loadsKeyBindingsAndUnbinds() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
@@ -411,6 +462,8 @@ struct OmuxConfigTests {
         #expect(contents.contains("# persist_scrollback_bytes = 1048576"))
         #expect(contents.contains("# auto_check_update = true"))
         #expect(contents.contains("default_root_path = \"~\""))
+        #expect(contents.contains("[ui.icons]"))
+        #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
             #expect(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))

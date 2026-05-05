@@ -62,6 +62,9 @@ targets.append(
                 "OmuxTerminalBridge",
                 "OmuxControlPlane",
                 "OmuxHooks",
+            ],
+            resources: [
+                .process("Resources"),
             ]
         ),
         .executableTarget(

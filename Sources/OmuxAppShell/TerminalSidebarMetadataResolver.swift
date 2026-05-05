@@ -2,6 +2,7 @@ import Foundation
 import OmuxCore
 
 struct TerminalSidebarMetadata: Equatable {
+    let icon: OmuxSemanticIcon
     let title: String
     let subtitle: String?
 }
@@ -13,13 +14,14 @@ final class TerminalSidebarMetadataResolver {
 
     private var gitInfoByPath: [String: GitInfo?] = [:]
 
-    func metadata(for pane: Pane) -> TerminalSidebarMetadata {
-        let path = pane.session.workingDirectory
+    func metadata(for pane: Pane, icon: OmuxSemanticIcon) -> TerminalSidebarMetadata {
+        let path = pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
         let abbreviatedPath = abbreviate(path: path)
         let preferredPaneTitle = preferredPaneTitle(for: pane, abbreviatedPath: abbreviatedPath)
 
         guard let gitInfo = resolveGitInfo(for: path) else {
             return TerminalSidebarMetadata(
+                icon: icon,
                 title: preferredPaneTitle ?? abbreviatedPath,
                 subtitle: preferredPaneTitle == nil ? nil : abbreviatedPath
             )
@@ -32,6 +34,7 @@ final class TerminalSidebarMetadataResolver {
                 preferredTitle: preferredPaneTitle
             )
             return TerminalSidebarMetadata(
+                icon: icon,
                 title: preferredPaneTitle,
                 subtitle: subtitle
             )
@@ -45,6 +48,7 @@ final class TerminalSidebarMetadataResolver {
         }
 
         return TerminalSidebarMetadata(
+            icon: icon,
             title: metadataTitle,
             subtitle: abbreviatedPath
         )

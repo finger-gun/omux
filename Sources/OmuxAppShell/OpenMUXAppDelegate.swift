@@ -97,7 +97,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             let windowController = WorkspaceWindowController(
                 workspace: workspace,
                 controller: workspaceController,
-                initialTheme: initialTheme
+                initialTheme: initialTheme,
+                initialIcons: configurationCoordinator.iconConfiguration()
             )
             self.windowController = windowController
             windowController.window?.delegate = self
@@ -115,6 +116,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onPersistedScrollbackChange = { [weak self] persistedScrollback in
                 self?.workspaceController.updatePersistedScrollback(persistedScrollback)
+            }
+            configurationCoordinator.onIconConfigurationChange = { [weak self] icons in
+                self?.windowController?.updateIcons(icons)
             }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
                 self?.applyKeyBindings(registry)

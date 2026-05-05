@@ -1,4 +1,5 @@
 import AppKit
+import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
 
@@ -59,12 +60,14 @@ final class WorkspaceWindowController: NSWindowController {
         workspace: Workspace,
         controller: WorkspaceController,
         initialTheme: WorkspaceShellTheme = .defaultTheme,
+        initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared
     ) {
         self.controller = controller
         self.rootViewController = WorkspaceShellViewController(
             controller: controller,
             initialTheme: initialTheme,
+            initialIcons: initialIcons,
             sidebarVisibilityStore: sidebarVisibilityStore
         )
         let window = NSWindow(
@@ -100,6 +103,10 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.updateTheme(theme)
     }
 
+    func updateIcons(_ icons: OmuxConfigUI.Icons) {
+        rootViewController.updateIcons(icons)
+    }
+
     func toggleSidebarVisibility() {
         rootViewController.toggleSidebarVisibility()
     }
@@ -113,6 +120,7 @@ final class WorkspaceWindowController: NSWindowController {
 final class WorkspaceShellViewController: NSViewController {
     private let controller: WorkspaceController
     private let metadataResolver = TerminalSidebarMetadataResolver()
+    private let iconResolver = WorkspaceIconResolver()
     private let sidebarView = WorkspaceSidebarView()
     private let canvasView = WorkspaceCanvasView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
@@ -120,16 +128,19 @@ final class WorkspaceShellViewController: NSViewController {
     private var mainColumnLeadingConstraint: NSLayoutConstraint?
     private var currentWorkspace: Workspace?
     private var currentTheme: WorkspaceShellTheme
+    private var currentIcons: OmuxConfigUI.Icons
     private var isSidebarVisible: Bool
     private var focusRestoreGeneration: UInt = 0
 
     init(
         controller: WorkspaceController,
         initialTheme: WorkspaceShellTheme,
+        initialIcons: OmuxConfigUI.Icons,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
     ) {
         self.controller = controller
         self.currentTheme = initialTheme
+        self.currentIcons = initialIcons
         self.sidebarVisibilityStore = sidebarVisibilityStore
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
         super.init(nibName: nil, bundle: nil)
@@ -189,6 +200,7 @@ final class WorkspaceShellViewController: NSViewController {
             previousFocusedPaneID: previousFocusedPaneID,
             workspace: workspace
         )
+        invalidateIconCacheForChangedPaths(from: currentWorkspace, to: workspace)
         currentWorkspace = workspace
         apply(theme: currentTheme)
 
@@ -250,6 +262,39 @@ final class WorkspaceShellViewController: NSViewController {
         if let currentWorkspace {
             update(workspace: currentWorkspace)
         }
+    }
+
+    func updateIcons(_ icons: OmuxConfigUI.Icons) {
+        currentIcons = icons
+        if let currentWorkspace {
+            update(workspace: currentWorkspace)
+        }
+    }
+
+    private func invalidateIconCacheForChangedPaths(from previousWorkspace: Workspace?, to workspace: Workspace) {
+        guard let previousWorkspace else {
+            return
+        }
+
+        let previousPaths = Dictionary(
+            uniqueKeysWithValues: previousWorkspace.tabs
+                .flatMap(\.panes)
+                .map { ($0.id, iconResolutionPath(for: $0)) }
+        )
+
+        for pane in workspace.tabs.flatMap(\.panes) {
+            let path = iconResolutionPath(for: pane)
+            if let previousPath = previousPaths[pane.id], previousPath != path {
+                iconResolver.invalidate(path: previousPath)
+                iconResolver.invalidate(path: path)
+            } else if previousPaths[pane.id] == nil {
+                iconResolver.invalidate(path: path)
+            }
+        }
+    }
+
+    private func iconResolutionPath(for pane: Pane) -> String {
+        pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
     }
 
     private func apply(theme: WorkspaceShellTheme) {
@@ -318,6 +363,7 @@ final class WorkspaceShellViewController: NSViewController {
             let workspaceItem = SidebarItem(
                 kind: .workspace,
                 identifier: workspace.id.rawValue,
+                icon: renderedIcon(for: iconResolver.icon(for: workspace), pointSize: 13, weight: .semibold),
                 title: workspace.name,
                 subtitle: nil,
                 isActive: workspace.id == activeWorkspace.id,
@@ -331,11 +377,13 @@ final class WorkspaceShellViewController: NSViewController {
             let terminalItems = workspace.tabs
                 .flatMap { tab in
                     tab.panes.map { pane -> SidebarItem in
-                        let metadata = metadataResolver.metadata(for: pane)
+                        let paneIcon = iconResolver.icon(for: pane)
+                        let metadata = metadataResolver.metadata(for: pane, icon: paneIcon)
                         let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
                         return SidebarItem(
                             kind: .terminal,
                             identifier: pane.id.rawValue,
+                            icon: renderedIcon(for: metadata.icon, pointSize: 11, weight: .medium),
                             title: metadata.title,
                             subtitle: metadata.subtitle,
                             isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
@@ -350,6 +398,18 @@ final class WorkspaceShellViewController: NSViewController {
 
             return [workspaceItem] + terminalItems
         }
+    }
+
+    private func renderedIcon(
+        for icon: OmuxSemanticIcon,
+        pointSize: CGFloat,
+        weight: NSFont.Weight
+    ) -> OmuxRenderedIcon? {
+        OmuxIconRenderer(
+            configuration: currentIcons,
+            pointSize: pointSize,
+            weight: weight
+        ).render(icon)
     }
 
     func presentRenameWorkspacePrompt(workspaceID: WorkspaceID? = nil) {
@@ -505,6 +565,8 @@ final class WorkspaceShellViewController: NSViewController {
                 focusedPaneID: focusedPaneID,
                 bridge: controller.terminalBridge,
                 theme: currentTheme,
+                iconResolver: iconResolver,
+                iconConfiguration: currentIcons,
                 onSelectPaneTab: { [weak self] paneID in
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
@@ -575,6 +637,7 @@ struct SidebarItem {
 
     let kind: Kind
     let identifier: String
+    let icon: OmuxRenderedIcon?
     let title: String
     let subtitle: String?
     let isActive: Bool
@@ -1319,6 +1382,8 @@ final class PaneStackView: NSView {
         focusedPaneID: PaneID,
         bridge: GhosttyTerminalBridge,
         theme: WorkspaceShellTheme,
+        iconResolver: WorkspaceIconResolver,
+        iconConfiguration: OmuxConfigUI.Icons,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
@@ -1338,6 +1403,8 @@ final class PaneStackView: NSView {
         let headerView = PaneHeaderView(
             paneStack: paneStack,
             theme: theme,
+            iconResolver: iconResolver,
+            iconConfiguration: iconConfiguration,
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
             onClosePaneTab: onClosePaneTab,
@@ -1446,6 +1513,8 @@ final class PaneHeaderView: NSView {
     init(
         paneStack: PaneStack,
         theme: WorkspaceShellTheme,
+        iconResolver: WorkspaceIconResolver,
+        iconConfiguration: OmuxConfigUI.Icons,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
@@ -1474,6 +1543,11 @@ final class PaneHeaderView: NSView {
                 pane: pane,
                 active: pane.id == paneStack.focusedPaneID,
                 theme: theme,
+                icon: OmuxIconRenderer(
+                    configuration: iconConfiguration,
+                    pointSize: 11,
+                    weight: pane.id == paneStack.focusedPaneID ? .semibold : .medium
+                ).render(iconResolver.icon(for: pane)),
                 showsClose: paneStack.panes.count > 1,
                 onClose: {
                     try? onClosePaneTab(pane.id)
@@ -1541,6 +1615,20 @@ struct PaneTabTitleFormatter {
     }
 }
 
+private extension WorkspaceShellTheme {
+    func iconColor(
+        for icon: OmuxRenderedIcon,
+        selected: Bool,
+        fallback: NSColor? = nil
+    ) -> NSColor {
+        let themedColor = color(for: icon.colorToken)
+        if selected, Self.contrastRatio(themedColor, shell.selection) < 3 {
+            return fallback ?? shell.selectedText
+        }
+        return themedColor
+    }
+}
+
 @MainActor
 private final class PaneTabButton: NSControl {
     var onPress: (() -> Void)?
@@ -1551,33 +1639,62 @@ private final class PaneTabButton: NSControl {
     }
 
     private let titleLabel = NSTextField(labelWithString: "")
+    private let iconLabel = NSTextField(labelWithString: "")
+    private let iconImageView = NSImageView()
     private let closeButton = ChromePillButton()
     private let contentInsets = NSEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
     private let interItemSpacing = CGFloat(4)
+    private let iconSpacing = CGFloat(4)
+    private let symbolSide = CGFloat(12)
     private let showsClose: Bool
     private let currentTheme: WorkspaceShellTheme
     private let isActiveTab: Bool
+    private let renderedIcon: OmuxRenderedIcon?
+    private let iconSymbolImage: NSImage?
 
     init(
         pane: Pane,
         active: Bool,
         theme: WorkspaceShellTheme,
+        icon: OmuxRenderedIcon?,
         showsClose: Bool,
         onClose: @escaping () -> Void
     ) {
         self.showsClose = showsClose
         self.currentTheme = theme
         self.isActiveTab = active
+        self.renderedIcon = icon
+        self.iconSymbolImage = icon?.symbolImage()
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.masksToBounds = true
         layer?.cornerRadius = 3
         identifier = NSUserInterfaceItemIdentifier("pane-tab-\(pane.id.rawValue)")
-        setAccessibilityLabel(pane.title)
+        setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(pane.title)" } ?? pane.title)
         toolTip = pane.title
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        iconLabel.translatesAutoresizingMaskIntoConstraints = false
+        iconLabel.font = icon?.font ?? .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
+        iconLabel.lineBreakMode = .byClipping
+        iconLabel.alignment = .center
+        iconLabel.stringValue = icon?.text ?? ""
+        iconLabel.toolTip = icon?.accessibilityLabel
+        iconLabel.textColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
+            ?? (active ? theme.shell.selectedText : theme.shell.textSecondary)
+        iconLabel.isHidden = icon == nil || iconSymbolImage != nil
+        addSubview(iconLabel)
+
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        iconImageView.symbolConfiguration = .init(pointSize: 11, weight: active ? .semibold : .medium)
+        iconImageView.image = iconSymbolImage
+        iconImageView.contentTintColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
+            ?? (active ? theme.shell.selectedText : theme.shell.textSecondary)
+        iconImageView.toolTip = icon?.accessibilityLabel
+        iconImageView.isHidden = iconSymbolImage == nil
+        addSubview(iconImageView)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
@@ -1620,11 +1737,15 @@ private final class PaneTabButton: NSControl {
 
     override var intrinsicContentSize: NSSize {
         let titleSize = titleLabel.intrinsicContentSize
+        let iconSize = renderedIcon == nil
+            ? .zero
+            : (iconSymbolImage == nil ? iconLabel.intrinsicContentSize : NSSize(width: symbolSide, height: symbolSide))
         let closeSize = showsClose ? closeButton.intrinsicContentSize : .zero
         let closeWidth = showsClose ? interItemSpacing + closeSize.width : 0
+        let iconWidth = renderedIcon == nil ? 0 : iconSize.width + iconSpacing
         return NSSize(
-            width: titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
-            height: max(titleSize.height, closeSize.height) + contentInsets.top + contentInsets.bottom
+            width: iconWidth + titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
+            height: max(titleSize.height, iconSize.height, closeSize.height) + contentInsets.top + contentInsets.bottom
         )
     }
 
@@ -1635,6 +1756,35 @@ private final class PaneTabButton: NSControl {
             dy: contentInsets.top
         )
 
+        var titleMinX = contentBounds.minX
+        if let renderedIcon {
+            if iconSymbolImage == nil {
+                let iconSize = iconLabel.intrinsicContentSize
+                iconLabel.frame = NSRect(
+                    x: contentBounds.minX,
+                    y: round((bounds.height - iconSize.height) / 2),
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+                iconLabel.setAccessibilityLabel(renderedIcon.accessibilityLabel)
+                iconImageView.frame = .zero
+                titleMinX = iconLabel.frame.maxX + iconSpacing
+            } else {
+                iconImageView.frame = NSRect(
+                    x: contentBounds.minX,
+                    y: round((bounds.height - symbolSide) / 2),
+                    width: symbolSide,
+                    height: symbolSide
+                )
+                iconImageView.setAccessibilityLabel(renderedIcon.accessibilityLabel)
+                iconLabel.frame = .zero
+                titleMinX = iconImageView.frame.maxX + iconSpacing
+            }
+        } else {
+            iconLabel.frame = .zero
+            iconImageView.frame = .zero
+        }
+
         if showsClose {
             let closeSize = closeButton.intrinsicContentSize
             closeButton.frame = NSRect(
@@ -1644,13 +1794,18 @@ private final class PaneTabButton: NSControl {
                 height: closeSize.height
             )
             titleLabel.frame = NSRect(
-                x: contentBounds.minX,
+                x: titleMinX,
                 y: contentBounds.minY,
-                width: max(0, closeButton.frame.minX - interItemSpacing - contentBounds.minX),
+                width: max(0, closeButton.frame.minX - interItemSpacing - titleMinX),
                 height: contentBounds.height
             )
         } else {
-            titleLabel.frame = contentBounds
+            titleLabel.frame = NSRect(
+                x: titleMinX,
+                y: contentBounds.minY,
+                width: max(0, contentBounds.maxX - titleMinX),
+                height: contentBounds.height
+            )
             closeButton.frame = .zero
         }
     }
@@ -1678,6 +1833,10 @@ private final class PaneTabButton: NSControl {
 
     private func updateVisualState() {
         titleLabel.textColor = isActiveTab ? currentTheme.shell.selectedText : currentTheme.shell.textSecondary
+        let iconColor = renderedIcon.flatMap { currentTheme.iconColor(for: $0, selected: isActiveTab) }
+            ?? titleLabel.textColor
+        iconLabel.textColor = iconColor
+        iconImageView.contentTintColor = iconColor
         layer?.backgroundColor = (isActiveTab ? currentTheme.shell.selection : NSColor.clear).cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
@@ -1858,7 +2017,13 @@ final class SidebarItemButton: NSView {
     }
     private let titleField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
+    private let iconField = NSTextField(labelWithString: "")
+    private let iconImageView = NSImageView()
     private var leadingInset: CGFloat = 12
+    private var textLeadingInset: CGFloat = 12
+    private var renderedIcon: OmuxRenderedIcon?
+    private var iconSymbolImage: NSImage?
+    private var iconSide = CGFloat(13)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1872,6 +2037,18 @@ final class SidebarItemButton: NSView {
         titleField.isEditable = false
         titleField.isSelectable = false
         addSubview(titleField)
+
+        iconField.maximumNumberOfLines = 1
+        iconField.lineBreakMode = .byClipping
+        iconField.alignment = .center
+        iconField.isBezeled = false
+        iconField.drawsBackground = false
+        iconField.isEditable = false
+        iconField.isSelectable = false
+        addSubview(iconField)
+
+        iconImageView.isHidden = true
+        addSubview(iconImageView)
 
         subtitleField.maximumNumberOfLines = 1
         subtitleField.lineBreakMode = .byTruncatingMiddle
@@ -1900,9 +2077,30 @@ final class SidebarItemButton: NSView {
         }
 
         titleField.stringValue = item.title
+        renderedIcon = item.icon
+        iconSymbolImage = item.icon?.symbolImage()
+        iconSide = item.kind == .workspace ? 13 : 11
+        iconField.stringValue = item.icon?.text ?? ""
+        iconField.font = item.icon?.font ?? .systemFont(ofSize: item.kind == .workspace ? 13 : 11, weight: .medium)
+        iconField.isHidden = item.icon == nil || iconSymbolImage != nil
+        iconField.toolTip = item.icon?.accessibilityLabel
+        iconImageView.symbolConfiguration = .init(pointSize: iconSide, weight: item.kind == .workspace ? .semibold : .medium)
+        iconImageView.image = iconSymbolImage
+        iconImageView.isHidden = iconSymbolImage == nil
+        iconImageView.toolTip = item.icon?.accessibilityLabel
+        setAccessibilityLabel(item.icon.map { "\($0.accessibilityLabel), \(item.title)" } ?? item.title)
         titleField.textColor = item.kind == .terminal
             ? theme.shell.textMuted
             : (item.isActive ? theme.shell.selectedText : theme.shell.textSecondary)
+        let iconColor = item.icon.map {
+            theme.iconColor(
+                for: $0,
+                selected: item.isActive,
+                fallback: titleField.textColor ?? theme.shell.textSecondary
+            )
+        } ?? titleField.textColor
+        iconField.textColor = iconColor
+        iconImageView.contentTintColor = iconColor
         subtitleField.stringValue = item.subtitle ?? ""
         subtitleField.textColor = theme.shell.textMuted
         subtitleField.isHidden = item.subtitle == nil
@@ -1924,11 +2122,41 @@ final class SidebarItemButton: NSView {
     override func layout() {
         super.layout()
         let trailingInset: CGFloat = 12
-        let labelWidth = bounds.width - leadingInset - trailingInset
+        let iconSpacing: CGFloat = renderedIcon == nil ? 0 : 6
+        var textX = leadingInset
+        if let renderedIcon {
+            if iconSymbolImage == nil {
+                let iconSize = iconField.intrinsicContentSize
+                iconField.frame = NSRect(
+                    x: leadingInset,
+                    y: round((bounds.height - iconSize.height) / 2),
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+                iconField.setAccessibilityLabel(renderedIcon.accessibilityLabel)
+                iconImageView.frame = .zero
+                textX = iconField.frame.maxX + iconSpacing
+            } else {
+                iconImageView.frame = NSRect(
+                    x: leadingInset,
+                    y: round((bounds.height - iconSide) / 2),
+                    width: iconSide,
+                    height: iconSide
+                )
+                iconImageView.setAccessibilityLabel(renderedIcon.accessibilityLabel)
+                iconField.frame = .zero
+                textX = iconImageView.frame.maxX + iconSpacing
+            }
+        } else {
+            iconField.frame = .zero
+            iconImageView.frame = .zero
+        }
+        textLeadingInset = textX
+        let labelWidth = bounds.width - textLeadingInset - trailingInset
         let titleHeight = titleField.intrinsicContentSize.height
         if subtitleField.isHidden {
             titleField.frame = NSRect(
-                x: leadingInset,
+                x: textLeadingInset,
                 y: (bounds.height - titleHeight) / 2,
                 width: max(labelWidth, 0),
                 height: titleHeight
@@ -1939,13 +2167,13 @@ final class SidebarItemButton: NSView {
             let totalHeight = titleHeight + subtitleHeight + 2
             let startY = (bounds.height - totalHeight) / 2
             titleField.frame = NSRect(
-                x: leadingInset,
+                x: textLeadingInset,
                 y: startY + subtitleHeight + 2,
                 width: max(labelWidth, 0),
                 height: titleHeight
             )
             subtitleField.frame = NSRect(
-                x: leadingInset,
+                x: textLeadingInset,
                 y: startY,
                 width: max(labelWidth, 0),
                 height: subtitleHeight

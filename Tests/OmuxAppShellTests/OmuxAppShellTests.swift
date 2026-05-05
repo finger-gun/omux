@@ -2192,11 +2192,12 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         let workspace = try controller.openWorkspace(at: "/tmp")
+        let focusedPaneTitle = try XCTUnwrap(workspace.focusedPane?.title)
         let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let paneHeader = try XCTUnwrap(findView(ofType: PaneHeaderView.self, in: rootView))
 
-        XCTAssertEqual(countVisibleNonEmptyLabels(in: paneHeader), 1)
+        XCTAssertEqual(countVisibleLabels(withString: focusedPaneTitle, in: paneHeader), 1)
     }
 
     @MainActor
@@ -3297,6 +3298,104 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotEqual(displayTitle, title)
     }
 
+    func testWorkspaceIconResolverDetectsProjectMarkersAndAITitles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceIconResolverTests-\(UUID().uuidString)", isDirectory: true)
+        let app = root.appendingPathComponent("app", isDirectory: true)
+        let source = app.appendingPathComponent("Sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try "{}".write(to: app.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resolver = WorkspaceIconResolver()
+        let nodePane = Pane(title: "Shell", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: source.path))
+        let aiPane = Pane(title: "GitHub Copilot", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: source.path))
+
+        XCTAssertEqual(resolver.icon(for: nodePane).kind, .node)
+        XCTAssertEqual(resolver.icon(for: aiPane).kind, .ai)
+    }
+
+    func testWorkspaceIconResolverAggregatesWorkspaceIcons() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceIconResolverTests-\(UUID().uuidString)", isDirectory: true)
+        let swiftProject = root.appendingPathComponent("swift", isDirectory: true)
+        let plainProject = root.appendingPathComponent("plain", isDirectory: true)
+        try FileManager.default.createDirectory(at: swiftProject, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: plainProject, withIntermediateDirectories: true)
+        try "// swift-tools-version: 6.0\n".write(
+            to: swiftProject.appendingPathComponent("Package.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plainPane = Pane(title: "Shell", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: plainProject.path))
+        let swiftPane = Pane(title: "Shell", session: SessionDescriptor(shell: "/bin/sh", workingDirectory: swiftProject.path))
+        let tab = Tab(title: "Main", panes: [plainPane, swiftPane], focusedPaneID: plainPane.id)
+        let workspace = Workspace(generatedName: "Workspace", rootPath: root.path, tabs: [tab], focusedTabID: tab.id)
+
+        XCTAssertEqual(WorkspaceIconResolver().icon(for: workspace).kind, .swift)
+    }
+
+    @MainActor
+    func testIconRendererUsesBundledNerdFontByDefault() throws {
+        let icon = try XCTUnwrap(
+            OmuxIconRenderer(
+                configuration: OmuxConfigUI.Icons(provider: .nerdFont),
+                pointSize: 11,
+                weight: .medium
+            ).render(.node)
+        )
+
+        XCTAssertEqual(icon.text, OmuxSemanticIcon.node.nerdFontGlyph)
+        XCTAssertEqual(icon.font.familyName, "Symbols Nerd Font Mono")
+        XCTAssertFalse(icon.prefersSymbol)
+        XCTAssertEqual(icon.colorToken, .ansiGreen)
+    }
+
+    @MainActor
+    func testIconRendererPrefersSFSymbolsWhenConfigured() throws {
+        let icon = try XCTUnwrap(
+            OmuxIconRenderer(
+                configuration: OmuxConfigUI.Icons(provider: .sfSymbols),
+                pointSize: 11,
+                weight: .medium
+            ).render(.node)
+        )
+
+        XCTAssertTrue(icon.prefersSymbol)
+        XCTAssertEqual(icon.symbolName, "hexagon")
+        XCTAssertEqual(icon.text, "JS")
+        XCTAssertEqual(icon.colorToken, .ansiGreen)
+    }
+
+    @MainActor
+    func testSidebarAndPaneTabsRenderConfiguredTextIcons() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceIconUITests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "{}".write(to: root.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: root.path)
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            initialIcons: OmuxConfigUI.Icons(provider: .text)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        windowController.window?.contentView?.layoutSubtreeIfNeeded()
+        rootView.layoutSubtreeIfNeeded()
+
+        let iconLabels = findViews(ofType: NSTextField.self, in: rootView)
+            .filter { $0.stringValue == "JS" }
+        XCTAssertGreaterThanOrEqual(iconLabels.count, 2)
+    }
+
     @MainActor
     private func findHostedTerminalPaneView(in view: NSView) -> HostedTerminalPaneView? {
         if let hosted = view as? HostedTerminalPaneView {
@@ -3373,6 +3472,18 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         return ownCount + view.subviews.reduce(0) { $0 + countVisibleNonEmptyLabels(in: $1) }
+    }
+
+    @MainActor
+    private func countVisibleLabels(withString string: String, in view: NSView) -> Int {
+        let ownCount: Int
+        if let label = view as? NSTextField, !label.isHidden, label.stringValue == string {
+            ownCount = 1
+        } else {
+            ownCount = 0
+        }
+
+        return ownCount + view.subviews.reduce(0) { $0 + countVisibleLabels(withString: string, in: $1) }
     }
 
     @MainActor

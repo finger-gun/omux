@@ -139,6 +139,10 @@ struct WorkspaceShellTheme {
         return (lighter + 0.05) / (darker + 0.05)
     }
 
+    func color(for token: ThemeToken) -> NSColor {
+        NSColor(themeColor: resolvedTokens[token])
+    }
+
     private static func bestContrastingColor(against background: NSColor, candidates: [NSColor]) -> NSColor {
         candidates.max(by: {
             contrastRatio($0, background) < contrastRatio($1, background)
