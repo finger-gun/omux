@@ -13,6 +13,24 @@ struct OpenMUXPreparedConfiguration: Sendable {
     let compiledConfigURL: URL?
     let compiledHash: String?
     let diagnostics: [OmuxConfigDiagnostic]
+
+    init(
+        theme: WorkspaceShellTheme,
+        persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        defaultWorkspaceRootPath: String,
+        keyBindingRegistry: OpenMUXKeyBindingRegistry,
+        compiledConfigURL: URL?,
+        compiledHash: String?,
+        diagnostics: [OmuxConfigDiagnostic]
+    ) {
+        self.theme = theme
+        self.persistedScrollback = persistedScrollback
+        self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
+        self.keyBindingRegistry = keyBindingRegistry
+        self.compiledConfigURL = compiledConfigURL
+        self.compiledHash = compiledHash
+        self.diagnostics = diagnostics
+    }
 }
 
 struct OpenMUXConfigurationReloadResult: Sendable {
