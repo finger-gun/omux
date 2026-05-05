@@ -17,6 +17,7 @@ enum CGhosttyRuntimeError: Error {
 private final class GhosttyHostedSurfaceView: RuntimeTerminalHostView {
     private weak var runtime: CGhosttyRuntime?
     private let runtimeSurfaceID: String
+    private weak var observedWindow: NSWindow?
 
     fileprivate var clipboardCallbackContext: (runtime: CGhosttyRuntime, runtimeSurfaceID: String)? {
         guard let runtime else {
@@ -128,14 +129,81 @@ private final class GhosttyHostedSurfaceView: RuntimeTerminalHostView {
     required init?(coder: NSCoder) {
         nil
     }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateWindowObservers()
+        syncHostedSurfaceMetrics()
+    }
+
     override func layout() {
         super.layout()
-        runtime?.syncHostedSurfaceMetrics(runtimeSurfaceID: runtimeSurfaceID, view: self)
+        syncHostedSurfaceMetrics()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
+        syncHostedSurfaceMetrics()
+    }
+
+    @objc private func windowScreenOrBackingDidChange(_ notification: Notification) {
+        guard let window,
+              let changedWindow = notification.object as? NSWindow,
+              changedWindow == window
+        else {
+            return
+        }
+        syncHostedSurfaceMetrics()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.syncHostedSurfaceMetrics()
+        }
+    }
+
+    private func syncHostedSurfaceMetrics() {
         runtime?.syncHostedSurfaceMetrics(runtimeSurfaceID: runtimeSurfaceID, view: self)
+    }
+
+    private func updateWindowObservers() {
+        guard observedWindow !== window else {
+            return
+        }
+
+        removeWindowObservers()
+        observedWindow = window
+
+        guard let window else {
+            return
+        }
+
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(windowScreenOrBackingDidChange(_:)),
+            name: NSWindow.didChangeScreenNotification,
+            object: window
+        )
+        center.addObserver(
+            self,
+            selector: #selector(windowScreenOrBackingDidChange(_:)),
+            name: NSWindow.didChangeBackingPropertiesNotification,
+            object: window
+        )
+    }
+
+    private func removeWindowObservers() {
+        guard let observedWindow else {
+            return
+        }
+
+        let center = NotificationCenter.default
+        center.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: observedWindow)
+        center.removeObserver(self, name: NSWindow.didChangeBackingPropertiesNotification, object: observedWindow)
+        self.observedWindow = nil
     }
 }
 
@@ -318,13 +386,14 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         }
         state.resetRetainedLaunchStorage()
 
-        let (width, height, scale, isWindowFocused) = mainActorValue {
+        let (width, height, scale, displayID, isWindowFocused) = mainActorValue {
             let backingBounds = state.hostView.convertToBacking(state.hostView.bounds)
             let window = state.hostView.window
             return (
                 UInt32(max(backingBounds.width, 640)),
                 UInt32(max(backingBounds.height, 360)),
                 window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1,
+                window?.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
                 window?.isKeyWindow ?? false
             )
         }
@@ -356,6 +425,9 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         runOnMain {
             ghostty_surface_set_content_scale(surface, scale, scale)
             ghostty_surface_set_size(surface, width, height)
+            if let displayID {
+                ghostty_surface_set_display_id(surface, displayID.uint32Value)
+            }
             ghostty_app_set_focus(app, isWindowFocused)
         }
         scheduleTick()
@@ -1095,6 +1167,12 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         let backingBounds = view.convertToBacking(view.bounds)
         let xScale = max(backingBounds.width / max(view.bounds.width, 1), 1)
         let yScale = max(backingBounds.height / max(view.bounds.height, 1), 1)
+        let layerScale = view.window?.backingScaleFactor ?? max(xScale, yScale)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.layer?.contentsScale = layerScale
+        CATransaction.commit()
 
         ghostty_surface_set_content_scale(surface, xScale, yScale)
         ghostty_surface_set_size(
