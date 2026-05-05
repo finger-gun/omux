@@ -202,6 +202,43 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
     }
 
+    func testCLIInstallStatusResolverDetectsMissingInstalledAndRepairStates() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundledCLIURL = root.appendingPathComponent("OpenMUX.app/Contents/MacOS/omux", isDirectory: false)
+        let installedCLIURL = root.appendingPathComponent(".local/bin/omux", isDirectory: false)
+        let staleCLIURL = root.appendingPathComponent(".build/debug/omux", isDirectory: false)
+
+        try FileManager.default.createDirectory(at: bundledCLIURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installedCLIURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: staleCLIURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: bundledCLIURL, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\n".write(to: staleCLIURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bundledCLIURL.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staleCLIURL.path)
+
+        let resolver = OmuxCLIInstallStatusResolver()
+
+        XCTAssertEqual(
+            resolver.status(bundledCLIPath: bundledCLIURL.path, defaultInstallPath: installedCLIURL.path),
+            .missing
+        )
+
+        try FileManager.default.createSymbolicLink(at: installedCLIURL, withDestinationURL: bundledCLIURL)
+        XCTAssertEqual(
+            resolver.status(bundledCLIPath: bundledCLIURL.path, defaultInstallPath: installedCLIURL.path),
+            .installed
+        )
+
+        try FileManager.default.removeItem(at: installedCLIURL)
+        try FileManager.default.createSymbolicLink(at: installedCLIURL, withDestinationURL: staleCLIURL)
+        XCTAssertEqual(
+            resolver.status(bundledCLIPath: bundledCLIURL.path, defaultInstallPath: installedCLIURL.path),
+            .repairNeeded
+        )
+        XCTAssertEqual(OmuxCLIInstallStatus.repairNeeded.menuTitle, "Repair omux CLI")
+    }
+
     func testWorkspaceControllerCreatesTabsAndSplits() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),

@@ -976,7 +976,8 @@ final class OmuxCLITests: XCTestCase {
             installer: OmuxCLIInstaller(
                 environment: ["PATH": "/usr/bin:/bin"],
                 executablePath: executableURL.path,
-                homeDirectoryURL: tempHome
+                homeDirectoryURL: tempHome,
+                appBundleSearchURLs: []
             )
         )
 
@@ -1009,13 +1010,54 @@ final class OmuxCLITests: XCTestCase {
             installer: OmuxCLIInstaller(
                 environment: ["PATH": "\(installDirectory.path):/usr/bin:/bin"],
                 executablePath: executableURL.path,
-                homeDirectoryURL: tempRoot
+                homeDirectoryURL: tempRoot,
+                appBundleSearchURLs: []
             )
         )
 
         XCTAssertEqual(command.run(arguments: ["omux", "install-cli", destinationURL.path]), 0)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: destinationURL.path), executableURL.path)
         XCTAssertEqual(output, ["Installed omux at \(destinationURL.path) -> \(executableURL.path)"])
+    }
+
+    func testCLIInstallCommandPrefersInstalledAppCLIWhenLaunchedFromDevBuild() throws {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let tempHome = tempRoot.appendingPathComponent("home", isDirectory: true)
+        let binDirectory = tempHome
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let devExecutableURL = tempRoot.appendingPathComponent(".build/debug/omux", isDirectory: false)
+        let appURL = tempRoot.appendingPathComponent("Applications/OpenMUX.app", isDirectory: true)
+        let appExecutableURL = appURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false)
+
+        try FileManager.default.createDirectory(at: devExecutableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: appExecutableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: devExecutableURL, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\n".write(to: appExecutableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: devExecutableURL.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appExecutableURL.path)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(
+                environment: ["PATH": "/usr/bin:/bin"],
+                executablePath: devExecutableURL.path,
+                homeDirectoryURL: tempHome,
+                appBundleSearchURLs: [appURL]
+            )
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "install-cli"]), 0)
+
+        let installedURL = binDirectory.appendingPathComponent("omux", isDirectory: false)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: installedURL.path), appExecutableURL.path)
+        XCTAssertEqual(output[0], "Installed omux at \(installedURL.path) -> \(appExecutableURL.path)")
     }
 }
 
