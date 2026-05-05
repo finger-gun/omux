@@ -8,6 +8,7 @@ import OmuxTheme
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
     let persistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    let autoCheckUpdate: Bool
     let defaultWorkspaceRootPath: String
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
     let compiledConfigURL: URL?
@@ -17,6 +18,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     init(
         theme: WorkspaceShellTheme,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        autoCheckUpdate: Bool = true,
         defaultWorkspaceRootPath: String,
         keyBindingRegistry: OpenMUXKeyBindingRegistry,
         compiledConfigURL: URL?,
@@ -25,6 +27,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     ) {
         self.theme = theme
         self.persistedScrollback = persistedScrollback
+        self.autoCheckUpdate = autoCheckUpdate
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.keyBindingRegistry = keyBindingRegistry
         self.compiledConfigURL = compiledConfigURL
@@ -85,6 +88,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
@@ -99,6 +103,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: fileURL,
@@ -109,6 +114,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,

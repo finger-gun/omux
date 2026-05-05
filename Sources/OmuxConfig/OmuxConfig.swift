@@ -233,6 +233,7 @@ public struct OmuxGhosttyConfigEntry: Equatable, Sendable {
 
 public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
+    public let autoCheckUpdate: Bool
     public let theme: OmuxConfigTheme
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
@@ -242,6 +243,7 @@ public struct OmuxConfig: Equatable, Sendable {
 
     public init(
         schema: Int,
+        autoCheckUpdate: Bool = true,
         theme: OmuxConfigTheme,
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
@@ -250,6 +252,7 @@ public struct OmuxConfig: Equatable, Sendable {
         sourceURL: URL? = nil
     ) {
         self.schema = schema
+        self.autoCheckUpdate = autoCheckUpdate
         self.theme = theme
         self.terminal = terminal
         self.workspace = workspace
@@ -260,6 +263,7 @@ public struct OmuxConfig: Equatable, Sendable {
 
     public static let defaults = OmuxConfig(
         schema: OmuxConfigSchemaVersion,
+        autoCheckUpdate: true,
         theme: OmuxConfigTheme(name: "monokai-soda"),
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
@@ -349,6 +353,7 @@ public enum OmuxConfigTemplate {
     public static func starter(themeName: String = OmuxConfig.defaults.theme.name) -> String {
         """
         schema = \(OmuxConfigSchemaVersion)
+        # auto_check_update = true
 
         [theme]
         name = "\(themeName)"
@@ -710,7 +715,7 @@ public struct OmuxConfigLoader {
     private func decode(document: OmuxTOMLDocument, sourceURL: URL) -> OmuxConfigLoadResult {
         var diagnostics: [OmuxConfigDiagnostic] = []
 
-        let allowedRootKeys: Set<String> = ["schema"]
+        let allowedRootKeys: Set<String> = ["schema", "auto_check_update"]
         for entry in document.entries() where allowedRootKeys.contains(entry.key) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -769,6 +774,22 @@ public struct OmuxConfigLoader {
         }
 
         var config = OmuxConfig.defaults
+        var autoCheckUpdate = config.autoCheckUpdate
+
+        if let autoCheckUpdateValue = document.value(for: "auto_check_update") {
+            if let value = autoCheckUpdateValue.boolValue {
+                autoCheckUpdate = value
+            } else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "auto_check_update must be a boolean.",
+                        filePath: sourceURL.path,
+                        line: document.line(for: "auto_check_update")
+                    )
+                )
+            }
+        }
 
         if let themeNameValue = document.value(in: "theme", for: "name") {
             guard let themeName = themeNameValue.stringValue else {
@@ -784,6 +805,7 @@ public struct OmuxConfigLoader {
             }
             config = OmuxConfig(
                 schema: config.schema,
+                autoCheckUpdate: autoCheckUpdate,
                 theme: OmuxConfigTheme(name: themeName),
                 terminal: config.terminal,
                 workspace: config.workspace,
@@ -794,6 +816,7 @@ public struct OmuxConfigLoader {
         } else {
             config = OmuxConfig(
                 schema: config.schema,
+                autoCheckUpdate: autoCheckUpdate,
                 theme: config.theme,
                 terminal: config.terminal,
                 workspace: config.workspace,
@@ -1103,6 +1126,7 @@ public struct OmuxConfigLoader {
 
         config = OmuxConfig(
             schema: schema,
+            autoCheckUpdate: autoCheckUpdate,
             theme: config.theme,
             terminal: OmuxConfigTerminal(
                 fontFamily: fontFamily,

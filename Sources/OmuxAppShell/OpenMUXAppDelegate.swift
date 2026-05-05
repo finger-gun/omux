@@ -34,6 +34,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var workspaceJumpMenuItems: [NSMenuItem] = []
     private var keyBindingRegistry: OpenMUXKeyBindingRegistry
     private var scrollbackAutosaveTask: Task<Void, Never>?
+    private let autoCheckUpdate: Bool
+    private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
 
     public override init() {
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
@@ -66,6 +68,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
+        self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
         self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
         OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
@@ -126,9 +129,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 object: nil
             )
             try controlPlaneService.start()
-            let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
-            Task { @MainActor in
-                await updateChecker.checkIfDue()
+            if autoCheckUpdate {
+                let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
+                Task { @MainActor in
+                    await updateChecker.checkIfDue()
+                }
             }
         } catch {
             assertionFailure("Failed to launch OpenMUX foundation: \(error)")
@@ -299,6 +304,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let installer = OmuxCLIInstaller(executablePath: bundledCLIExecutablePath())
         do {
             let result = try installer.install(destinationPath: installer.defaultUserInstallPath())
+            refreshMenuValidation()
             let informativeText: String
             if let pathHintDirectory = result.pathHintDirectory {
                 informativeText = """
@@ -546,7 +552,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         newWorkspaceMenuItem?.isEnabled = workspaceController.activeWorkspace() != nil
         renameWorkspaceMenuItem?.isEnabled = workspaceController.canRenameActiveWorkspace()
         deleteWorkspaceMenuItem?.isEnabled = workspaceController.canDeleteActiveWorkspace()
-        installCLIMenuItem?.isEnabled = bundledCLIExecutablePath().flatMap(FileManager.default.isExecutableFile(atPath:)) ?? false
+        let cliInstaller = OmuxCLIInstaller(executablePath: bundledCLIExecutablePath())
+        let cliInstallStatus = cliInstallStatusResolver.status(
+            bundledCLIPath: bundledCLIExecutablePath(),
+            defaultInstallPath: cliInstaller.defaultUserInstallPath()
+        )
+        installCLIMenuItem?.title = cliInstallStatus.menuTitle
+        installCLIMenuItem?.isEnabled = cliInstallStatus.isActionable
         let hasWorkspace = workspaceController.activeWorkspace() != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
         previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
@@ -683,6 +695,67 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
+}
+
+enum OmuxCLIInstallStatus: Equatable {
+    case unavailable
+    case missing
+    case installed
+    case repairNeeded
+
+    var menuTitle: String {
+        switch self {
+        case .unavailable, .missing:
+            return "Install omux CLI"
+        case .installed:
+            return "omux CLI Installed"
+        case .repairNeeded:
+            return "Repair omux CLI"
+        }
+    }
+
+    var isActionable: Bool {
+        switch self {
+        case .missing, .repairNeeded:
+            return true
+        case .unavailable, .installed:
+            return false
+        }
+    }
+}
+
+struct OmuxCLIInstallStatusResolver {
+    private let fileManager: FileManager
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    func status(bundledCLIPath: String?, defaultInstallPath: String) -> OmuxCLIInstallStatus {
+        guard let bundledCLIPath,
+              fileManager.isExecutableFile(atPath: bundledCLIPath)
+        else {
+            return .unavailable
+        }
+
+        let bundledCLIURL = URL(fileURLWithPath: bundledCLIPath, isDirectory: false).standardizedFileURL
+        let installURL = URL(fileURLWithPath: defaultInstallPath, isDirectory: false).standardizedFileURL
+        if let destination = try? fileManager.destinationOfSymbolicLink(atPath: installURL.path) {
+            let destinationURL: URL
+            if destination.hasPrefix("/") {
+                destinationURL = URL(fileURLWithPath: destination, isDirectory: false)
+            } else {
+                destinationURL = installURL.deletingLastPathComponent().appendingPathComponent(destination, isDirectory: false)
+            }
+            return destinationURL.standardizedFileURL.path == bundledCLIURL.path ? .installed : .repairNeeded
+        }
+
+        if fileManager.fileExists(atPath: installURL.path) {
+            return .repairNeeded
+        }
+
+        return .missing
+    }
 }
 
 private struct AppKitMenuShortcut {
