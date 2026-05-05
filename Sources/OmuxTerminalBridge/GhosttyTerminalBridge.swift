@@ -508,7 +508,17 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         maxBytes: Int = PaneScrollbackSnapshot.defaultMaxBytes,
         maxLines: Int = PaneScrollbackSnapshot.defaultMaxLines
     ) -> PaneScrollbackSnapshot? {
-        terminalTextSnapshot(for: paneID, maxBytes: maxBytes, maxLines: maxLines).scrollbackSnapshot
+        lock.lock()
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let runtimeSurfaceID else {
+            return nil
+        }
+        return runtime.scrollbackSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        )
     }
 
     @discardableResult

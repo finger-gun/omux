@@ -1050,7 +1050,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         terminalTextSnapshot(
             runtimeSurfaceID: runtimeSurfaceID,
             maxBytes: maxBytes,
-            maxLines: maxLines
+            maxLines: maxLines,
+            styledForReplay: true
         ).scrollbackSnapshot
     }
 
@@ -1058,6 +1059,20 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         runtimeSurfaceID: String,
         maxBytes: Int,
         maxLines: Int
+    ) -> TerminalTextSnapshot {
+        terminalTextSnapshot(
+            runtimeSurfaceID: runtimeSurfaceID,
+            maxBytes: maxBytes,
+            maxLines: maxLines,
+            styledForReplay: false
+        )
+    }
+
+    private func terminalTextSnapshot(
+        runtimeSurfaceID: String,
+        maxBytes: Int,
+        maxLines: Int,
+        styledForReplay: Bool
     ) -> TerminalTextSnapshot {
         guard let state = try? surfaceState(for: runtimeSurfaceID),
               let surface = state.surface
@@ -1074,13 +1089,15 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 surface,
                 tag: GHOSTTY_POINT_SURFACE,
                 maxBytes: maxBytes,
-                maxLines: maxLines
+                maxLines: maxLines,
+                styledForReplay: styledForReplay
             )
             let active = self.readSurfaceText(
                 surface,
                 tag: GHOSTTY_POINT_ACTIVE,
                 maxBytes: maxBytes,
-                maxLines: maxLines
+                maxLines: maxLines,
+                styledForReplay: styledForReplay
             )
             if let combined = TerminalTextSnapshot.combined(
                 history,
@@ -1095,7 +1112,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 surface,
                 tag: GHOSTTY_POINT_SCREEN,
                 maxBytes: maxBytes,
-                maxLines: maxLines
+                maxLines: maxLines,
+                styledForReplay: styledForReplay
             ) {
                 return screen
             }
@@ -1104,7 +1122,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 surface,
                 tag: GHOSTTY_POINT_VIEWPORT,
                 maxBytes: maxBytes,
-                maxLines: maxLines
+                maxLines: maxLines,
+                styledForReplay: styledForReplay
             ) {
                 return viewport
             }
@@ -1118,7 +1137,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         _ surface: ghostty_surface_t,
         tag: ghostty_point_tag_e,
         maxBytes: Int,
-        maxLines: Int
+        maxLines: Int,
+        styledForReplay: Bool
     ) -> TerminalTextSnapshot? {
         var text = ghostty_text_s()
         let selection = ghostty_selection_s(
@@ -1136,7 +1156,10 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             ),
             rectangle: false
         )
-        guard ghostty_surface_read_text(surface, selection, &text) else {
+        let didRead = styledForReplay
+            ? ghostty_surface_read_text_vt(surface, selection, &text)
+            : ghostty_surface_read_text(surface, selection, &text)
+        guard didRead else {
             return nil
         }
         defer {

@@ -199,11 +199,11 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         let fingerprints = Dictionary(uniqueKeysWithValues: paneIDs.map { paneID in
-            let text = bridge.terminalTextSnapshot(
+            let text = bridge.scrollbackSnapshot(
                 for: paneID,
                 maxBytes: PaneScrollbackSnapshot.defaultMaxBytes,
                 maxLines: PaneScrollbackSnapshot.defaultMaxLines
-            ).scrollbackSnapshot?.text ?? ""
+            )?.text ?? ""
             return (paneID, text)
         })
         for paneID in paneIDs {
@@ -1808,31 +1808,38 @@ public final class WorkspaceController: @unchecked Sendable {
         case .layoutOnly:
             restoredScrollback = pane.terminalState.restoredScrollback
         case .includeScrollback(let maxBytes, let maxLines):
-            let liveText = bridge.terminalTextSnapshot(
+            let liveSnapshot = bridge.scrollbackSnapshot(
                 for: pane.id,
                 maxBytes: maxBytes,
                 maxLines: maxLines
             )
-            if liveText.isAvailable {
-                if liveText.scrollbackSnapshot?.text == historyClearSuppression[pane.id] {
+            if let liveSnapshot {
+                if liveSnapshot.text == historyClearSuppression[pane.id] {
                     restoredScrollback = nil
                 } else {
-                    restoredScrollback = liveText.scrollbackSnapshot.flatMap { snapshot in
-                        PaneScrollbackSnapshot.bounded(
-                            text: TerminalScrollbackTextSanitizer.sanitizedForReplayOrPersistence(snapshot.text),
-                            maxBytes: maxBytes,
-                            maxLines: maxLines
-                        ).map { sanitized in
-                            PaneScrollbackSnapshot(
-                                text: sanitized.text,
-                                truncated: sanitized.truncated || snapshot.truncated,
-                                storageIdentifier: snapshot.storageIdentifier
-                            )
-                        }
-                    }
+                    restoredScrollback = sanitizedRestoredScrollback(
+                        liveSnapshot,
+                        maxBytes: maxBytes,
+                        maxLines: maxLines
+                    )
                 }
             } else {
-                restoredScrollback = historyClearSuppression[pane.id] == nil ? pane.terminalState.restoredScrollback : nil
+                let plainSnapshot = bridge.terminalTextSnapshot(
+                    for: pane.id,
+                    maxBytes: maxBytes,
+                    maxLines: maxLines
+                )
+                if plainSnapshot.isAvailable {
+                    if plainSnapshot.scrollbackSnapshot?.text == historyClearSuppression[pane.id] {
+                        restoredScrollback = nil
+                    } else {
+                        restoredScrollback = plainSnapshot.scrollbackSnapshot.flatMap {
+                            sanitizedRestoredScrollback($0, maxBytes: maxBytes, maxLines: maxLines)
+                        }
+                    }
+                } else {
+                    restoredScrollback = historyClearSuppression[pane.id] == nil ? pane.terminalState.restoredScrollback : nil
+                }
             }
         }
         return Pane(
@@ -1841,6 +1848,24 @@ public final class WorkspaceController: @unchecked Sendable {
             session: session,
             terminalState: PaneTerminalState(restoredScrollback: restoredScrollback)
         )
+    }
+
+    private func sanitizedRestoredScrollback(
+        _ snapshot: PaneScrollbackSnapshot,
+        maxBytes: Int,
+        maxLines: Int
+    ) -> PaneScrollbackSnapshot? {
+        PaneScrollbackSnapshot.bounded(
+            text: TerminalScrollbackTextSanitizer.sanitizedForReplayOrPersistence(snapshot.text),
+            maxBytes: maxBytes,
+            maxLines: maxLines
+        ).map { sanitized in
+            PaneScrollbackSnapshot(
+                text: sanitized.text,
+                truncated: sanitized.truncated || snapshot.truncated,
+                storageIdentifier: snapshot.storageIdentifier
+            )
+        }
     }
 
     private static func sanitizedPaneForRestore(_ pane: Pane) -> Pane {

@@ -14,7 +14,8 @@ const unicode = @import("../unicode/main.zig");
 const Selection = @import("Selection.zig");
 const PageList = @import("PageList.zig");
 const StringMap = @import("StringMap.zig");
-const ScreenFormatter = @import("formatter.zig").ScreenFormatter;
+const formatterpkg = @import("formatter.zig");
+const ScreenFormatter = formatterpkg.ScreenFormatter;
 const osc = @import("osc.zig");
 const pagepkg = @import("page.zig");
 const point = @import("point.zig");
@@ -2439,6 +2440,9 @@ pub const SelectionString = struct {
     /// The selection to convert to a string.
     sel: Selection,
 
+    /// The formatter output to emit.
+    emit: formatterpkg.Format = .plain,
+
     /// If true, trim whitespace around the selection.
     trim: bool = true,
 
@@ -2470,7 +2474,7 @@ pub fn selectionString(
     var formatter: ScreenFormatter = .init(
         self,
         .{
-            .emit = .plain,
+            .emit = opts.emit,
             .unwrap = true,
             .trim = opts.trim,
         },

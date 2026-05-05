@@ -1920,9 +1920,28 @@ pub fn dumpTextLocked(
     alloc: Allocator,
     sel: terminal.Selection,
 ) !Text {
+    return try self.dumpTextFormattedLocked(alloc, sel, .plain);
+}
+
+/// Same as `dumpTextLocked` but emits VT sequences that preserve styled cells.
+pub fn dumpTextVTLocked(
+    self: *Surface,
+    alloc: Allocator,
+    sel: terminal.Selection,
+) !Text {
+    return try self.dumpTextFormattedLocked(alloc, sel, .vt);
+}
+
+fn dumpTextFormattedLocked(
+    self: *Surface,
+    alloc: Allocator,
+    sel: terminal.Selection,
+    emit: terminal.formatter.Format,
+) !Text {
     // Read out the text
     const text = try self.io.terminal.screens.active.selectionString(alloc, .{
         .sel = sel,
+        .emit = emit,
         .trim = false,
     });
     errdefer alloc.free(text);

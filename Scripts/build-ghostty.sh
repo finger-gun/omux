@@ -94,7 +94,8 @@ ensure_zig() {
 
 PINNED_REF="$(cat "$PINNED_REF_FILE")"
 SCRIPT_HASH="$(shasum -a 256 "$0" | awk '{print $1}')"
-BUILD_STAMP="pinned_ref=$PINNED_REF;zig=$ZIG_VERSION;script=$SCRIPT_HASH"
+OMUX_GHOSTTY_API_REVISION="2"
+BUILD_STAMP="pinned_ref=$PINNED_REF;zig=$ZIG_VERSION;script=$SCRIPT_HASH;omux_api=$OMUX_GHOSTTY_API_REVISION"
 
 if [ -d "$OUTPUT_DIR" ] && [ -f "$BUILD_STAMP_FILE" ] && [ "$(cat "$BUILD_STAMP_FILE")" = "$BUILD_STAMP" ]; then
   echo "Using cached GhosttyKit xcframework for pinned snapshot: $PINNED_REF"

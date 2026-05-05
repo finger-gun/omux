@@ -1641,6 +1641,23 @@ pub const CAPI = struct {
         return readTextLocked(surface, core_sel, result);
     }
 
+    /// Read arbitrary text from the surface, including VT/SGR sequences for
+    /// styled cells. Intended for replayable scrollback snapshots.
+    export fn ghostty_surface_read_text_vt(
+        surface: *Surface,
+        sel: Selection,
+        result: *Text,
+    ) bool {
+        surface.core_surface.renderer_state.mutex.lock();
+        defer surface.core_surface.renderer_state.mutex.unlock();
+
+        const core_sel = sel.core(
+            surface.core_surface.renderer_state.terminal.screens.active,
+        ) orelse return false;
+
+        return readTextVTLocked(surface, core_sel, result);
+    }
+
     fn readTextLocked(
         surface: *Surface,
         core_sel: terminal.Selection,
@@ -1657,6 +1674,32 @@ pub const CAPI = struct {
             return false;
         };
 
+        return finishReadText(text, result);
+    }
+
+    fn readTextVTLocked(
+        surface: *Surface,
+        core_sel: terminal.Selection,
+        result: *Text,
+    ) bool {
+        const core_surface = &surface.core_surface;
+
+        // Get our text directly from the core surface.
+        const text = core_surface.dumpTextVTLocked(
+            global.alloc,
+            core_sel,
+        ) catch |err| {
+            log.warn("error reading vt text err={}", .{err});
+            return false;
+        };
+
+        return finishReadText(text, result);
+    }
+
+    fn finishReadText(
+        text: CoreSurface.Text,
+        result: *Text,
+    ) bool {
         const vp: CoreSurface.Text.Viewport = text.viewport orelse .{
             .tl_px_x = -1,
             .tl_px_y = -1,

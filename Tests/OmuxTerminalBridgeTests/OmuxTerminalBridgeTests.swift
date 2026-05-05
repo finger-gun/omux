@@ -1258,6 +1258,20 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated)
     }
 
+    func testBridgeUsesStyledScrollbackSnapshotForReplayOnly() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        let attachment = try bridge.attach(session: session, to: pane)
+        runtime.scrollbackBySurface[attachment.runtimeSurfaceID] = "red"
+        runtime.styledScrollbackBySurface[attachment.runtimeSurfaceID] = "\u{001B}[31mred\u{001B}[0m"
+
+        XCTAssertEqual(bridge.terminalTextSnapshot(for: pane.id).text, "red")
+        XCTAssertEqual(bridge.scrollbackSnapshot(for: pane.id)?.text, "\u{001B}[31mred\u{001B}[0m")
+    }
+
     func testBridgeReturnsByteBoundedScrollbackSnapshot() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1417,6 +1431,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var mousePressures: [(stage: Int, pressure: Double)] = []
     var selectionsBySurface: [String: RuntimeTerminalSelection] = [:]
     var scrollbackBySurface: [String: String] = [:]
+    var styledScrollbackBySurface: [String: String] = [:]
 
     func applyCompiledConfig(path: URL) throws -> [OmuxConfigDiagnostic] {
         try loadVisibleState(from: path)
@@ -1524,7 +1539,14 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     }
 
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot? {
-        terminalTextSnapshot(
+        if let text = styledScrollbackBySurface[runtimeSurfaceID] {
+            return PaneScrollbackSnapshot.bounded(
+                text: text,
+                maxBytes: maxBytes,
+                maxLines: maxLines
+            )
+        }
+        return terminalTextSnapshot(
             runtimeSurfaceID: runtimeSurfaceID,
             maxBytes: maxBytes,
             maxLines: maxLines
