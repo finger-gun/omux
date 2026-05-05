@@ -2388,6 +2388,12 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceSidebarDragRegionsDoNotMoveWindow() {
+        XCTAssertFalse(WorkspaceSidebarView().mouseDownCanMoveWindow)
+        XCTAssertFalse(SidebarItemButton().mouseDownCanMoveWindow)
+    }
+
+    @MainActor
     func testPaneTabAddButtonCreatesTabInClickedPaneStack() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
