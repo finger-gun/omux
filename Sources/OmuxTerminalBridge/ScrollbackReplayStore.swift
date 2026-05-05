@@ -36,11 +36,11 @@ public enum TerminalScrollbackTextSanitizer {
         let withoutUnsafeSequences = unsafeSequences.reduce(text) { result, sequence in
             result.replacingOccurrences(of: sequence, with: "")
         }
-        return droppingTrailingPromptLine(deduplicatedTailPromptLines(withoutUnsafeSequences))
+        return droppingTrailingPromptLines(deduplicatedTailPromptLines(withoutUnsafeSequences))
     }
 
     private static func deduplicatedTailPromptLines(_ text: String, tailLineLimit: Int = 80) -> String {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = replayLines(from: text)
         guard lines.count > 1 else {
             return text
         }
@@ -87,7 +87,7 @@ public enum TerminalScrollbackTextSanitizer {
         if line.hasPrefix("Last login:") {
             return true
         }
-        if line.contains("][$!?]") || line.contains("[\u{e0a0} ") {
+        if containsShellStatusPromptMarker(line) {
             return true
         }
         if line.hasPrefix("("), line.hasSuffix(")]") {
@@ -99,8 +99,14 @@ public enum TerminalScrollbackTextSanitizer {
         return false
     }
 
-    private static func droppingTrailingPromptLine(_ text: String) -> String {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    private static func containsShellStatusPromptMarker(_ line: String) -> Bool {
+        ["$!", "$?", "$!?", "$", "%", "#"].contains { marker in
+            line.contains("][\(marker)]")
+        }
+    }
+
+    private static func droppingTrailingPromptLines(_ text: String) -> String {
+        var lines = replayLines(from: text)
         guard lines.isEmpty == false else {
             return text
         }
@@ -108,19 +114,25 @@ public enum TerminalScrollbackTextSanitizer {
         while lines.last == "" {
             lines.removeLast()
         }
-        guard let lastLine = lines.last else {
-            return ""
+
+        while let lastLine = lines.last {
+            let key = replayDuplicateComparisonKey(for: lastLine)
+            guard key.isEmpty == false, isShellStartupOrPromptLine(key), key.hasPrefix("Last login:") == false else {
+                break
+            }
+            lines.removeLast()
         }
-        let key = replayDuplicateComparisonKey(for: lastLine)
-        guard key.isEmpty == false, isShellStartupOrPromptLine(key), key.hasPrefix("Last login:") == false else {
-            return text
-        }
-        lines.removeLast()
         return lines.joined(separator: "\n")
     }
 
+    private static func replayLines(from text: String) -> [String] {
+        text.components(separatedBy: "\n").map { line in
+            line.hasSuffix("\r") ? String(line.dropLast()) : line
+        }
+    }
+
     private static func replayDuplicateComparisonKey(for line: String) -> String {
-        let stripped = ansiStripped(line).trimmingCharacters(in: .whitespaces)
+        let stripped = ansiStripped(line).trimmingCharacters(in: .whitespacesAndNewlines)
         guard stripped.isEmpty == false else {
             return ""
         }

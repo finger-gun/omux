@@ -101,8 +101,8 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ScrollbackReplayStore(directoryURL: root)
-        let prompt = "omux [\u{001B}[35mbug-fix-auto-updater\u{001B}[0m][$!?][v6.3][aws]"
-        let plainPrompt = "omux [bug-fix-auto-updater][$!?][v6.3][aws]"
+        let prompt = "project [\u{001B}[35mbranch-name\u{001B}[0m][$!?][tool v1]"
+        let plainPrompt = "project [branch-name][$!?][tool v1]"
         let scrollback = PaneScrollbackSnapshot(
             text: """
             real output
@@ -118,6 +118,26 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         XCTAssertEqual(replayText, "real output")
         XCTAssertFalse(replayText.contains("\u{001B}[35m"))
+    }
+
+    func testScrollbackReplayStoreDropsTrailingBracketedPromptVariants() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScrollbackReplayStore(directoryURL: root)
+        let dirtyPrompt = "project [\u{001B}[35mbranch-name\u{001B}[0m][\u{001B}[35m$!\u{001B}[0m][tool v1]"
+        let cleanPrompt = "project [\u{001B}[35mbranch-name\u{001B}[0m][\u{001B}[35m$\u{001B}[0m][tool v1]"
+        let scrollback = PaneScrollbackSnapshot(
+            text: "real output\r\n\(dirtyPrompt)\r\n\(cleanPrompt)\r\n",
+            truncated: false
+        )
+
+        XCTAssertEqual(TerminalScrollbackTextSanitizer.sanitizedForReplayOrPersistence(scrollback.text), "real output")
+        let replay = try XCTUnwrap(store.prepareReplay(for: scrollback))
+        let replayText = try String(contentsOf: replay.fileURL, encoding: .utf8)
+
+        XCTAssertEqual(replayText, "real output")
+        XCTAssertFalse(replayText.contains("branch-name"))
     }
 
     func testScrollbackReplayStoreKeepsPlainRepeatedTailOutput() throws {
@@ -138,7 +158,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
             .appendingPathComponent("ScrollbackReplayStoreTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ScrollbackReplayStore(directoryURL: root)
-        let prompt = "omux [bug-fix-auto-updater][$!?][v6.3][aws]"
+        let prompt = "project [branch-name][$!?][tool v1]"
         let scrollback = PaneScrollbackSnapshot(
             text: """
             useful output
@@ -168,7 +188,7 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ScrollbackReplayStore(directoryURL: root)
         let scrollback = PaneScrollbackSnapshot(
-            text: "omux [bug-fix-auto-updater][$!?][v6.3][aws]",
+            text: "project [branch-name][$!?][tool v1]",
             truncated: false
         )
 
