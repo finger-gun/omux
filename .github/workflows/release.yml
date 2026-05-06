@@ -61,6 +61,9 @@ jobs:
       - name: Package release assets
         run: make package-release RELEASE_VERSION="${{ steps.release.outputs.version }}" BUNDLE_VERSION="${{ github.run_number }}"
 
+      - name: Launch packaged app smoke test
+        run: make smoke-packaged-release APP_ARCHIVE="dist/release/OpenMUX-${{ steps.release.outputs.version }}-macos-unsigned.zip"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:

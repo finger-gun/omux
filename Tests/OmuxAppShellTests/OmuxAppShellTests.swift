@@ -3668,6 +3668,56 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testBundledIconFontLoadsFromPackagedAppContentsResources() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BundledIconFontTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let appURL = root.appendingPathComponent("OpenMUX.app", isDirectory: true)
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
+        let executableURL = contentsURL.appendingPathComponent("MacOS/OpenMUXApp", isDirectory: false)
+        let fontURL = resourcesURL
+            .appendingPathComponent("OpenMUX_OmuxAppShell.bundle", isDirectory: true)
+            .appendingPathComponent("SymbolsNerdFontMono-Regular.ttf", isDirectory: false)
+
+        try FileManager.default.createDirectory(at: fontURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0]).write(to: fontURL)
+        try Data().write(to: executableURL)
+
+        XCTAssertEqual(
+            BundledIconFont.fontURL(
+                mainBundleURL: appURL,
+                mainResourceURL: resourcesURL,
+                mainExecutableURL: executableURL
+            )?.standardizedFileURL,
+            fontURL.standardizedFileURL
+        )
+    }
+
+    @MainActor
+    func testBundledIconFontDoesNotUseSwiftPMFallbackForPackagedApp() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BundledIconFontTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let appURL = root.appendingPathComponent("OpenMUX.app", isDirectory: true)
+        let executableURL = appURL
+            .appendingPathComponent("Contents/MacOS/OpenMUXApp", isDirectory: false)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: executableURL)
+
+        XCTAssertNil(
+            BundledIconFont.fontURL(
+                mainBundleURL: appURL,
+                mainResourceURL: nil,
+                mainExecutableURL: executableURL
+            )
+        )
+    }
+
+    @MainActor
     func testIconRendererPrefersSFSymbolsWhenConfigured() throws {
         let icon = try XCTUnwrap(
             OmuxIconRenderer(

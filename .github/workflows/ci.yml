@@ -53,3 +53,9 @@ jobs:
 
       - name: Launch app smoke test
         run: make smoke
+
+      - name: Package release assets
+        run: make package-release BUNDLE_VERSION="${{ github.run_number }}"
+
+      - name: Launch packaged app smoke test
+        run: make smoke-packaged-release

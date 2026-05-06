@@ -56,7 +56,10 @@ chmod +x "$MACOS_DIR/OpenMUXApp"
 cp "$CLI_BIN" "$MACOS_DIR/omux"
 chmod +x "$MACOS_DIR/omux"
 
-find "$BIN_DIR" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$RESOURCES_DIR"/ \;
+for RESOURCE_BUNDLE in "$BIN_DIR"/*.bundle; do
+  [ -e "$RESOURCE_BUNDLE" ] || continue
+  cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR"/
+done
 if [ -d "$GHOSTTY_SHARE_DIR/ghostty" ]; then
   cp -R "$GHOSTTY_SHARE_DIR/ghostty" "$RESOURCES_DIR/"
 fi
