@@ -8,6 +8,7 @@ import OmuxTheme
 struct OpenMUXPreparedConfiguration: Sendable {
     let theme: WorkspaceShellTheme
     let persistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    let panes: OmuxConfigUI.Panes
     let icons: OmuxConfigUI.Icons
     let markdownPreview: OmuxConfigPlugins.MarkdownPreview
     let autoCheckUpdate: Bool
@@ -20,6 +21,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     init(
         theme: WorkspaceShellTheme,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        panes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         icons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         markdownPreview: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         autoCheckUpdate: Bool = true,
@@ -31,6 +33,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     ) {
         self.theme = theme
         self.persistedScrollback = persistedScrollback
+        self.panes = panes
         self.icons = icons
         self.markdownPreview = markdownPreview
         self.autoCheckUpdate = autoCheckUpdate
@@ -52,6 +55,7 @@ final class OpenMUXConfigurationCoordinator {
     var onThemeChange: ((WorkspaceShellTheme) -> Void)?
     var onWorkspaceDefaultRootChange: ((String) -> Void)?
     var onPersistedScrollbackChange: ((OmuxConfigTerminal.PersistedScrollback) -> Void)?
+    var onPaneConfigurationChange: ((OmuxConfigUI.Panes) -> Void)?
     var onIconConfigurationChange: ((OmuxConfigUI.Icons) -> Void)?
     var onMarkdownPreviewConfigurationChange: ((OmuxConfigPlugins.MarkdownPreview) -> Void)?
     var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
@@ -64,6 +68,7 @@ final class OpenMUXConfigurationCoordinator {
     private var currentTheme: WorkspaceShellTheme
     private var currentDefaultWorkspaceRootPath: String
     private var currentPersistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
     private var currentMarkdownPreview: OmuxConfigPlugins.MarkdownPreview
     private var currentKeyBindingRegistry: OpenMUXKeyBindingRegistry
@@ -81,6 +86,7 @@ final class OpenMUXConfigurationCoordinator {
         self.currentTheme = initialState.theme
         self.currentDefaultWorkspaceRootPath = initialState.defaultWorkspaceRootPath
         self.currentPersistedScrollback = initialState.persistedScrollback
+        self.currentPanes = initialState.panes
         self.currentIcons = initialState.icons
         self.currentMarkdownPreview = initialState.markdownPreview
         self.currentKeyBindingRegistry = initialState.keyBindingRegistry
@@ -100,6 +106,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
@@ -117,6 +124,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
@@ -130,6 +138,7 @@ final class OpenMUXConfigurationCoordinator {
             return OpenMUXPreparedConfiguration(
                 theme: shellTheme,
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
+                panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
@@ -171,6 +180,12 @@ final class OpenMUXConfigurationCoordinator {
         return currentIcons
     }
 
+    func paneConfiguration() -> OmuxConfigUI.Panes {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentPanes
+    }
+
     @discardableResult
     func reload() -> OpenMUXConfigurationReloadResult {
         reloadLock.lock()
@@ -193,6 +208,7 @@ final class OpenMUXConfigurationCoordinator {
                     hash: currentCompiledHash,
                     defaultWorkspaceRootPath: currentDefaultWorkspaceRootPath,
                     persistedScrollback: currentPersistedScrollback,
+                    panes: currentPanes,
                     icons: currentIcons,
                     markdownPreview: currentMarkdownPreview,
                     keyBindingRegistry: currentKeyBindingRegistry
@@ -201,12 +217,14 @@ final class OpenMUXConfigurationCoordinator {
             let keyBindingRegistry = OpenMUXKeyBindingRegistry.effective(overrides: evaluation.config.keyBindings)
             let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
             let persistedScrollback = evaluation.config.terminal.persistedScrollback
+            let panes = evaluation.config.ui.panes
             let icons = evaluation.config.ui.icons
             let markdownPreview = evaluation.config.plugins.markdownPreview
             let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
             let shouldApply = shouldRefresh
                 || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
                 || previousState.persistedScrollback != persistedScrollback
+                || previousState.panes != panes
                 || previousState.icons != icons
                 || previousState.markdownPreview != markdownPreview
                 || previousState.keyBindingRegistry != keyBindingRegistry
@@ -226,6 +244,7 @@ final class OpenMUXConfigurationCoordinator {
                 currentTheme = shellTheme
                 currentDefaultWorkspaceRootPath = defaultWorkspaceRootPath
                 currentPersistedScrollback = persistedScrollback
+                currentPanes = panes
                 currentIcons = icons
                 currentMarkdownPreview = markdownPreview
                 currentKeyBindingRegistry = keyBindingRegistry
@@ -237,6 +256,7 @@ final class OpenMUXConfigurationCoordinator {
                 theme: shellTheme,
                 defaultWorkspaceRootPath: defaultWorkspaceRootPath,
                 persistedScrollback: persistedScrollback,
+                panes: panes,
                 icons: icons,
                 markdownPreview: markdownPreview,
                 keyBindingRegistry: keyBindingRegistry,
@@ -263,6 +283,7 @@ final class OpenMUXConfigurationCoordinator {
             theme: nil,
             defaultWorkspaceRootPath: nil,
             persistedScrollback: nil,
+            panes: nil,
             icons: nil,
             markdownPreview: nil,
             keyBindingRegistry: nil,
@@ -274,6 +295,7 @@ final class OpenMUXConfigurationCoordinator {
         theme: WorkspaceShellTheme?,
         defaultWorkspaceRootPath: String?,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback?,
+        panes: OmuxConfigUI.Panes?,
         icons: OmuxConfigUI.Icons?,
         markdownPreview: OmuxConfigPlugins.MarkdownPreview?,
         keyBindingRegistry: OpenMUXKeyBindingRegistry?,
@@ -287,6 +309,9 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let persistedScrollback {
             onPersistedScrollbackChange?(persistedScrollback)
+        }
+        if let panes {
+            onPaneConfigurationChange?(panes)
         }
         if let icons {
             onIconConfigurationChange?(icons)

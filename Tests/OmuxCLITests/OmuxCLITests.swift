@@ -1480,6 +1480,51 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["omux error: \(configURL.path) already exists"])
     }
 
+    func testCLIConfigInactiveOpacityWritesConfigAndReloads() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try OmuxConfigTemplate.starter(themeName: "nord").write(to: configURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-opacity-\(UUID().uuidString).sock"
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            if request.method == ControlMethod.configReload.rawValue {
+                return JSONRPCResponse(id: request.id, result: .object([
+                    "applied": .bool(true),
+                    "diagnostics": .array([]),
+                ]))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "inactive-opacity", "0.72"]), 0)
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("[ui.panes]"))
+        XCTAssertTrue(contents.contains("inactive_opacity = 0.72"))
+        XCTAssertEqual(output, ["Inactive pane opacity set to 0.72.", "No diagnostics.", "OpenMUX config reloaded."])
+    }
+
+    func testCLIConfigInactiveOpacityRejectsInvalidValues() throws {
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "inactive-opacity", "1.1"]), 1)
+        XCTAssertEqual(output, ["usage: omux config inactive-opacity <0.0-1.0>"])
+    }
+
     func testCLIThemeListPrintsAvailableThemesAndCurrentTheme() throws {
         let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)

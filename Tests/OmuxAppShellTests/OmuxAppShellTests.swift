@@ -2380,6 +2380,33 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowUsesConfiguredInactivePaneOpacity() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            initialPanes: OmuxConfigUI.Panes(inactiveOpacity: 0.72)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        var paneCard = try XCTUnwrap(findView(ofType: PaneCardView.self, in: rootView))
+
+        XCTAssertEqual(paneCard.alphaValue, 0.72, accuracy: 0.001)
+
+        windowController.updatePanes(OmuxConfigUI.Panes(inactiveOpacity: 0.9))
+        rootView.layoutSubtreeIfNeeded()
+        paneCard = try XCTUnwrap(findView(ofType: PaneCardView.self, in: rootView))
+
+        XCTAssertEqual(paneCard.alphaValue, 0.9, accuracy: 0.001)
+    }
+
+    @MainActor
     func testWorkspaceWindowShowsTerminalMetadataRowsAndNavigatesViaSidebar() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)

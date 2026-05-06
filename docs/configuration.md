@@ -27,6 +27,9 @@ name = "monokai-soda"
 [workspace]
 default_root_path = "~"
 
+[ui.panes]
+# inactive_opacity = 0.5
+
 [ui.icons]
 # enabled = true
 # provider = "nerd-font"
@@ -290,6 +293,18 @@ default_root_path = "~/projects"
 ```
 
 The path must resolve to an existing directory. `~` and `~/...` expand to the current user's home directory. If unset, OpenMUX uses the current user's home directory.
+
+## `[ui.panes]` settings
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `inactive_opacity` | number from `0.0` to `1.0` | Opacity for inactive pane cards. Defaults to `0.5`; set to `1.0` to disable dimming. |
+
+Set it from the CLI with:
+
+```bash
+omux config inactive-opacity 0.7
+```
 
 ## `[ui.icons]` settings
 

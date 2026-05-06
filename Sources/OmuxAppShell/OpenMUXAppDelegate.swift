@@ -99,6 +99,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 workspace: workspace,
                 controller: workspaceController,
                 initialTheme: initialTheme,
+                initialPanes: configurationCoordinator.paneConfiguration(),
                 initialIcons: configurationCoordinator.iconConfiguration()
             )
             self.windowController = windowController
@@ -117,6 +118,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onPersistedScrollbackChange = { [weak self] persistedScrollback in
                 self?.workspaceController.updatePersistedScrollback(persistedScrollback)
+            }
+            configurationCoordinator.onPaneConfigurationChange = { [weak self] panes in
+                self?.windowController?.updatePanes(panes)
             }
             configurationCoordinator.onIconConfigurationChange = { [weak self] icons in
                 self?.windowController?.updateIcons(icons)

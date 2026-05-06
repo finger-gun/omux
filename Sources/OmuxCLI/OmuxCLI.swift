@@ -323,6 +323,7 @@ public struct OmuxCLICommand {
       omux config doctor
       omux config reload
       omux config init
+      omux config inactive-opacity <0.0-1.0>
       omux version
       omux update
       omux theme
@@ -1114,7 +1115,7 @@ public struct OmuxCLICommand {
 
     private func runConfigCommand(arguments: [String]) -> Int32 {
         guard let subcommand = arguments.first else {
-            writeLine("usage: omux config <doctor|reload|init>")
+            writeLine("usage: omux config <doctor|reload|init|inactive-opacity>")
             return 1
         }
 
@@ -1138,14 +1139,58 @@ public struct OmuxCLICommand {
                 try OmuxConfigTemplate.starter().write(to: configURL, atomically: true, encoding: .utf8)
                 writeLine("Wrote \(configURL.path)")
                 return 0
+            case "inactive-opacity":
+                return try runConfigInactiveOpacity(arguments: Array(arguments.dropFirst()))
             default:
-                writeLine("usage: omux config <doctor|reload|init>")
+                writeLine("usage: omux config <doctor|reload|init|inactive-opacity>")
                 return 1
             }
         } catch {
             writeLine("omux error: \(error)")
             return 1
         }
+    }
+
+    private func runConfigInactiveOpacity(arguments: [String]) throws -> Int32 {
+        guard arguments.count == 1,
+              let opacity = Double(arguments[0]),
+              (0.0...1.0).contains(opacity)
+        else {
+            writeLine("usage: omux config inactive-opacity <0.0-1.0>")
+            return 1
+        }
+
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        let current = configResult.config
+        let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
+        let updated = OmuxConfig(
+            schema: current.schema,
+            autoCheckUpdate: current.autoCheckUpdate,
+            theme: current.theme,
+            terminal: current.terminal,
+            workspace: current.workspace,
+            ui: OmuxConfigUI(
+                panes: OmuxConfigUI.Panes(inactiveOpacity: opacity),
+                icons: current.ui.icons
+            ),
+            plugins: current.plugins,
+            keyBindings: current.keyBindings,
+            ghostty: current.ghostty,
+            sourceURL: configURL
+        )
+
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
+
+        writeLine("Inactive pane opacity set to \(renderOpacity(opacity)).")
+        return try runConfigReload()
     }
 
     private func runThemeCommand(arguments: [String]) -> Int32 {
@@ -1384,6 +1429,10 @@ public struct OmuxCLICommand {
         lines.append("colors_enabled = \(config.ui.icons.colorsEnabled ? "true" : "false")")
 
         lines.append("")
+        lines.append("[ui.panes]")
+        lines.append("inactive_opacity = \(renderOpacity(config.ui.panes.inactiveOpacity))")
+
+        lines.append("")
         lines.append("[plugins.markdown-preview]")
         let markdownPreview = config.plugins.markdownPreview
         lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
@@ -1428,6 +1477,16 @@ public struct OmuxCLICommand {
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\t", with: "\\t")
             .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
+    private func renderOpacity(_ value: Double) -> String {
+        let rounded = (value * 1_000).rounded() / 1_000
+        if rounded.rounded() == rounded {
+            return String(format: "%.1f", rounded)
+        }
+        return String(format: "%.3f", rounded)
+            .replacingOccurrences(of: "0+$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\.$", with: "", options: .regularExpression)
     }
 
     private func printDiagnosticsAndReturnCode(
