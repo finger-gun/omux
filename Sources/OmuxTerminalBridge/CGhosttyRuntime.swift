@@ -1068,6 +1068,22 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         )
     }
 
+    public func surfaceSize(runtimeSurfaceID: String) -> TerminalSize? {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return nil
+        }
+
+        return mainActorValue {
+            let size = ghostty_surface_size(surface)
+            guard size.columns > 0, size.rows > 0 else {
+                return nil
+            }
+            return TerminalSize(columns: Int(size.columns), rows: Int(size.rows))
+        }
+    }
+
     private func terminalTextSnapshot(
         runtimeSurfaceID: String,
         maxBytes: Int,

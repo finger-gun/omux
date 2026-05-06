@@ -429,8 +429,8 @@ final class WorkspaceIconResolver {
             return icon
         }
 
-        let workingDirectory = pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
-        if let icon = projectIcon(forPath: workingDirectory) {
+        if let workingDirectory = pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory,
+           let icon = projectIcon(forPath: workingDirectory) {
             return icon
         }
 

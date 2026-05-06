@@ -2,9 +2,30 @@
 
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
+## 0.10.0
 
+### Added
 
+- Added a plugin ecosystem for registering external `omux` commands from `~/.omux/plugins/`, inspecting them with `omux plugin list` and `omux plugin path`, and managing configurable bundled plugins with the interactive `omux plugins` picker.
+- Added extension panes and the `omux extension-pane` control-plane CLI so plugins can create, update, and close shell-owned HTML or placeholder panes without allocating terminal sessions.
+- Added the bundled Markdown Preview plugin, enabled by default, with `omux markdown-preview <file>`, watch mode, pane reuse, split-axis selection, GitHub Flavored Markdown rendering, local image resolution, and JavaScript-disabled preview hosting.
+- Added Command-click terminal text activation for readable local Markdown paths, plus the `terminal.textActivated` event and `input:terminal-text-activated` hook payload for plugin workflows.
+- Added configurable semantic UI icons for workspace rows, terminal rows, and pane tabs through `[ui.icons]`, with a bundled Symbols Nerd Font fallback and theme-aware icon colors.
+- Added `[plugins.markdown-preview]` configuration for enabling the bundled preview plugin and choosing preview renderer/theme behavior.
 
+### Changed
+
+- Improved workspace sidebar reordering with drag groups, animated insertion previews, and clearer drag feedback.
+- Improved pane tab readability by truncating long titles in the middle and refining tab sizing behavior.
+- Updated project documentation around getting started, configuration, plugin development, Markdown Preview, contributor workflows, and the roadmap.
+- Updated the Ghostty build stamp to account for OpenMUX Ghostty API revision changes.
+
+### Fixed
+
+- Fixed persisted scrollback capture and restore to use more accurate scrollback snapshots, preserve styled terminal output where safe, and avoid replaying duplicate prompt/startup noise.
+- Fixed terminal host synchronization around window/surface lifecycle so hosted Ghostty views track shell state more reliably.
+- Fixed self-update downloads with progress reporting and clearer download failure errors.
+- Fixed sidebar and tab controls so clicks on those controls do not accidentally drag the window.
 
 ## 0.9.0
 

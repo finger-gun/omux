@@ -15,9 +15,17 @@ final class TerminalSidebarMetadataResolver {
     private var gitInfoByPath: [String: GitInfo?] = [:]
 
     func metadata(for pane: Pane, icon: OmuxSemanticIcon) -> TerminalSidebarMetadata {
-        let path = pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+        guard let session = pane.terminalSession else {
+            return TerminalSidebarMetadata(
+                icon: icon,
+                title: pane.title,
+                subtitle: pane.extensionPane?.pluginID
+            )
+        }
+
+        let path = pane.terminalState.reportedWorkingDirectory ?? session.workingDirectory
         let abbreviatedPath = abbreviate(path: path)
-        let preferredPaneTitle = preferredPaneTitle(for: pane, abbreviatedPath: abbreviatedPath)
+        let preferredPaneTitle = preferredPaneTitle(for: pane, session: session, abbreviatedPath: abbreviatedPath)
 
         guard let gitInfo = resolveGitInfo(for: path) else {
             return TerminalSidebarMetadata(
@@ -107,13 +115,13 @@ final class TerminalSidebarMetadataResolver {
         return suffix.isEmpty ? "~" : "~\(suffix)"
     }
 
-    private func preferredPaneTitle(for pane: Pane, abbreviatedPath: String) -> String? {
+    private func preferredPaneTitle(for pane: Pane, session: SessionDescriptor, abbreviatedPath: String) -> String? {
         let title = pane.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty == false else {
             return nil
         }
 
-        let normalizedPath = pane.session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPath = session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultPathTitle = URL(fileURLWithPath: normalizedPath).lastPathComponent
         let fallbackTitles = Set(["OpenMUX", "Shell"])
 

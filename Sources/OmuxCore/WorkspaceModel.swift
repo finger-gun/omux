@@ -19,10 +19,94 @@ public struct SessionDescriptor: Equatable, Codable, Sendable {
     }
 }
 
+public enum ExtensionPaneContentKind: String, Codable, Sendable {
+    case html
+    case placeholder
+}
+
+public enum ExtensionPaneStatus: String, Codable, Sendable {
+    case ready
+    case disabled
+    case error
+}
+
+public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
+    public var pluginID: String
+    public var contentKind: ExtensionPaneContentKind
+    public var source: String?
+    public var html: String?
+    public var status: ExtensionPaneStatus
+    public var message: String?
+
+    public init(
+        pluginID: String,
+        contentKind: ExtensionPaneContentKind = .placeholder,
+        source: String? = nil,
+        html: String? = nil,
+        status: ExtensionPaneStatus = .ready,
+        message: String? = nil
+    ) {
+        self.pluginID = pluginID
+        self.contentKind = contentKind
+        self.source = source
+        self.html = html
+        self.status = status
+        self.message = message
+    }
+}
+
+public enum PaneContent: Equatable, Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case session
+        case extensionPane
+    }
+
+    case terminal(SessionDescriptor)
+    case extensionPane(ExtensionPaneDescriptor)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "terminal":
+            self = .terminal(try container.decode(SessionDescriptor.self, forKey: .session))
+        case "extension":
+            self = .extensionPane(try container.decode(ExtensionPaneDescriptor.self, forKey: .extensionPane))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unsupported pane content type '\(type)'"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .terminal(let session):
+            try container.encode("terminal", forKey: .type)
+            try container.encode(session, forKey: .session)
+        case .extensionPane(let descriptor):
+            try container.encode("extension", forKey: .type)
+            try container.encode(descriptor, forKey: .extensionPane)
+        }
+    }
+}
+
 public struct Pane: Equatable, Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case content
+        case session
+        case terminalState
+    }
+
     public let id: PaneID
     public var title: String
-    public var session: SessionDescriptor
+    public var content: PaneContent
     public var terminalState: PaneTerminalState
 
     public init(
@@ -33,8 +117,86 @@ public struct Pane: Equatable, Codable, Sendable {
     ) {
         self.id = id
         self.title = title
-        self.session = session
+        self.content = .terminal(session)
         self.terminalState = terminalState
+    }
+
+    public init(
+        id: PaneID = PaneID(),
+        title: String,
+        extensionPane: ExtensionPaneDescriptor,
+        terminalState: PaneTerminalState = PaneTerminalState()
+    ) {
+        self.id = id
+        self.title = title
+        self.content = .extensionPane(extensionPane)
+        self.terminalState = terminalState
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(PaneID.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.terminalState = try container.decodeIfPresent(PaneTerminalState.self, forKey: .terminalState) ?? PaneTerminalState()
+
+        if let content = try container.decodeIfPresent(PaneContent.self, forKey: .content) {
+            self.content = content
+        } else {
+            self.content = .terminal(try container.decode(SessionDescriptor.self, forKey: .session))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(terminalSession, forKey: .session)
+        try container.encode(terminalState, forKey: .terminalState)
+    }
+
+    public var isTerminal: Bool {
+        terminalSession != nil
+    }
+
+    public var terminalSession: SessionDescriptor? {
+        get {
+            guard case .terminal(let session) = content else {
+                return nil
+            }
+            return session
+        }
+        set {
+            if let newValue {
+                content = .terminal(newValue)
+            }
+        }
+    }
+
+    public var extensionPane: ExtensionPaneDescriptor? {
+        get {
+            guard case .extensionPane(let descriptor) = content else {
+                return nil
+            }
+            return descriptor
+        }
+        set {
+            if let newValue {
+                content = .extensionPane(newValue)
+            }
+        }
+    }
+
+    public var session: SessionDescriptor {
+        get {
+            guard let terminalSession else {
+                preconditionFailure("Extension pane \(id.rawValue) does not have a terminal session")
+            }
+            return terminalSession
+        }
+        set {
+            content = .terminal(newValue)
+        }
     }
 }
 
@@ -588,7 +750,7 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
     }
 
     public func containsSession(id: SessionID) -> Bool {
-        panes.contains(where: { $0.session.id == id })
+        panes.contains(where: { $0.terminalSession?.id == id })
     }
 
     @discardableResult
@@ -1173,7 +1335,7 @@ public struct Workspace: Equatable, Codable, Sendable {
     @discardableResult
     public mutating func focus(sessionID: SessionID) -> Bool {
         for tabIndex in tabs.indices {
-            if let pane = tabs[tabIndex].panes.first(where: { $0.session.id == sessionID }) {
+            if let pane = tabs[tabIndex].panes.first(where: { $0.terminalSession?.id == sessionID }) {
                 focusedTabID = tabs[tabIndex].id
                 return tabs[tabIndex].focusPane(pane.id)
             }

@@ -264,6 +264,30 @@ public struct OmuxGhosttyConfigEntry: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigPlugins: Equatable, Sendable {
+    public struct MarkdownPreview: Equatable, Sendable {
+        public let enabled: Bool
+        public let renderer: String
+        public let theme: String
+
+        public init(
+            enabled: Bool = true,
+            renderer: String = "builtin",
+            theme: String = "auto"
+        ) {
+            self.enabled = enabled
+            self.renderer = renderer
+            self.theme = theme
+        }
+    }
+
+    public let markdownPreview: MarkdownPreview
+
+    public init(markdownPreview: MarkdownPreview = MarkdownPreview()) {
+        self.markdownPreview = markdownPreview
+    }
+}
+
 public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
     public let autoCheckUpdate: Bool
@@ -271,6 +295,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
+    public let plugins: OmuxConfigPlugins
     public let keyBindings: [OpenMUXKeyBindingOverride]
     public let ghostty: [OmuxGhosttyConfigEntry]
     public let sourceURL: URL?
@@ -282,6 +307,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
+        plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
         ghostty: [OmuxGhosttyConfigEntry],
         sourceURL: URL? = nil
@@ -292,6 +318,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
+        self.plugins = plugins
         self.keyBindings = keyBindings
         self.ghostty = ghostty
         self.sourceURL = sourceURL
@@ -304,6 +331,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
+        plugins: OmuxConfigPlugins(),
         keyBindings: [],
         ghostty: []
     )
@@ -377,6 +405,10 @@ public enum OmuxConfigPaths {
         baseDirectoryURL.appendingPathComponent("hooks", isDirectory: true)
     }
 
+    public static var pluginsDirectoryURL: URL {
+        baseDirectoryURL.appendingPathComponent("plugins", isDirectory: true)
+    }
+
     public static var generatedDirectoryURL: URL {
         baseDirectoryURL.appendingPathComponent("generated", isDirectory: true)
     }
@@ -412,6 +444,11 @@ public enum OmuxConfigTemplate {
         # provider = "nerd-font"
         # colors_enabled = true
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
+
+        [plugins.markdown-preview]
+        enabled = true
+        renderer = "builtin"
+        theme = "auto"
 
         [keys]
         \(OpenMUXKeyBindingRegistry.defaultBindingPairs.map { "\"\($0.0.description)\" = \"\($0.1.rawValue)\"" }.joined(separator: "\n"))
@@ -770,7 +807,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.icons", "keys", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.icons", "plugins.markdown-preview", "keys", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -853,6 +890,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                plugins: config.plugins,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -865,6 +903,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                plugins: config.plugins,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -1185,6 +1224,68 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme"]
+        var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
+        var markdownPreviewRenderer = config.plugins.markdownPreview.renderer
+        var markdownPreviewTheme = config.plugins.markdownPreview.theme
+        for entry in document.entries(in: "plugins.markdown-preview") {
+            guard markdownPreviewAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [plugins.markdown-preview] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.markdown-preview.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                markdownPreviewEnabled = value
+            case "renderer":
+                guard let value = entry.value.stringValue, value == "builtin" else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.markdown-preview.renderer must be \"builtin\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                markdownPreviewRenderer = value
+            case "theme":
+                guard let value = entry.value.stringValue, ["auto", "light", "dark"].contains(value) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.markdown-preview.theme must be \"auto\", \"light\", or \"dark\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                markdownPreviewTheme = value
+            default:
+                break
+            }
+        }
+
         var keyBindings: [OpenMUXKeyBindingOverride] = []
         var seenKeyChords = Set<OpenMUXKeyChord>()
         for entry in document.entries(in: "keys") {
@@ -1269,6 +1370,13 @@ public struct OmuxConfigLoader {
                     provider: iconsProvider,
                     fontFamily: iconsFontFamily,
                     colorsEnabled: iconsColorsEnabled
+                )
+            ),
+            plugins: OmuxConfigPlugins(
+                markdownPreview: OmuxConfigPlugins.MarkdownPreview(
+                    enabled: markdownPreviewEnabled,
+                    renderer: markdownPreviewRenderer,
+                    theme: markdownPreviewTheme
                 )
             ),
             keyBindings: keyBindings,

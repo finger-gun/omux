@@ -11,16 +11,20 @@ If you are new to OpenMUX, start with [Getting started](./getting-started.md). I
 | Use OpenMUX as your daily terminal workspace | [Getting started](./getting-started.md) | [Configuration and themes](./configuration.md) |
 | Customize themes, fonts, scrollback, or Option-key behavior | [Configuration and themes](./configuration.md) | [Getting started](./getting-started.md#customize-the-terminal) |
 | Automate your workspace with scripts | [Hooks](./hooks.md) | [Configuration and themes](./configuration.md#cli) |
+| Use bundled plugins | [Plugin index](./plugins/index.md) | [Configuration and themes](./configuration.md#plugins-settings) |
+| Create a plugin or extension pane | [Plugin ecosystem](./plugins.md) | [Hooks](./hooks.md) |
 | Understand where the product is headed | [Roadmap](./roadmap.md) | [Manifesto](./manifest.md) |
-| Contribute to OpenMUX itself | [Development notes](./development.md) | [Releasing](./releasing.md), [CONTRIBUTING](../CONTRIBUTING.md) |
+| Contribute to OpenMUX itself | [Developer quick start](./developer.md) | [Development notes](./development.md), [Releasing](./releasing.md), [CONTRIBUTING](../CONTRIBUTING.md) |
 | Research architecture and terminal-engine boundaries | [Research notes](./research/) | [Manifesto](./manifest.md), [Development notes](./development.md) |
 
 ## For users
 
 These docs describe OpenMUX from the outside: what you can run, configure, and automate.
 
-- [Getting started](./getting-started.md) - first launch, CLI setup, workspaces, panes, themes, and simple automation.
+- [Getting started](./getting-started.md) - first launch, CLI setup, workspaces, panes, themes, plugins, and simple automation.
 - [Configuration and themes](./configuration.md) - `~/.omux/config.toml`, built-in themes, custom theme tokens, and config commands.
+- [Plugin index](./plugins/index.md) - bundled plugins and plugin management.
+- [Plugin ecosystem](./plugins.md) - external plugin commands, extension-pane CLI contracts, and plugin events.
 - [Hooks](./hooks.md) - executable user hooks in `~/.omux/hooks/`, invocation JSON, current hook names, and examples.
 - [Roadmap](./roadmap.md) - what works today and what is next.
 
@@ -28,6 +32,7 @@ These docs describe OpenMUX from the outside: what you can run, configure, and a
 
 These docs are for changing OpenMUX itself.
 
+- [Developer quick start](./developer.md) - first-time setup, daily commands, validation, and links for contributors.
 - [Development notes](./development.md) - module boundaries, build commands, runtime bridge notes, and current limitations.
 - [Releasing](./releasing.md) - local packaging, GitHub Release flow, and current distribution status.
 - [Manifesto](./manifest.md) - product principles and architectural guardrails.
@@ -39,9 +44,10 @@ OpenMUX keeps user-owned files under `~/.omux/`:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.omux/config.toml` | User configuration for theme and terminal settings. |
+| `~/.omux/config.toml` | User configuration for themes, terminal settings, keybindings, and bundled plugins. |
 | `~/.omux/themes/` | User theme overrides and custom themes. |
 | `~/.omux/hooks/` | Executable hook handlers grouped by hook name. |
+| `~/.omux/plugins/` | Executable plugin commands discoverable as `omux <plugin-command>`. |
 | `~/.omux/generated/ghostty/` | Generated terminal-engine artifacts managed by OpenMUX. |
 
-The generated directory is not the primary user API. Prefer editing `config.toml`, theme files, and hook files.
+The generated directory is not the primary user API. Prefer editing `config.toml`, theme files, hook files, and plugin executables.

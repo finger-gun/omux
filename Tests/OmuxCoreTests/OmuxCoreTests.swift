@@ -438,6 +438,104 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(tab.focusedPaneStack?.focusedPaneID, firstPane.id)
     }
 
+    func testPaneContentDistinguishesTerminalAndExtensionPanes() throws {
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        let terminalPane = Pane(title: "terminal", session: session)
+        let extensionDescriptor = ExtensionPaneDescriptor(
+            pluginID: "dev.fingergun.markdown-preview",
+            contentKind: .html,
+            source: "/tmp/README.md",
+            html: "<h1>README</h1>"
+        )
+        let extensionPane = Pane(title: "README Preview", extensionPane: extensionDescriptor)
+
+        XCTAssertTrue(terminalPane.isTerminal)
+        XCTAssertEqual(terminalPane.terminalSession?.id, session.id)
+        XCTAssertNil(terminalPane.extensionPane)
+        XCTAssertFalse(extensionPane.isTerminal)
+        XCTAssertNil(extensionPane.terminalSession)
+        XCTAssertEqual(extensionPane.extensionPane, extensionDescriptor)
+    }
+
+    func testExtensionPaneCanFocusAndSplitWithoutTerminalSession() {
+        let terminalPane = Pane(
+            title: "terminal",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let extensionPane = Pane(
+            title: "README Preview",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "dev.fingergun.markdown-preview", source: "/tmp/README.md")
+        )
+        var tab = Tab(title: "Main", panes: [terminalPane], focusedPaneID: terminalPane.id)
+
+        XCTAssertTrue(tab.splitFocusedPane(extensionPane, axis: .columns))
+        XCTAssertEqual(tab.focusedPane?.id, extensionPane.id)
+        XCTAssertNil(tab.focusedPane?.terminalSession)
+        XCTAssertTrue(tab.focusPane(terminalPane.id))
+        XCTAssertTrue(tab.focusPane(extensionPane.id))
+        XCTAssertTrue(tab.rootLayout.containsSession(id: terminalPane.session.id))
+        XCTAssertFalse(tab.rootLayout.containsSession(id: SessionID()))
+    }
+
+    func testWorkspaceFocusBySessionIgnoresExtensionPanes() {
+        let terminalPane = Pane(
+            title: "terminal",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let extensionPane = Pane(
+            title: "README Preview",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "dev.fingergun.markdown-preview", source: "/tmp/README.md")
+        )
+        let tab = Tab(title: "Main", panes: [terminalPane, extensionPane], focusedPaneID: extensionPane.id)
+        var workspace = Workspace(
+            generatedName: "workspace",
+            rootPath: "/tmp",
+            tabs: [tab],
+            focusedTabID: tab.id
+        )
+
+        XCTAssertTrue(workspace.focus(sessionID: terminalPane.session.id))
+        XCTAssertEqual(workspace.focusedPane?.id, terminalPane.id)
+        XCTAssertFalse(workspace.focus(sessionID: SessionID()))
+        XCTAssertEqual(workspace.focusedPane?.id, terminalPane.id)
+    }
+
+    func testPaneCodableDecodesLegacyTerminalShapeAndPreservesExtensionContent() throws {
+        let legacyData = Data("""
+        {
+          "id": "pane-legacy",
+          "title": "legacy",
+          "session": {
+            "id": "session-legacy",
+            "shell": "/bin/zsh",
+            "workingDirectory": "/tmp",
+            "environment": {}
+          },
+          "terminalState": {}
+        }
+        """.utf8)
+
+        let decodedLegacy = try JSONDecoder().decode(Pane.self, from: legacyData)
+        XCTAssertEqual(decodedLegacy.terminalSession?.id.rawValue, "session-legacy")
+
+        let extensionPane = Pane(
+            id: PaneID(rawValue: "pane-preview"),
+            title: "README Preview",
+            extensionPane: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>"
+            )
+        )
+        let encoded = try JSONEncoder().encode(extensionPane)
+        let decodedExtension = try JSONDecoder().decode(Pane.self, from: encoded)
+
+        XCTAssertEqual(decodedExtension.extensionPane?.pluginID, "dev.fingergun.markdown-preview")
+        XCTAssertEqual(decodedExtension.extensionPane?.contentKind, .html)
+        XCTAssertNil(decodedExtension.terminalSession)
+    }
+
     func testSplittingFocusedLocalTabCreatesSiblingPaneStack() {
         let firstPane = Pane(
             title: "one",

@@ -209,8 +209,9 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | Hook | Emitted when | Context | Payload |
 | --- | --- | --- | --- |
 | `terminal-input-sent` | OpenMUX successfully delivers an explicit input action such as `omux run` or `send-text`. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "text": string \| null, "key": string \| null, "keyCode": integer \| null, "modifiers": integer, "route": string \| null, "source": string }` |
+| `terminal-text-activated` | A user intentionally activates terminal text, currently with Command-click. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "token": string, "row": integer, "column": integer, "cwd": string \| null, "resolvedPath": string \| null, "modifiers": integer }` |
 
-`terminal-input-sent` reports action-scoped input OpenMUX deliberately sent, not native per-keystroke typing and not parsed shell commands. Hooks should treat payloads as local-sensitive data and must not infer authoritative command text from `terminal-title-changed`; title changes remain presentation metadata.
+`terminal-input-sent` reports action-scoped input OpenMUX deliberately sent, not native per-keystroke typing and not parsed shell commands. `terminal-text-activated` is an explicit user gesture and plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting. The same activation also appears on `omux events` as `terminal.textActivated`. Hooks should treat payloads as local-sensitive data and must not infer authoritative command text from `terminal-title-changed`; title changes remain presentation metadata.
 
 ### UI hooks
 

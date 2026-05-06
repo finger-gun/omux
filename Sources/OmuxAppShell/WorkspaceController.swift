@@ -4,6 +4,7 @@ import OmuxConfig
 import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
+import OmuxMarkdownPreviewPlugin
 import OmuxTerminalBridge
 
 private struct CommandAutomationContext: Sendable {
@@ -24,11 +25,19 @@ private struct PaneHistoryTarget: Sendable {
     let persistedHistory: PaneScrollbackSnapshot?
 }
 
+public struct ExtensionPaneActionResult: Sendable {
+    public let workspace: Workspace
+    public let tabID: TabID?
+    public let paneStackID: PaneStackID?
+    public let pane: Pane
+}
+
 public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
     private let hookRunner: ExternalHookRunner
     private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
@@ -61,12 +70,14 @@ public final class WorkspaceController: @unchecked Sendable {
         hookRunner: ExternalHookRunner,
         defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
         self.persistedScrollback = persistedScrollback
+        self.markdownPreviewConfiguration = markdownPreviewConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
@@ -288,7 +299,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         for workspace in restoredWorkspaces {
-            for pane in workspace.tabs.flatMap(\.panes) {
+            for pane in workspace.tabs.flatMap(\.panes) where pane.isTerminal {
                 _ = try bridge.createSurface(for: pane)
                 _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
             }
@@ -317,6 +328,10 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private func launchSession(forRestoredPane pane: Pane) -> SessionDescriptor {
+        guard let session = pane.terminalSession else {
+            preconditionFailure("Cannot launch a terminal session for extension pane \(pane.id.rawValue)")
+        }
+
         let persistedScrollback = currentPersistedScrollback()
         guard persistedScrollback.enabled,
               let scrollbackReplayStore,
@@ -326,9 +341,9 @@ public final class WorkspaceController: @unchecked Sendable {
                   maxBytes: persistedScrollback.maxBytes,
                   maxLines: persistedScrollback.maxLines
               ),
-              let launch = scrollbackReplayWrapperStore.prepareLaunch(baseSession: pane.session, replay: replay)
+              let launch = scrollbackReplayWrapperStore.prepareLaunch(baseSession: session, replay: replay)
         else {
-            return pane.session
+            return session
         }
 
         return launch.session
@@ -569,6 +584,53 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func updateMarkdownPreviewConfiguration(_ configuration: OmuxConfigPlugins.MarkdownPreview) {
+        lock.lock()
+        markdownPreviewConfiguration = configuration
+        lock.unlock()
+    }
+
+    @discardableResult
+    public func handleTerminalTextActivation(_ request: TerminalTextActivationRequest) -> Bool {
+        guard let context = resolvedTerminalTextActivationContext(for: request) else {
+            return false
+        }
+
+        emitTerminalTextActivationHook(context)
+        publishTerminalTextActivationEvent(context)
+
+        guard let resolvedPath = context.resolvedPath,
+              shouldOpenMarkdownPreview(for: resolvedPath)
+        else {
+            return false
+        }
+
+        openMarkdownPreview(for: resolvedPath)
+        return true
+    }
+
+    public func canHandleTerminalTextActivation(_ request: TerminalTextActivationRequest) -> Bool {
+        guard let context = resolvedTerminalTextActivationContext(for: request),
+              let resolvedPath = context.resolvedPath
+        else {
+            return false
+        }
+        return shouldOpenMarkdownPreview(for: resolvedPath)
+    }
+
+    private func resolvedTerminalTextActivationContext(
+        for request: TerminalTextActivationRequest
+    ) -> TerminalTextActivationContext? {
+        let snapshot = bridge.terminalTextSnapshot(for: request.paneID, maxBytes: 64 * 1024, maxLines: request.terminalSize.rows)
+        guard snapshot.unavailableReason == nil,
+              let hit = TerminalTextActivationResolver.hit(in: snapshot.text, request: request)
+        else {
+            return nil
+        }
+
+        return terminalTextActivationContext(for: request, hit: hit)
+    }
+
     @discardableResult
     public func createWorkspace() throws -> Workspace {
         lock.lock()
@@ -679,9 +741,12 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
+        let sourceWorkingDirectory = focusedPane.terminalState.reportedWorkingDirectory
+            ?? focusedPane.terminalSession?.workingDirectory
+            ?? workspaces[index].rootPath
         let pane = makePane(
-            title: Self.basePaneTitle(for: focusedPane.session.workingDirectory),
-            workingDirectory: focusedPane.session.workingDirectory
+            title: Self.basePaneTitle(for: sourceWorkingDirectory),
+            workingDirectory: sourceWorkingDirectory
         )
         let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
         let updatedWorkspace = success ? workspaces[index] : nil
@@ -700,7 +765,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 name: "pane-created",
                 workspaceID: updatedWorkspace.id,
                 paneID: pane.id,
-                sessionID: pane.session.id
+                sessionID: pane.terminalSession?.id
             )
         )
 
@@ -710,7 +775,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
-                sessionID: pane.session.id,
+                sessionID: pane.terminalSession?.id,
                 payload: .object(["axis": .string(axis.rawValue)])
             )
         )
@@ -730,7 +795,8 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         guard let workspace = try splitFocusedPane(axis: axis),
-              let createdPane = workspace.focusedPane
+              let createdPane = workspace.focusedPane,
+              let createdSession = createdPane.terminalSession
         else {
             return nil
         }
@@ -742,9 +808,173 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: workspace.focusedTabID,
                 paneStackID: workspace.focusedPaneStack?.id,
                 paneID: createdPane.id,
-                sessionID: createdPane.session.id
+                sessionID: createdSession.id
             )
         )
+    }
+
+    @discardableResult
+    public func createExtensionPane(
+        title: String,
+        descriptor: ExtensionPaneDescriptor,
+        axis: PaneSplitAxis = .columns
+    ) -> ExtensionPaneActionResult? {
+        let paneTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pane = Pane(
+            title: paneTitle.isEmpty ? descriptor.pluginID : paneTitle,
+            extensionPane: descriptor
+        )
+
+        lock.lock()
+        guard let index = activeWorkspaceIndex,
+              workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
+        else {
+            lock.unlock()
+            return nil
+        }
+        let updatedWorkspace = workspaces[index]
+        let result = ExtensionPaneActionResult(
+            workspace: updatedWorkspace,
+            tabID: updatedWorkspace.focusedTabID,
+            paneStackID: updatedWorkspace.focusedPaneStack?.id,
+            pane: pane
+        )
+        lock.unlock()
+
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .extensionPaneCreated,
+                workspaceID: updatedWorkspace.id,
+                tabID: result.tabID,
+                paneID: pane.id,
+                payload: .object([
+                    "pluginID": .string(descriptor.pluginID),
+                    "contentKind": .string(descriptor.contentKind.rawValue),
+                    "source": descriptor.source.map(OmuxValue.string) ?? .null,
+                ])
+            )
+        )
+        onChange?(updatedWorkspace)
+        return result
+    }
+
+    @discardableResult
+    public func updateExtensionPane(
+        paneID: PaneID,
+        descriptor: ExtensionPaneDescriptor,
+        title: String? = nil
+    ) -> ExtensionPaneActionResult? {
+        lock.lock()
+        var result: ExtensionPaneActionResult?
+        for workspaceIndex in workspaces.indices {
+            guard workspaces[workspaceIndex].updatePane(paneID, transform: { pane in
+                guard pane.extensionPane != nil else {
+                    return
+                }
+                pane.extensionPane = descriptor
+                if let title, title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    pane.title = title
+                }
+            }) else {
+                continue
+            }
+
+            guard let pane = workspaces[workspaceIndex].tabs.flatMap(\.panes).first(where: { $0.id == paneID }),
+                  pane.extensionPane != nil
+            else {
+                break
+            }
+            let workspace = workspaces[workspaceIndex]
+            result = ExtensionPaneActionResult(
+                workspace: workspace,
+                tabID: workspace.tabs.first(where: { $0.panes.contains(where: { $0.id == paneID }) })?.id,
+                paneStackID: paneStackID(for: paneID, in: workspace),
+                pane: pane
+            )
+            break
+        }
+        lock.unlock()
+
+        guard let result else {
+            return nil
+        }
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .extensionPaneUpdated,
+                workspaceID: result.workspace.id,
+                tabID: result.tabID,
+                paneID: result.pane.id,
+                payload: .object([
+                    "pluginID": .string(descriptor.pluginID),
+                    "contentKind": .string(descriptor.contentKind.rawValue),
+                    "source": descriptor.source.map(OmuxValue.string) ?? .null,
+                ])
+            )
+        )
+        onChange?(result.workspace)
+        return result
+    }
+
+    @discardableResult
+    public func closeExtensionPane(paneID: PaneID) throws -> ExtensionPaneActionResult? {
+        lock.lock()
+        var result: ExtensionPaneActionResult?
+        for workspaceIndex in workspaces.indices {
+            guard let pane = workspaces[workspaceIndex].tabs.flatMap(\.panes).first(where: { $0.id == paneID }),
+                  pane.extensionPane != nil
+            else {
+                continue
+            }
+
+            let workspaceBeforeClose = workspaces[workspaceIndex]
+            guard let tabIndex = workspaceBeforeClose.tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
+                break
+            }
+            let tabID = workspaceBeforeClose.tabs[tabIndex].id
+            let paneStackID = paneStackID(for: paneID, in: workspaceBeforeClose)
+            guard let removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID),
+                  removedPane.extensionPane != nil
+            else {
+                break
+            }
+
+            result = ExtensionPaneActionResult(
+                workspace: workspaces[workspaceIndex],
+                tabID: tabID,
+                paneStackID: paneStackID,
+                pane: removedPane
+            )
+            break
+        }
+        lock.unlock()
+
+        guard let result else {
+            return nil
+        }
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: "pane-removed",
+                workspaceID: result.workspace.id,
+                tabID: result.tabID,
+                paneID: result.pane.id
+            )
+        )
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .extensionPaneClosed,
+                workspaceID: result.workspace.id,
+                tabID: result.tabID,
+                paneID: result.pane.id,
+                payload: .object([
+                    "pluginID": .string(result.pane.extensionPane?.pluginID ?? ""),
+                    "paneStackID": result.paneStackID.map { .string($0.rawValue) } ?? .null,
+                ])
+            )
+        )
+        onChange?(result.workspace)
+        return result
     }
 
     @discardableResult
@@ -767,9 +997,12 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
+        let sourceWorkingDirectory = sourcePane.terminalState.reportedWorkingDirectory
+            ?? sourcePane.terminalSession?.workingDirectory
+            ?? workspaces[index].rootPath
         let pane = makePane(
-            title: Self.basePaneTitle(for: sourcePane.session.workingDirectory),
-            workingDirectory: sourcePane.session.workingDirectory
+            title: Self.basePaneTitle(for: sourceWorkingDirectory),
+            workingDirectory: sourceWorkingDirectory
         )
         let success: Bool
         if let paneStackID {
@@ -794,7 +1027,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
-                sessionID: pane.session.id,
+                sessionID: pane.terminalSession?.id,
                 payload: .object(["paneStackID": .string(targetStack.id.rawValue)])
             )
         )
@@ -805,7 +1038,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: pane.id,
-                sessionID: pane.session.id,
+                sessionID: pane.terminalSession?.id,
                 payload: .object(["paneStackID": .string(targetStack.id.rawValue)])
             )
         )
@@ -833,7 +1066,9 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
-        try bridge.teardown(paneID: removedPane.id)
+        if removedPane.isTerminal {
+            try bridge.teardown(paneID: removedPane.id)
+        }
         try hookRunner.emit(
             HookInvocation(
                 category: .session,
@@ -841,7 +1076,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: removedPane.id,
-                sessionID: removedPane.session.id,
+                sessionID: removedPane.terminalSession?.id,
                 payload: .object([
                     "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
                 ])
@@ -854,12 +1089,96 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: removedPane.id,
-                sessionID: removedPane.session.id,
+                sessionID: removedPane.terminalSession?.id,
                 payload: .object([
                     "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
                 ])
             )
         )
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func closePane(paneID: PaneID) throws -> Workspace? {
+        lock.lock()
+        var removedPane: Pane?
+        var updatedWorkspace: Workspace?
+        var workspaceID: WorkspaceID?
+        var tabID: TabID?
+        var paneStackID: PaneStackID?
+        var closedPaneTab = false
+
+        for workspaceIndex in workspaces.indices {
+            guard let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }),
+                  let paneStack = workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: paneID)
+            else {
+                continue
+            }
+
+            workspaceID = workspaces[workspaceIndex].id
+            tabID = workspaces[workspaceIndex].tabs[tabIndex].id
+            paneStackID = paneStack.id
+
+            if paneStack.panes.count > 1 {
+                removedPane = workspaces[workspaceIndex].tabs[tabIndex].closePane(paneID)
+                closedPaneTab = true
+            } else if workspaces[workspaceIndex].tabs[tabIndex].panes.count > 1 {
+                removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID)
+            } else if workspaces[workspaceIndex].tabs.count > 1 {
+                removedPane = workspaces[workspaceIndex].closeTab(workspaces[workspaceIndex].tabs[tabIndex].id)?.panes.first
+            }
+
+            if removedPane != nil {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
+            break
+        }
+
+        guard let removedPane,
+              let updatedWorkspace,
+              let workspaceID,
+              let tabID
+        else {
+            lock.unlock()
+            return nil
+        }
+        lock.unlock()
+
+        if removedPane.isTerminal {
+            try bridge.teardown(paneID: removedPane.id)
+        }
+
+        let hookName = closedPaneTab ? "pane-tab-closed" : "pane-removed"
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: hookName,
+                workspaceID: workspaceID,
+                tabID: tabID,
+                paneID: removedPane.id,
+                sessionID: removedPane.terminalSession?.id,
+                payload: .object([
+                    "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+                ])
+            )
+        )
+
+        if closedPaneTab {
+            publishControlPlaneEvent(
+                ControlPlaneEvent(
+                    name: .paneTabClosed,
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    paneID: removedPane.id,
+                    sessionID: removedPane.terminalSession?.id,
+                    payload: .object([
+                        "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+                    ])
+                )
+            )
+        }
+
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -936,7 +1255,9 @@ public final class WorkspaceController: @unchecked Sendable {
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
-        try bridge.teardown(paneID: removedPane.id)
+        if removedPane.isTerminal {
+            try bridge.teardown(paneID: removedPane.id)
+        }
         try hookRunner.emit(
             HookInvocation(
                 category: .session,
@@ -944,7 +1265,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: updatedWorkspace.id,
                 tabID: updatedWorkspace.focusedTabID,
                 paneID: removedPane.id,
-                sessionID: removedPane.session.id
+                sessionID: removedPane.terminalSession?.id
             )
         )
 
@@ -1342,7 +1663,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspaceID: workspace.id,
                 tabID: workspace.focusedTabID,
                 paneID: focusedPane?.id ?? fallbackPaneID,
-                sessionID: focusedPane?.session.id,
+                sessionID: focusedPane?.terminalSession?.id,
                 payload: .object([:])
             )
         )
@@ -1370,7 +1691,7 @@ public final class WorkspaceController: @unchecked Sendable {
         return workspaces
             .flatMap(\.tabs)
             .flatMap(\.panes)
-            .first(where: { $0.session.id == sessionID })
+            .first(where: { $0.terminalSession?.id == sessionID })
     }
 
     private func controlPlaneContext(
@@ -1381,7 +1702,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
         for workspace in workspaces {
             for tab in workspace.tabs {
-                if let pane = tab.panes.first(where: { $0.session.id == sessionID }) {
+                if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
                     return (workspaceID: workspace.id, tabID: tab.id, paneID: pane.id)
                 }
             }
@@ -1395,7 +1716,7 @@ public final class WorkspaceController: @unchecked Sendable {
         case .session(let sessionID):
             for workspace in workspaces {
                 for tab in workspace.tabs {
-                    if let pane = tab.panes.first(where: { $0.session.id == sessionID }) {
+                    if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
                         return terminalContext(workspace: workspace, tab: tab, pane: pane)
                     }
                 }
@@ -1439,7 +1760,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     private func historyClearPaneIDsLocked(target: ControlPlaneTerminalTarget?) -> [PaneID]? {
         guard let target else {
-            return workspaces.flatMap { $0.tabs.flatMap(\.panes).map(\.id) }
+            return workspaces.flatMap { $0.tabs.flatMap(\.panes).filter(\.isTerminal).map(\.id) }
         }
 
         switch target {
@@ -1448,7 +1769,7 @@ public final class WorkspaceController: @unchecked Sendable {
         case .tab(let tabID):
             for workspace in workspaces {
                 if let tab = workspace.tabs.first(where: { $0.id == tabID }) {
-                    return tab.panes.map(\.id)
+                    return tab.panes.filter(\.isTerminal).map(\.id)
                 }
             }
             return nil
@@ -1456,24 +1777,45 @@ public final class WorkspaceController: @unchecked Sendable {
             guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
                 return nil
             }
-            return workspace.tabs.flatMap(\.panes).map(\.id)
+            return workspace.tabs.flatMap(\.panes).filter(\.isTerminal).map(\.id)
         }
     }
 
-    private func terminalContext(workspace: Workspace, tab: Tab, pane: Pane) -> ControlPlaneTerminalContext {
-        ControlPlaneTerminalContext(
+    private func terminalContext(workspace: Workspace, tab: Tab, pane: Pane) -> ControlPlaneTerminalContext? {
+        guard let session = pane.terminalSession else {
+            return nil
+        }
+        return ControlPlaneTerminalContext(
             workspaceID: workspace.id,
             tabID: tab.id,
             paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
             paneID: pane.id,
-            sessionID: pane.session.id
+            sessionID: session.id
         )
+    }
+
+    private func terminalContext(for paneID: PaneID) -> ControlPlaneTerminalContext? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for workspace in workspaces {
+            for tab in workspace.tabs {
+                guard let pane = tab.panes.first(where: { $0.id == paneID }) else {
+                    continue
+                }
+                return terminalContext(workspace: workspace, tab: tab, pane: pane)
+            }
+        }
+        return nil
     }
 
     private static func historyTargets(in workspace: Workspace) -> [PaneHistoryTarget] {
         workspace.tabs.flatMap { tab in
-            tab.panes.map { pane in
-                PaneHistoryTarget(
+            tab.panes.compactMap { pane in
+                guard let session = pane.terminalSession else {
+                    return nil
+                }
+                return PaneHistoryTarget(
                     workspaceID: workspace.id,
                     workspaceName: workspace.name,
                     tabID: tab.id,
@@ -1481,8 +1823,8 @@ public final class WorkspaceController: @unchecked Sendable {
                     paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
                     paneID: pane.id,
                     paneTitle: pane.title,
-                    sessionID: pane.session.id,
-                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory,
+                    sessionID: session.id,
+                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? session.workingDirectory,
                     persistedHistory: pane.terminalState.restoredScrollback
                 )
             }
@@ -1498,10 +1840,141 @@ public final class WorkspaceController: @unchecked Sendable {
         defer { lock.unlock() }
 
         for pane in workspaces.flatMap(\.tabs).flatMap(\.panes) where pane.id == paneID {
-            return pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+            return pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory
         }
 
         return nil
+    }
+
+    private func terminalTextActivationContext(
+        for request: TerminalTextActivationRequest,
+        hit: TerminalTextActivationHit
+    ) -> TerminalTextActivationContext {
+        let cwd = workingDirectory(for: request.paneID)
+        return TerminalTextActivationContext(
+            request: request,
+            hit: hit,
+            cwd: cwd,
+            resolvedPath: TerminalTextActivationResolver.resolvedLocalPath(token: hit.token, cwd: cwd)
+        )
+    }
+
+    private func emitTerminalTextActivationHook(_ context: TerminalTextActivationContext) {
+        let terminalContext = terminalContext(for: context.request.paneID)
+        do {
+            try hookRunner.emit(
+                HookInvocation(
+                    category: .input,
+                    name: "terminal-text-activated",
+                    workspaceID: terminalContext?.workspaceID,
+                    tabID: terminalContext?.tabID,
+                    paneID: context.request.paneID,
+                    sessionID: terminalContext?.sessionID,
+                    payload: terminalTextActivationPayload(context)
+                )
+            )
+        } catch {
+            fputs("warning: failed to emit terminal-text-activated hook: \(error)\n", stderr)
+        }
+    }
+
+    private func publishTerminalTextActivationEvent(_ context: TerminalTextActivationContext) {
+        let terminalContext = terminalContext(for: context.request.paneID)
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .textActivated,
+                workspaceID: terminalContext?.workspaceID,
+                tabID: terminalContext?.tabID,
+                paneID: context.request.paneID,
+                sessionID: terminalContext?.sessionID,
+                payload: terminalTextActivationPayload(context)
+            )
+        )
+    }
+
+    private func terminalTextActivationPayload(_ context: TerminalTextActivationContext) -> OmuxValue {
+        .object([
+            "token": .string(context.hit.token),
+            "row": .integer(context.hit.row),
+            "column": .integer(context.hit.column),
+            "cwd": context.cwd.map(OmuxValue.string) ?? .null,
+            "resolvedPath": context.resolvedPath.map(OmuxValue.string) ?? .null,
+            "modifiers": .integer(Int(context.request.modifiers.rawValue)),
+        ])
+    }
+
+    private func shouldOpenMarkdownPreview(for path: String) -> Bool {
+        lock.lock()
+        let markdownPreviewConfiguration = self.markdownPreviewConfiguration
+        lock.unlock()
+
+        guard markdownPreviewConfiguration.enabled else {
+            return false
+        }
+
+        let fileURL = URL(fileURLWithPath: path)
+        let fileExtension = fileURL.pathExtension.lowercased()
+        guard fileExtension == "md" || fileExtension == "markdown" else {
+            return false
+        }
+
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue == false
+            && FileManager.default.isReadableFile(atPath: path)
+    }
+
+    private func openMarkdownPreview(for path: String) {
+        lock.lock()
+        let markdownPreviewConfiguration = self.markdownPreviewConfiguration
+        lock.unlock()
+
+        let fileURL = URL(fileURLWithPath: path)
+        let descriptor: ExtensionPaneDescriptor
+        do {
+            let html = try OmuxMarkdownPreviewRenderer(theme: markdownPreviewConfiguration.theme)
+                .renderFile(fileURL)
+            descriptor = ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: path,
+                html: html,
+                status: .ready
+            )
+        } catch {
+            descriptor = ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: path,
+                html: "",
+                status: .error,
+                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+
+        if let paneID = markdownPreviewPaneID(for: path) {
+            _ = updateExtensionPane(paneID: paneID, descriptor: descriptor, title: fileURL.lastPathComponent)
+        } else {
+            _ = createExtensionPane(title: fileURL.lastPathComponent, descriptor: descriptor)
+        }
+    }
+
+    private func markdownPreviewPaneID(for sourcePath: String) -> PaneID? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let activeWorkspaceIndex else {
+            return nil
+        }
+
+        return workspaces[activeWorkspaceIndex]
+            .tabs
+            .flatMap(\.panes)
+            .first { pane in
+                pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
+                    && pane.extensionPane?.source == sourcePath
+            }?
+            .id
     }
 
     func enrichedCommandCompletionPayload(
@@ -1632,7 +2105,10 @@ public final class WorkspaceController: @unchecked Sendable {
                 switch event.action {
                 case .workingDirectoryChanged(let path):
                     _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        pane.session.workingDirectory = path
+                        if var session = pane.terminalSession {
+                            session.workingDirectory = path
+                            pane.terminalSession = session
+                        }
                         pane.terminalState.reportedWorkingDirectory = path
                     }
                     updatedWorkspace = workspaces[workspaceIndex]
@@ -1799,8 +2275,11 @@ public final class WorkspaceController: @unchecked Sendable {
         mode: WorkspacePersistenceSnapshotMode,
         historyClearSuppression: [PaneID: String]
     ) -> Pane {
+        guard var session = pane.terminalSession else {
+            return pane
+        }
+
         let liveSnapshot = bridge.snapshot(for: pane.id)
-        var session = pane.session
         if let workingDirectory = pane.terminalState.reportedWorkingDirectory, workingDirectory.isEmpty == false {
             session.workingDirectory = workingDirectory
         } else if let workingDirectory = liveSnapshot?.workingDirectory, workingDirectory.isEmpty == false {
@@ -1845,12 +2324,10 @@ public final class WorkspaceController: @unchecked Sendable {
                 }
             }
         }
-        return Pane(
-            id: pane.id,
-            title: pane.title,
-            session: session,
-            terminalState: PaneTerminalState(restoredScrollback: restoredScrollback)
-        )
+        var updatedPane = pane
+        updatedPane.session = session
+        updatedPane.terminalState = PaneTerminalState(restoredScrollback: restoredScrollback)
+        return updatedPane
     }
 
     private func sanitizedRestoredScrollback(
@@ -1872,12 +2349,9 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private static func sanitizedPaneForRestore(_ pane: Pane) -> Pane {
-        Pane(
-            id: pane.id,
-            title: pane.title,
-            session: pane.session,
-            terminalState: PaneTerminalState(restoredScrollback: pane.terminalState.restoredScrollback)
-        )
+        var restoredPane = pane
+        restoredPane.terminalState = PaneTerminalState(restoredScrollback: pane.terminalState.restoredScrollback)
+        return restoredPane
     }
 
     private static func normalizedRestoredWorkspace(_ workspace: Workspace) -> Workspace? {
@@ -2008,7 +2482,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
         for removedWorkspace in removedWorkspaces {
             for pane in removedWorkspace.tabs.flatMap(\.panes) {
-                try bridge.teardown(paneID: pane.id)
+                if pane.isTerminal {
+                    try bridge.teardown(paneID: pane.id)
+                }
             }
 
             try hookRunner.emit(
@@ -2078,7 +2554,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.unlock()
         for removedPane in removedPanes {
-            try bridge.teardown(paneID: removedPane.id)
+            if removedPane.isTerminal {
+                try bridge.teardown(paneID: removedPane.id)
+            }
             try hookRunner.emit(
                 HookInvocation(
                     category: .session,
@@ -2086,7 +2564,7 @@ public final class WorkspaceController: @unchecked Sendable {
                     workspaceID: updatedWorkspaceID,
                     tabID: updatedTabID,
                     paneID: removedPane.id,
-                    sessionID: removedPane.session.id,
+                    sessionID: removedPane.terminalSession?.id,
                     payload: .object([
                         "paneStackID": targetStackID.map { .string($0.rawValue) } ?? .null,
                     ])

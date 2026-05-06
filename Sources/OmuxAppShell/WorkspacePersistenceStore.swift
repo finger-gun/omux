@@ -286,7 +286,8 @@ final class WorkspaceScrollbackPayloadStore {
     }
 
     private func persistPayloads(in pane: Pane, workspaceID: WorkspaceID) -> Pane {
-        guard let scrollback = pane.terminalState.restoredScrollback,
+        guard pane.isTerminal,
+              let scrollback = pane.terminalState.restoredScrollback,
               scrollback.text.isEmpty == false,
               let storageIdentifier = write(scrollback: scrollback, workspaceID: workspaceID, paneID: pane.id)
         else {
@@ -299,7 +300,9 @@ final class WorkspaceScrollbackPayloadStore {
             truncated: scrollback.truncated,
             storageIdentifier: storageIdentifier
         )
-        return Pane(id: pane.id, title: pane.title, session: pane.session, terminalState: terminalState)
+        var updatedPane = pane
+        updatedPane.terminalState = terminalState
+        return updatedPane
     }
 
     private func resolvePayloads(in workspace: Workspace) -> Workspace {
@@ -323,7 +326,8 @@ final class WorkspaceScrollbackPayloadStore {
     }
 
     private func resolvePayloads(in pane: Pane) -> Pane {
-        guard let scrollback = pane.terminalState.restoredScrollback,
+        guard pane.isTerminal,
+              let scrollback = pane.terminalState.restoredScrollback,
               let storageIdentifier = scrollback.storageIdentifier
         else {
             return pane
@@ -332,7 +336,9 @@ final class WorkspaceScrollbackPayloadStore {
         guard let text = read(storageIdentifier: storageIdentifier), text.isEmpty == false else {
             var terminalState = pane.terminalState
             terminalState.restoredScrollback = nil
-            return Pane(id: pane.id, title: pane.title, session: pane.session, terminalState: terminalState)
+            var updatedPane = pane
+            updatedPane.terminalState = terminalState
+            return updatedPane
         }
 
         var terminalState = pane.terminalState
@@ -341,7 +347,9 @@ final class WorkspaceScrollbackPayloadStore {
             truncated: scrollback.truncated,
             storageIdentifier: storageIdentifier
         )
-        return Pane(id: pane.id, title: pane.title, session: pane.session, terminalState: terminalState)
+        var updatedPane = pane
+        updatedPane.terminalState = terminalState
+        return updatedPane
     }
 
     private func transformPanes(

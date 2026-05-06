@@ -1,6 +1,6 @@
 # Getting Started with OpenMUX
 
-OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, and user hooks.
+OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, user hooks, and plugins.
 
 This guide is for people who want to use OpenMUX, not contribute to its internals.
 
@@ -14,7 +14,7 @@ OpenMUX currently publishes early macOS artifacts through [GitHub Releases](http
 
 The current app archive is ad-hoc signed so the bundle is structurally valid, but it is not yet Developer ID signed or notarized. macOS may require you to approve the app from **System Settings -> Privacy & Security** the first time you open it. The release flow is expected to move to fully signed and notarized artifacts later.
 
-If you are testing from source instead of a release artifact, see [Development notes](./development.md).
+If you are testing from source instead of a release artifact, see the [Developer quick start](./developer.md).
 
 ## 2. Install the `omux` CLI
 
@@ -160,9 +160,10 @@ Check or reload config after editing:
 ```bash
 omux config doctor
 omux config reload
+omux plugins
 ```
 
-For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
+For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, plugin settings, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
 
 ## 6. Add a simple hook
 
@@ -194,19 +195,32 @@ chmod +x ~/.omux/hooks/command-failed/20-notify
 
 OpenMUX passes hook data as JSON on stdin. Hooks can call `omux` again to split panes, run commands, send text, or inspect workspace state. For the full hook list and payload contract, see [Hooks](./hooks.md).
 
-## 7. Know where files live
+## 7. Use plugins
+
+List and manage plugins:
+
+```bash
+omux plugin list
+omux plugins
+```
+
+Bundled plugins can be toggled from the interactive picker. External plugins are executable files under `~/.omux/plugins/`; see [Plugin ecosystem](./plugins.md) to create one and [Plugin index](./plugins/index.md) for bundled plugin docs.
+
+## 8. Know where files live
 
 | Path | Purpose |
 | --- | --- |
 | `~/.omux/config.toml` | User configuration. |
 | `~/.omux/themes/` | Custom themes. |
 | `~/.omux/hooks/` | User hook handlers. |
+| `~/.omux/plugins/` | User plugin commands. |
 | `~/.omux/generated/ghostty/` | Generated OpenMUX-managed terminal config. |
 
-Prefer editing `config.toml`, custom theme files, and hook files. The generated Ghostty directory is managed by OpenMUX.
+Prefer editing `config.toml`, custom theme files, hook files, and plugin executables. The generated Ghostty directory is managed by OpenMUX.
 
 ## Next steps
 
 - Read [Configuration and themes](./configuration.md) to customize appearance and terminal behavior.
 - Read [Hooks](./hooks.md) to automate workspace actions.
+- Read [Plugins](./plugins/index.md) to see bundled plugins and plugin management.
 - Read the [Roadmap](./roadmap.md) to understand current beta limitations and planned work.

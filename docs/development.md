@@ -1,6 +1,8 @@
 # OpenMUX Development Notes
 
-OpenMUX currently uses a Swift Package Manager workspace to establish the initial foundation, workspace shell, interactive-terminal, pane-tab-stacks, and bridge-owned surface-hosting slices described by the applied OpenSpec changes.
+This page is the detailed contributor reference. If you are setting up the repo for the first time, start with the [Developer quick start](./developer.md).
+
+OpenMUX uses a Swift Package Manager workspace for the native app shell, CLI, control plane, hooks, plugins, and terminal bridge. The vendored Ghostty runtime remains behind `OmuxTerminalBridge`.
 
 The config/theme foundation now lives on top of **`~/.omux/config.toml`**, **`~/.omux/themes/`**, and generated Ghostty artifacts under **`~/.omux/generated/ghostty/`**. See [`docs/configuration.md`](./configuration.md) for the user-facing model.
 
@@ -53,6 +55,7 @@ The script expects:
 
 ```bash
 make setup
+make app
 make dev
 make build
 make test
@@ -69,6 +72,9 @@ swift run omux config init
 swift run omux theme
 swift run omux theme nord
 swift run omux theme list
+swift run omux plugins
+swift run omux plugin list
+swift run omux plugin path
 swift run omux open [path]
 swift run omux workspace-close [workspace-id]
 swift run omux tab
@@ -102,6 +108,8 @@ swift run OpenMUXApp
 ```
 
 `swift run omux theme` opens the interactive fuzzy-search arrow-key picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback.
+
+`swift run omux plugins` opens the interactive plugin picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback. Bundled plugin behavior is documented in [Plugin index](./plugins/index.md), and the external plugin/extension-pane contract is documented in [Plugin ecosystem](./plugins.md).
 
 For local cleanup while developing, run `Scripts/uninstall-local.sh --dry-run` to inspect what would be removed, then `make uninstall-local` to remove local app bundles, CLI links, `~/.omux`, OpenMUX Application Support state, preferences, caches, saved app state, and update staging leftovers.
 
@@ -174,6 +182,9 @@ Current first-wave shared action event names:
 - `command.started`
 - `notification.raised`
 - `workspace.restored`
+- `extensionPane.created`
+- `extensionPane.updated`
+- `extensionPane.closed`
 
 ## Terminal action dispatch
 
@@ -215,8 +226,8 @@ The current shell is usable, but it is still intentionally narrow:
 
 - runtime-backed transcript snapshots are still minimal until the Ghostty bridge exposes richer capture
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
-- close-last-local-tab is intentionally rejected for now instead of collapsing a split region
-- pane-local tabs cannot yet be reordered, dragged between stacks, or restored from persisted layout state
+- pane-local tabs cannot yet be reordered or dragged between stacks
+- workspace, split, pane-stack, and session restore exists, but still needs polish under more workflows
 
 ## Guidance for future changes
 

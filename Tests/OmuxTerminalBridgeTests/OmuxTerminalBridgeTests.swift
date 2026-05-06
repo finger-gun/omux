@@ -8,6 +8,132 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxTerminalBridgeTests: XCTestCase {
+    func testTerminalTextActivationExtractsTokenAtPointerLocation() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 40, y: 10),
+            viewSize: CGSize(width: 320, height: 40),
+            terminalSize: TerminalSize(columns: 40, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nREADME.md docs/configuration.md",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+        XCTAssertEqual(hit?.row, 1)
+    }
+
+    func testTerminalTextActivationAllowsNearMissWithinSameLine() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 80, y: 10),
+            viewSize: CGSize(width: 320, height: 40),
+            terminalSize: TerminalSize(columns: 40, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nREADME.md",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+        XCTAssertEqual(hit?.row, 1)
+    }
+
+    func testTerminalTextActivationSelectsPointedTokenInMultiColumnLsOutput() {
+        let paneID = PaneID()
+        let line = "AGENTS.md         LICENSE         README.md         Sources"
+        let readmeColumn = line.distance(from: line.startIndex, to: line.range(of: "README.md")!.lowerBound) + 2
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: CGFloat(readmeColumn * 10), y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\n\(line)",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+    }
+
+    func testTerminalTextActivationDoesNotGuessFirstTokenOnRowWhenPointerMisses() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 140, y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nAGENTS.md         README.md",
+            request: request
+        )
+
+        XCTAssertNil(hit)
+    }
+
+    func testTerminalTextActivationExtractsFilenameFromLongLsOutput() {
+        let paneID = PaneID()
+        let line = "-rw-r--r--  1 lejahmie  staff  1200 May  6 10:00 README.md"
+        let readmeColumn = line.distance(from: line.startIndex, to: line.range(of: "README.md")!.lowerBound) + 3
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: CGFloat(readmeColumn * 10), y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\n\(line)",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+    }
+
+    func testTerminalTextActivationDoesNotFallbackAcrossLines() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 160, y: 10),
+            viewSize: CGSize(width: 320, height: 60),
+            terminalSize: TerminalSize(columns: 40, rows: 3),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "README.md\n ",
+            request: request
+        )
+
+        XCTAssertNil(hit)
+    }
+
+    func testTerminalTextActivationResolvesRelativePathFromWorkingDirectory() {
+        XCTAssertEqual(
+            TerminalTextActivationResolver.resolvedLocalPath(token: "README.md", cwd: "/repo"),
+            "/repo/README.md"
+        )
+        XCTAssertEqual(
+            TerminalTextActivationResolver.resolvedLocalPath(token: "docs/guide.md:42", cwd: "/repo"),
+            "/repo/docs/guide.md"
+        )
+        XCTAssertNil(TerminalTextActivationResolver.resolvedLocalPath(token: "https://example.com", cwd: "/repo"))
+    }
+
     func testBridgeOwnsSurfaceLifecycle() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -386,6 +512,132 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.mouseButtons.count, 1)
         XCTAssertEqual(runtime.mouseButtons.first?.state, GHOSTTY_MOUSE_PRESS)
         XCTAssertEqual(runtime.mouseButtons.first?.buttonNumber, 0)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewClaimsCommandClickActivation() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+        var activationRequest: TerminalTextActivationRequest?
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true, onFocus: { _ in }) { request in
+            activationRequest = request
+            return true
+        }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        runtimeView.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(activationRequest?.paneID, pane.id)
+        XCTAssertEqual(runtime.mouseButtons.count, 0)
+        XCTAssertEqual(runtime.mousePositions.count, 0)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewForwardsUnhandledCommandClick() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true, onFocus: { _ in }) { _ in false }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        runtimeView.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(runtime.mouseButtons.count, 1)
+        XCTAssertEqual(runtime.mousePositions.count, 1)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewShowsTextActivationCursorOnCommandHover() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+        var hoverRequest: TerminalTextActivationRequest?
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(
+            for: pane,
+            isFocused: true,
+            onFocus: { _ in },
+            onTextActivation: { _ in false },
+            onTextActivationHover: { request in
+                hoverRequest = request
+                return true
+            }
+        )
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let commandHover = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 0,
+            pressure: 0
+        ))
+        runtimeView.mouseMoved(with: commandHover)
+
+        XCTAssertEqual(hoverRequest?.paneID, pane.id)
+        XCTAssertTrue(runtimeView.isTextActivationCursorActive)
+
+        let normalHover = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 0,
+            pressure: 0
+        ))
+        runtimeView.mouseMoved(with: normalHover)
+
+        XCTAssertFalse(runtimeView.isTextActivationCursorActive)
     }
 
     @MainActor
@@ -1752,7 +2004,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
 }
 
 private func makeTheme(name: String) -> OmuxTheme {
-    let seed = UInt8(abs(name.hashValue) % 160 + 40)
+    let seed = deterministicThemeSeed(name: name, modulo: 160, offset: 40)
     let tokens = Dictionary(
         uniqueKeysWithValues: ThemeToken.allCases.map { token in
             let offset = UInt8(ThemeToken.allCases.firstIndex(of: token) ?? 0)
@@ -1767,6 +2019,13 @@ private func makeTheme(name: String) -> OmuxTheme {
         }
     )
     return OmuxTheme(schema: 1, name: name, displayName: name.capitalized, tokens: tokens)
+}
+
+private func deterministicThemeSeed(name: String, modulo: UInt16, offset: UInt16) -> UInt8 {
+    let hash = name.utf8.reduce(UInt32(2_166_136_261)) { partial, byte in
+        (partial ^ UInt32(byte)) &* 16_777_619
+    }
+    return UInt8((hash % UInt32(modulo)) + UInt32(offset))
 }
 
 private func temporaryDirectory() throws -> URL {

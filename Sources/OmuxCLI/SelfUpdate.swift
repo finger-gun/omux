@@ -64,6 +64,7 @@ final class OmuxSelfUpdater {
         case missingExecutablePath
         case helperLaunchFailed(String)
         case helperTimedOut
+        case appRelaunchFailed(String)
         case downloadFailed(String)
 
         var errorDescription: String? {
@@ -88,6 +89,8 @@ final class OmuxSelfUpdater {
                 return "failed to start update helper: \(message)"
             case .helperTimedOut:
                 return "OpenMUX did not quit before the update timeout"
+            case .appRelaunchFailed(let message):
+                return "installed OpenMUX did not relaunch successfully: \(message)"
             case .downloadFailed(let message):
                 return "download failed: \(message)"
             }
@@ -103,6 +106,13 @@ final class OmuxSelfUpdater {
     private let appManager: OmuxRunningApplicationManaging
     private let download: (URL, URL, @escaping (OmuxDownloadProgress) -> Void) throws -> Void
     private let launchDetachedHelper: (URL, URL) throws -> Void
+    private let openApplication: (URL) -> Bool
+    private let now: () -> Date
+    private let sleep: (TimeInterval) -> Void
+    private let relaunchTimeoutSeconds: TimeInterval
+    private let relaunchStabilitySeconds: TimeInterval
+    private let writeProgress: (String) -> Void
+    private let finishProgress: () -> Void
     private let writeLine: (String) -> Void
     private let readInputLine: () -> String?
 
@@ -116,6 +126,13 @@ final class OmuxSelfUpdater {
         appManager: OmuxRunningApplicationManaging = DefaultOmuxRunningApplicationManager(),
         download: @escaping (URL, URL, @escaping (OmuxDownloadProgress) -> Void) throws -> Void = OmuxSelfUpdater.downloadFile,
         launchDetachedHelper: @escaping (URL, URL) throws -> Void = OmuxSelfUpdater.launchDetachedHelper,
+        openApplication: @escaping (URL) -> Bool = OmuxSelfUpdater.openInstalledApplication,
+        now: @escaping () -> Date = Date.init,
+        sleep: @escaping (TimeInterval) -> Void = Thread.sleep(forTimeInterval:),
+        relaunchTimeoutSeconds: TimeInterval = 10,
+        relaunchStabilitySeconds: TimeInterval = 2,
+        writeProgress: ((String) -> Void)? = nil,
+        finishProgress: (() -> Void)? = nil,
         writeLine: @escaping (String) -> Void,
         readInputLine: @escaping () -> String?
     ) {
@@ -128,6 +145,13 @@ final class OmuxSelfUpdater {
         self.appManager = appManager
         self.download = download
         self.launchDetachedHelper = launchDetachedHelper
+        self.openApplication = openApplication
+        self.now = now
+        self.sleep = sleep
+        self.relaunchTimeoutSeconds = relaunchTimeoutSeconds
+        self.relaunchStabilitySeconds = relaunchStabilitySeconds
+        self.writeProgress = writeProgress ?? writeLine
+        self.finishProgress = finishProgress ?? {}
         self.writeLine = writeLine
         self.readInputLine = readInputLine
     }
@@ -171,7 +195,8 @@ final class OmuxSelfUpdater {
             writeLine("Downloading OpenMUX \(release.version)...")
             let progressReporter = OmuxDownloadProgressReporter(
                 label: "OpenMUX \(release.version)",
-                writeLine: writeLine
+                writeProgress: writeProgress,
+                finishProgress: finishProgress
             )
             try download(appAsset.downloadURL, archiveURL) { progress in
                 progressReporter.report(progress)
@@ -234,12 +259,12 @@ final class OmuxSelfUpdater {
         logger.write("Starting OpenMUX update to \(manifest.version)")
 
         appManager.terminate(bundleIdentifier: manifest.bundleIdentifier)
-        let deadline = Date().addingTimeInterval(manifest.terminationTimeoutSeconds)
-        while Date() < deadline {
+        let deadline = now().addingTimeInterval(manifest.terminationTimeoutSeconds)
+        while now() < deadline {
             if appManager.runningApplications(bundleIdentifier: manifest.bundleIdentifier).isEmpty {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.25)
+            sleep(0.25)
         }
         guard appManager.runningApplications(bundleIdentifier: manifest.bundleIdentifier).isEmpty else {
             logger.write("OpenMUX did not quit before timeout")
@@ -258,12 +283,16 @@ final class OmuxSelfUpdater {
             }
             try fileManager.moveItem(at: stagedAppURL, to: targetAppURL)
             try validateBundle(at: targetAppURL, version: manifest.version)
-            if fileManager.fileExists(atPath: backupAppURL.path) {
-                try fileManager.removeItem(at: backupAppURL)
-            }
             logger.write("Installed \(targetAppURL.path)")
             if manifest.reopenAfterInstall {
-                NSWorkspace.shared.open(targetAppURL)
+                try reopenInstalledApp(
+                    at: targetAppURL,
+                    bundleIdentifier: manifest.bundleIdentifier,
+                    logger: logger
+                )
+            }
+            if fileManager.fileExists(atPath: backupAppURL.path) {
+                try fileManager.removeItem(at: backupAppURL)
             }
             try? fileManager.removeItem(at: URL(fileURLWithPath: manifest.stagingRootPath, isDirectory: true))
         } catch {
@@ -276,6 +305,56 @@ final class OmuxSelfUpdater {
             }
             throw error
         }
+    }
+
+    private func reopenInstalledApp(
+        at targetAppURL: URL,
+        bundleIdentifier: String,
+        logger: HelperLogger
+    ) throws {
+        logger.write("Relaunching \(targetAppURL.path)")
+        guard openApplication(targetAppURL) else {
+            logger.write("Relaunch request was rejected")
+            throw UpdateError.appRelaunchFailed("Launch Services rejected \(targetAppURL.path)")
+        }
+
+        let launchDeadline = now().addingTimeInterval(relaunchTimeoutSeconds)
+        while now() < launchDeadline {
+            if appManager.runningApplications(bundleIdentifier: bundleIdentifier).isEmpty == false {
+                break
+            }
+            sleep(0.25)
+        }
+
+        guard appManager.runningApplications(bundleIdentifier: bundleIdentifier).isEmpty == false else {
+            logger.write("Relaunch did not produce a running OpenMUX app")
+            throw UpdateError.appRelaunchFailed("OpenMUX did not appear after relaunch")
+        }
+
+        if relaunchStabilitySeconds > 0 {
+            sleep(relaunchStabilitySeconds)
+        }
+
+        guard appManager.runningApplications(bundleIdentifier: bundleIdentifier).isEmpty == false else {
+            logger.write("Relaunched OpenMUX exited before stability check completed")
+            throw UpdateError.appRelaunchFailed("OpenMUX exited immediately after relaunch")
+        }
+
+        logger.write("Relaunched OpenMUX successfully")
+    }
+
+    private static func openInstalledApplication(at appURL: URL) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let result = LockedBox(false)
+        NSWorkspace.shared.openApplication(
+            at: appURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        ) { runningApplication, error in
+            result.value = runningApplication != nil && error == nil
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 10)
+        return result.value
     }
 
     private static func fetchLatestRelease() throws -> OpenMUXRelease {
@@ -550,16 +629,23 @@ private final class OmuxDownloadProgressReporter {
     private static let unknownTotalStepBytes: Int64 = 5 * 1024 * 1024
 
     private let label: String
-    private let writeLine: (String) -> Void
+    private let writeProgress: (String) -> Void
+    private let finishProgress: () -> Void
     private var lastProgress: OmuxDownloadProgress?
     private var lastRenderedBytes: Int64?
     private var lastRenderedTotalBytes: Int64?
     private var lastPercentBucket: Int?
     private var lastUnknownBucket: Int64?
+    private var didRender = false
 
-    init(label: String, writeLine: @escaping (String) -> Void) {
+    init(
+        label: String,
+        writeProgress: @escaping (String) -> Void,
+        finishProgress: @escaping () -> Void
+    ) {
         self.label = label
-        self.writeLine = writeLine
+        self.writeProgress = writeProgress
+        self.finishProgress = finishProgress
     }
 
     func report(_ progress: OmuxDownloadProgress) {
@@ -571,13 +657,14 @@ private final class OmuxDownloadProgressReporter {
     }
 
     func finish() {
-        guard let lastProgress,
-              lastRenderedBytes != lastProgress.bytesDownloaded
-                || lastRenderedTotalBytes != lastProgress.totalBytes
-        else {
-            return
+        if let lastProgress,
+           lastRenderedBytes != lastProgress.bytesDownloaded
+            || lastRenderedTotalBytes != lastProgress.totalBytes {
+            render(lastProgress)
         }
-        render(lastProgress)
+        if didRender {
+            finishProgress()
+        }
     }
 
     private func shouldRender(_ progress: OmuxDownloadProgress) -> Bool {
@@ -602,7 +689,8 @@ private final class OmuxDownloadProgressReporter {
     private func render(_ progress: OmuxDownloadProgress) {
         lastRenderedBytes = progress.bytesDownloaded
         lastRenderedTotalBytes = progress.totalBytes
-        writeLine(Self.renderedLine(label: label, progress: progress))
+        didRender = true
+        writeProgress(Self.renderedLine(label: label, progress: progress))
     }
 
     private static func renderedLine(label: String, progress: OmuxDownloadProgress) -> String {

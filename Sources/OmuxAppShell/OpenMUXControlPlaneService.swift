@@ -184,13 +184,16 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             }
         case .createTab:
             if let workspace = try controller.createTab() {
-                let created = workspace.focusedPane.map {
-                    ControlPlaneTerminalContext(
+                let created = workspace.focusedPane.flatMap { pane -> ControlPlaneTerminalContext? in
+                    guard let session = pane.terminalSession else {
+                        return nil
+                    }
+                    return ControlPlaneTerminalContext(
                         workspaceID: workspace.id,
                         tabID: workspace.focusedTabID,
                         paneStackID: workspace.focusedPaneStack?.id,
-                        paneID: $0.id,
-                        sessionID: $0.session.id
+                        paneID: pane.id,
+                        sessionID: session.id
                     )
                 }
                 return JSONRPCResponse(
@@ -241,13 +244,16 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             )
         case .createPaneTab:
             if let workspace = try controller.createPaneTab() {
-                let created = workspace.focusedPane.map {
-                    ControlPlaneTerminalContext(
+                let created = workspace.focusedPane.flatMap { pane -> ControlPlaneTerminalContext? in
+                    guard let session = pane.terminalSession else {
+                        return nil
+                    }
+                    return ControlPlaneTerminalContext(
                         workspaceID: workspace.id,
                         tabID: workspace.focusedTabID,
                         paneStackID: workspace.focusedPaneStack?.id,
-                        paneID: $0.id,
-                        sessionID: $0.session.id
+                        paneID: pane.id,
+                        sessionID: session.id
                     )
                 }
                 return JSONRPCResponse(
@@ -349,6 +355,51 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .createExtensionPane:
+            guard let params = request.params?.objectValue,
+                  let pluginID = params["pluginID"]?.stringValue,
+                  pluginID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing pluginID"))
+            }
+            let descriptor = extensionPaneDescriptor(pluginID: pluginID, params: params)
+            let axis = params["axis"]?.stringValue.flatMap(PaneSplitAxis.init(rawValue:)) ?? .columns
+            let title = params["title"]?.stringValue ?? pluginID
+            guard let result = controller.createExtensionPane(title: title, descriptor: descriptor, axis: axis) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "no active workspace"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(result.rpcObject))
+        case .updateExtensionPane:
+            guard let params = request.params?.objectValue,
+                  let paneID = params["paneID"]?.stringValue.map(PaneID.init(rawValue:)),
+                  let pluginID = params["pluginID"]?.stringValue,
+                  pluginID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing paneID or pluginID"))
+            }
+            let descriptor = extensionPaneDescriptor(pluginID: pluginID, params: params)
+            guard let result = controller.updateExtensionPane(
+                paneID: paneID,
+                descriptor: descriptor,
+                title: params["title"]?.stringValue
+            ) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "extension pane not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(result.rpcObject))
+        case .closeExtensionPane:
+            guard let paneID = request.params?.objectValue?["paneID"]?.stringValue.map(PaneID.init(rawValue:)) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing paneID"))
+            }
+            guard let pane = controller.allWorkspaces().lazy.flatMap({ $0.tabs.flatMap(\.panes) }).first(where: { $0.id == paneID }) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "extension pane not found"))
+            }
+            guard pane.extensionPane != nil else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "pane is not an extension pane"))
+            }
+            guard let result = try controller.closeExtensionPane(paneID: paneID) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "extension pane not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(result.rpcObject))
         case .sendNotification:
             let title = request.params?.objectValue?["title"]?.stringValue ?? "OpenMUX"
             let body = request.params?.objectValue?["body"]?.stringValue ?? ""
@@ -438,6 +489,19 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     }
 }
 
+private func extensionPaneDescriptor(pluginID: String, params: [String: RPCValue]) -> ExtensionPaneDescriptor {
+    let contentKind = params["contentKind"]?.stringValue.flatMap(ExtensionPaneContentKind.init(rawValue:)) ?? .html
+    let status = params["status"]?.stringValue.flatMap(ExtensionPaneStatus.init(rawValue:)) ?? .ready
+    return ExtensionPaneDescriptor(
+        pluginID: pluginID,
+        contentKind: contentKind,
+        source: params["source"]?.stringValue,
+        html: params["html"]?.stringValue,
+        status: status,
+        message: params["message"]?.stringValue
+    )
+}
+
 private func mainActorSyncThrowing<T: Sendable>(_ body: @MainActor () throws -> T) throws -> T {
     if Thread.isMainThread {
         return try MainActor.assumeIsolated(body)
@@ -485,6 +549,23 @@ private extension OmuxConfigDiagnostic {
     }
 }
 
+private extension ExtensionPaneActionResult {
+    var rpcObject: [String: RPCValue] {
+        [
+            "ok": .bool(true),
+            "workspaceID": .string(workspace.id.rawValue),
+            "tabID": tabID.map { .string($0.rawValue) } ?? .null,
+            "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+            "paneID": .string(pane.id.rawValue),
+            "title": .string(pane.title),
+            "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
+            "contentKind": pane.extensionPane.map { .string($0.contentKind.rawValue) } ?? .null,
+            "source": pane.extensionPane?.source.map(RPCValue.string) ?? .null,
+            "workspace": .object(workspace.rpcObject),
+        ]
+    }
+}
+
 private extension Workspace {
     var rpcObject: [String: RPCValue] {
         [
@@ -498,21 +579,24 @@ private extension Workspace {
             "focusedTabID": .string(focusedTabID.rawValue),
             "focusedPaneID": focusedPane.map { .string($0.id.rawValue) } ?? .null,
             "focusedPaneStackID": focusedPaneStack.map { .string($0.id.rawValue) } ?? .null,
-            "focusedSessionID": focusedPane.map { .string($0.session.id.rawValue) } ?? .null,
+            "focusedSessionID": focusedPane?.terminalSession.map { .string($0.id.rawValue) } ?? .null,
             "tabs": .array(tabs.map { .object($0.rpcObject(workspaceID: id)) }),
         ]
     }
 
     var sessionRPCObjects: [[String: RPCValue]] {
         tabs.flatMap { tab in
-            tab.panes.map { pane in
-                [
+            tab.panes.compactMap { pane in
+                guard let session = pane.terminalSession else {
+                    return nil
+                }
+                return [
                     "workspaceID": .string(id.rawValue),
                     "tabID": .string(tab.id.rawValue),
                     "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
                     "paneID": .string(pane.id.rawValue),
-                    "sessionID": .string(pane.session.id.rawValue),
-                    "workingDirectory": .string(pane.session.workingDirectory),
+                    "sessionID": .string(session.id.rawValue),
+                    "workingDirectory": .string(session.workingDirectory),
                     "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
                     "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
@@ -528,7 +612,9 @@ private extension Workspace {
                     "tabID": .string(tab.id.rawValue),
                     "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
                     "paneID": .string(pane.id.rawValue),
-                    "sessionID": .string(pane.session.id.rawValue),
+                    "contentKind": .string(pane.isTerminal ? "terminal" : "extension"),
+                    "sessionID": pane.terminalSession.map { .string($0.id.rawValue) } ?? .null,
+                    "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
                     "title": .string(pane.title),
                     "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
@@ -584,9 +670,11 @@ private extension Pane {
             "workspaceID": .string(workspaceID.rawValue),
             "tabID": .string(tabID.rawValue),
             "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
-            "sessionID": .string(session.id.rawValue),
+            "contentKind": .string(isTerminal ? "terminal" : "extension"),
+            "sessionID": terminalSession.map { .string($0.id.rawValue) } ?? .null,
+            "pluginID": extensionPane.map { .string($0.pluginID) } ?? .null,
             "title": .string(title),
-            "workingDirectory": .string(session.workingDirectory),
+            "workingDirectory": terminalSession.map { .string($0.workingDirectory) } ?? .null,
             "reportedWorkingDirectory": terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
             "focused": .bool(focused),
         ]

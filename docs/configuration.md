@@ -33,6 +33,11 @@ default_root_path = "~"
 # colors_enabled = true
 # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
+[plugins.markdown-preview]
+enabled = true
+renderer = "builtin"
+theme = "auto"
+
 [keys]
 "cmd+n" = "workspace.create"
 "cmd+shift+n" = "workspace.close"
@@ -238,6 +243,33 @@ Notes:
 2. OpenMUX does not hardcode Swedish, German, US, or other layout-specific Option character maps; text comes from AppKit for the active keyboard layout.
 3. For manual verification of international layouts and IME workflows, see the contributor guidance in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
+## `[plugins]` settings
+
+Bundled plugins are configured under `[plugins.<name>]`. Use `omux plugins` for the interactive fuzzy-search picker that can toggle configurable bundled plugins.
+
+For the plugin ecosystem and extension-pane contract, see [Plugin ecosystem](./plugins.md). For bundled plugin user docs, see [Plugin index](./plugins/index.md).
+
+### `[plugins.markdown-preview]`
+
+The bundled Markdown Preview plugin is enabled by default. It demonstrates extension panes by rendering local Markdown to constrained local HTML and asking the control plane to open or update a neighboring pane.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | boolean | Enables the bundled `omux markdown-preview` command and terminal-path activation. Defaults to `true`. |
+| `renderer` | `"builtin"` | Selects the built-in Markdown renderer. |
+| `theme` | `"auto"` \| `"light"` \| `"dark"` | Chooses preview colors. `auto` follows the system color scheme. |
+
+Example:
+
+```toml
+[plugins.markdown-preview]
+enabled = true
+renderer = "builtin"
+theme = "auto"
+```
+
+Run `omux markdown-preview README.md --watch` from an OpenMUX pane to open a preview beside your terminal. See [Markdown Preview plugin](./plugins/markdown-preview.md) for the full workflow.
+
 ## `[workspace]` settings
 
 OpenMUX currently models these workspace settings directly:
@@ -359,6 +391,9 @@ omux config init
 omux theme
 omux theme <name>
 omux theme list
+omux plugins
+omux plugin list
+omux plugin path
 omux list --full
 omux sessions
 omux panes
@@ -367,6 +402,8 @@ omux send-text --pane <pane-id> -- "hello"
 ```
 
 When attached to an interactive terminal, `omux theme` opens a keyboard picker: type to fuzzy-filter by theme id or display name, use Up/Down to move, Enter to apply the highlighted theme, Backspace to edit the filter, and Escape to cancel. For example, typing `cat` narrows the list to the Catppuccin themes. In non-interactive contexts it keeps the scriptable prompt that accepts a typed theme number or name.
+
+When attached to an interactive terminal, `omux plugins` opens a similar picker for bundled plugin toggles.
 
 ## Hooks
 

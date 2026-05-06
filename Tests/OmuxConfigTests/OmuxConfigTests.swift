@@ -401,6 +401,67 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func loadsMarkdownPreviewPluginSettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [plugins.markdown-preview]
+            enabled = true
+            renderer = "builtin"
+            theme = "dark"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.plugins.markdownPreview.enabled)
+        #expect(result.config.plugins.markdownPreview.renderer == "builtin")
+        #expect(result.config.plugins.markdownPreview.theme == "dark")
+    }
+
+    @Test
+    func defaultsMarkdownPreviewPluginToEnabled() throws {
+        let result = OmuxConfigLoader(configURL: temporaryMissingConfigURL()).load()
+
+        #expect(result.hasErrors == false)
+        #expect(result.config.plugins.markdownPreview.enabled)
+        #expect(result.config.plugins.markdownPreview.renderer == "builtin")
+        #expect(result.config.plugins.markdownPreview.theme == "auto")
+    }
+
+    @Test
+    func rejectsInvalidMarkdownPreviewPluginSettings() throws {
+        let cases = [
+            ("enabled = \"yes\"", "plugins.markdown-preview.enabled must be a boolean"),
+            ("renderer = \"external\"", "plugins.markdown-preview.renderer must be"),
+            ("theme = \"sepia\"", "plugins.markdown-preview.theme must be"),
+            ("unknown = true", "Unknown [plugins.markdown-preview] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [plugins.markdown-preview]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
     func loadsKeyBindingsAndUnbinds() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
@@ -468,6 +529,10 @@ struct OmuxConfigTests {
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))
+        #expect(contents.contains("[plugins.markdown-preview]"))
+        #expect(contents.contains("enabled = true"))
+        #expect(contents.contains("renderer = \"builtin\""))
+        #expect(contents.contains("theme = \"auto\""))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
             #expect(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))

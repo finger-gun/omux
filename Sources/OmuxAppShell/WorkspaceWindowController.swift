@@ -2,6 +2,7 @@ import AppKit
 import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
+import WebKit
 
 private enum ShellLayoutMetrics {
     static let sidebarWidth: CGFloat = 224
@@ -240,7 +241,11 @@ final class WorkspaceShellViewController: NSViewController {
         )
 
         let layout = workspace.focusedTab.map {
-            makeLayoutView(for: $0.rootLayout, focusedPaneID: $0.focusedPaneID)
+            makeLayoutView(
+                for: $0.rootLayout,
+                focusedPaneID: $0.focusedPaneID,
+                canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
+            )
         }
         canvasView.render(layoutView: layout?.view, theme: currentTheme)
         renderedIconKindByPaneID = iconKindSignature(for: workspace)
@@ -250,7 +255,7 @@ final class WorkspaceShellViewController: NSViewController {
             let generation = focusRestoreGeneration
 
             if let window = view.window {
-                window.makeFirstResponder(focusedPaneView.focusTarget)
+                window.makeFirstResponder(focusTarget(for: focusedPaneView))
             } else {
                 DispatchQueue.main.async { [weak self, weak focusedPaneView] in
                     guard let self,
@@ -260,7 +265,7 @@ final class WorkspaceShellViewController: NSViewController {
                         return
                     }
 
-                    self.view.window?.makeFirstResponder(focusedPaneView.focusTarget)
+                    self.view.window?.makeFirstResponder(self.focusTarget(for: focusedPaneView))
                 }
             }
         }
@@ -304,7 +309,10 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func iconResolutionPath(for pane: Pane) -> String {
-        pane.terminalState.reportedWorkingDirectory ?? pane.session.workingDirectory
+        pane.terminalState.reportedWorkingDirectory
+            ?? pane.terminalSession?.workingDirectory
+            ?? pane.extensionPane?.source
+            ?? pane.id.rawValue
     }
 
     private func apply(theme: WorkspaceShellTheme) {
@@ -330,26 +338,30 @@ final class WorkspaceShellViewController: NSViewController {
     private func wasFocusedPaneFirstResponder(paneID: PaneID?) -> Bool {
         guard let paneID,
               let firstResponder = view.window?.firstResponder as? NSView,
-              let paneView = findHostedTerminalPaneView(in: canvasView, paneID: paneID)
+              let paneView = findHostedPaneView(in: canvasView, paneID: paneID)
         else {
             return false
         }
 
-        return firstResponder === paneView.focusTarget || firstResponder.isDescendant(of: paneView.focusTarget)
+        let focusTarget = focusTarget(for: paneView)
+        return firstResponder === focusTarget || firstResponder.isDescendant(of: focusTarget)
     }
 
-    private func findHostedTerminalPaneView(in rootView: NSView, paneID: PaneID) -> HostedTerminalPaneView? {
-        if let paneView = rootView as? HostedTerminalPaneView, paneView.representedPaneID == paneID {
-            return paneView
+    private func findHostedPaneView(in rootView: NSView, paneID: PaneID) -> NSView? {
+        if let paneView = rootView as? any WorkspacePaneRendering, paneView.representedPaneID == paneID {
+            return paneView.rootPaneView
         }
-
         for subview in rootView.subviews {
-            if let paneView = findHostedTerminalPaneView(in: subview, paneID: paneID) {
+            if let paneView = findHostedPaneView(in: subview, paneID: paneID) {
                 return paneView
             }
         }
 
         return nil
+    }
+
+    private func focusTarget(for paneView: NSView) -> NSView {
+        (paneView as? any WorkspacePaneRendering)?.focusTarget ?? paneView
     }
 
     func toggleSidebarVisibility() {
@@ -419,7 +431,11 @@ final class WorkspaceShellViewController: NSViewController {
                             action: .pane(pane.id),
                             contextMenuProvider: { [weak self] in
                                 guard let self, let paneStack else { return NSMenu() }
-                                return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
+                                return makePaneTabContextMenu(
+                                    pane: pane,
+                                    paneStack: paneStack,
+                                    canCloseSinglePaneStack: tab.panes.count > 1 || workspace.tabs.count > 1
+                                )
                             }
                         )
                     }
@@ -592,7 +608,8 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func makePaneTabContextMenu(
         pane: Pane,
-        paneStack: PaneStack
+        paneStack: PaneStack,
+        canCloseSinglePaneStack: Bool
     ) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Rename…", action: nil, keyEquivalent: "").onSelect { [weak self] in
@@ -600,9 +617,9 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
-        closeItem.isEnabled = paneStack.panes.count > 1
+        closeItem.isEnabled = paneStack.panes.count > 1 || canCloseSinglePaneStack
         closeItem.onSelect { [weak self] in
-            _ = try? self?.controller.closePaneTab(paneID: pane.id)
+            _ = try? self?.controller.closePane(paneID: pane.id)
         }
 
         let targetIndex = paneStack.panes.firstIndex(where: { $0.id == pane.id }) ?? 0
@@ -629,8 +646,9 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func makeLayoutView(
         for node: TabLayoutNode,
-        focusedPaneID: PaneID
-    ) -> (view: NSView, focusedPaneView: HostedTerminalPaneView?, representativePaneID: PaneID?) {
+        focusedPaneID: PaneID,
+        canCloseSinglePaneStack: Bool
+    ) -> (view: NSView, focusedPaneView: NSView?, representativePaneID: PaneID?) {
         switch node {
         case .paneStack(let paneStack):
             let stackView = PaneStackView(
@@ -646,15 +664,26 @@ final class WorkspaceShellViewController: NSViewController {
                 onCreatePaneTab: { [weak self] in
                     _ = try self?.controller.createPaneTab(in: paneStack.id)
                 },
-                onClosePaneTab: { [weak self] paneID in
-                    _ = try self?.controller.closePaneTab(paneID: paneID)
+                canCloseSinglePaneStack: canCloseSinglePaneStack,
+                onClosePane: { [weak self] paneID in
+                    _ = try self?.controller.closePane(paneID: paneID)
                 },
                 contextMenuProvider: { [weak self] pane in
                     guard let self else { return NSMenu() }
-                    return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
+                    return makePaneTabContextMenu(
+                        pane: pane,
+                        paneStack: paneStack,
+                        canCloseSinglePaneStack: canCloseSinglePaneStack
+                    )
                 },
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
+                },
+                onTextActivation: { [weak self] request in
+                    self?.controller.handleTerminalTextActivation(request) ?? false
+                },
+                onTextActivationHover: { [weak self] request in
+                    self?.controller.canHandleTerminalTextActivation(request) ?? false
                 }
             )
             return (
@@ -664,12 +693,16 @@ final class WorkspaceShellViewController: NSViewController {
             )
 
         case .split(let axis, let proportions, let children):
-            var focusedPaneView: HostedTerminalPaneView?
+            var focusedPaneView: NSView?
             var childViews: [NSView] = []
             var childPaneIDs: [PaneID] = []
 
             for child in children {
-                let childLayout = makeLayoutView(for: child, focusedPaneID: focusedPaneID)
+                let childLayout = makeLayoutView(
+                    for: child,
+                    focusedPaneID: focusedPaneID,
+                    canCloseSinglePaneStack: canCloseSinglePaneStack
+                )
                 if focusedPaneView == nil {
                     focusedPaneView = childLayout.focusedPaneView
                 }
@@ -1446,8 +1479,191 @@ final class SplitLayoutView: NSView {
 }
 
 @MainActor
+private protocol WorkspacePaneRendering: AnyObject {
+    var rootPaneView: NSView { get }
+    var focusTarget: NSView { get }
+    var representedPaneID: PaneID { get }
+    func updateFocusState(_ isFocused: Bool)
+    func apply(theme: WorkspaceShellTheme)
+}
+
+extension HostedTerminalPaneView: WorkspacePaneRendering {
+    fileprivate var rootPaneView: NSView { self }
+
+    fileprivate func apply(theme: WorkspaceShellTheme) {
+        apply(themePalette: theme.terminalPalette)
+    }
+}
+
+@MainActor
+private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNavigationDelegate {
+    private let paneID: PaneID
+    private let descriptor: ExtensionPaneDescriptor
+    private let onFocus: @MainActor (PaneID) -> Void
+    private let container = NSView()
+    private let placeholderLabel = NSTextField(wrappingLabelWithString: "")
+    private let webView: WKWebView
+    private var isLoadingInjectedHTML = false
+
+    init(
+        pane: Pane,
+        descriptor: ExtensionPaneDescriptor,
+        isFocused: Bool,
+        theme: WorkspaceShellTheme,
+        onFocus: @escaping @MainActor (PaneID) -> Void
+    ) {
+        self.paneID = pane.id
+        self.descriptor = descriptor
+        self.onFocus = onFocus
+
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        self.webView = WKWebView(frame: .zero, configuration: configuration)
+
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = true
+
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 6
+        addSubview(container)
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.navigationDelegate = self
+        webView.setValue(false, forKey: "drawsBackground")
+        container.addSubview(webView)
+
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        placeholderLabel.alignment = .center
+        placeholderLabel.lineBreakMode = .byWordWrapping
+        placeholderLabel.maximumNumberOfLines = 0
+        container.addSubview(placeholderLabel)
+
+        NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            container.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            container.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            container.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
+
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            placeholderLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            placeholderLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
+            placeholderLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -24),
+        ])
+
+        apply(theme: theme)
+        updateFocusState(isFocused)
+        renderContent(theme: theme)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    var rootPaneView: NSView { self }
+    var focusTarget: NSView { webView }
+    var representedPaneID: PaneID { paneID }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocus(paneID)
+        window?.makeFirstResponder(focusTarget)
+        super.mouseDown(with: event)
+    }
+
+    func updateFocusState(_ isFocused: Bool) {
+        layer?.borderWidth = 0
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.terminalPalette.backgroundColor.cgColor
+        container.layer?.backgroundColor = theme.terminalPalette.backgroundColor.cgColor
+        placeholderLabel.textColor = theme.shell.textSecondary
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+    ) {
+        if isLoadingInjectedHTML, navigationAction.navigationType == .other {
+            isLoadingInjectedHTML = false
+            decisionHandler(.allow)
+            return
+        }
+
+        if navigationAction.navigationType == .linkActivated,
+           let url = navigationAction.request.url,
+           ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+            NSWorkspace.shared.open(url)
+        }
+        decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        isLoadingInjectedHTML = false
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        isLoadingInjectedHTML = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        isLoadingInjectedHTML = false
+    }
+
+    private func renderContent(theme: WorkspaceShellTheme) {
+        guard descriptor.status == .ready,
+              descriptor.contentKind == .html,
+              let html = descriptor.html,
+              html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            webView.isHidden = true
+            placeholderLabel.isHidden = false
+            placeholderLabel.stringValue = placeholderMessage
+            return
+        }
+
+        placeholderLabel.isHidden = true
+        webView.isHidden = false
+        isLoadingInjectedHTML = true
+        webView.loadHTMLString(html, baseURL: baseURL)
+    }
+
+    private var placeholderMessage: String {
+        if let message = descriptor.message?.trimmingCharacters(in: .whitespacesAndNewlines), message.isEmpty == false {
+            return message
+        }
+
+        switch descriptor.status {
+        case .ready:
+            return "Waiting for \(descriptor.pluginID) content."
+        case .disabled:
+            return "\(descriptor.pluginID) is disabled."
+        case .error:
+            return "\(descriptor.pluginID) could not render this pane."
+        }
+    }
+
+    private var baseURL: URL? {
+        descriptor.source.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+    }
+}
+
+@MainActor
 final class PaneStackView: NSView {
-    private let terminalPaneView: HostedTerminalPaneView
+    private let paneContentView: NSView
+    private let paneRenderer: any WorkspacePaneRendering
     private let paneCardView = PaneCardView()
 
     init(
@@ -1459,17 +1675,36 @@ final class PaneStackView: NSView {
         iconConfiguration: OmuxConfigUI.Icons,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
-        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        canCloseSinglePaneStack: Bool,
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
+        onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool
     ) {
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
-        self.terminalPaneView = bridge.makeHostedPaneView(
-            for: activePane,
-            isFocused: activePane.id == focusedPaneID,
-            themePalette: theme.terminalPalette,
-            onFocus: onFocus
-        )
+        if let descriptor = activePane.extensionPane {
+            let extensionPaneView = ExtensionPaneHostView(
+                pane: activePane,
+                descriptor: descriptor,
+                isFocused: activePane.id == focusedPaneID,
+                theme: theme,
+                onFocus: onFocus
+            )
+            self.paneRenderer = extensionPaneView
+            self.paneContentView = extensionPaneView
+        } else {
+            let terminalPaneView = bridge.makeHostedPaneView(
+                for: activePane,
+                isFocused: activePane.id == focusedPaneID,
+                themePalette: theme.terminalPalette,
+                onFocus: onFocus,
+                onTextActivation: onTextActivation,
+                onTextActivationHover: onTextActivationHover
+            )
+            self.paneRenderer = terminalPaneView
+            self.paneContentView = terminalPaneView
+        }
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -1479,18 +1714,22 @@ final class PaneStackView: NSView {
             iconResolver: iconResolver,
             iconConfiguration: iconConfiguration,
             terminalTextProvider: { pane in
+                guard pane.isTerminal else {
+                    return nil
+                }
                 let snapshot = bridge.terminalTextSnapshot(for: pane.id, maxBytes: 4_096, maxLines: 40)
                 return snapshot.text.isEmpty ? nil : snapshot.text
             },
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
-            onClosePaneTab: onClosePaneTab,
+            canCloseSinglePaneStack: canCloseSinglePaneStack,
+            onClosePane: onClosePane,
             contextMenuProvider: contextMenuProvider
         )
         paneCardView.configure(
             headerView: headerView,
             statusText: activePane.terminalState.statusSummary,
-            terminalPaneView: terminalPaneView,
+            paneRenderer: paneRenderer,
             theme: theme,
             focused: activePane.id == focusedPaneID
         )
@@ -1509,8 +1748,8 @@ final class PaneStackView: NSView {
         nil
     }
 
-    var focusedPaneView: HostedTerminalPaneView {
-        terminalPaneView
+    var focusedPaneView: NSView {
+        paneContentView
     }
 }
 
@@ -1548,10 +1787,10 @@ final class PaneCardView: NSView {
         nil
     }
 
-    func configure(
+    fileprivate func configure(
         headerView: PaneHeaderView,
         statusText: String?,
-        terminalPaneView: HostedTerminalPaneView,
+        paneRenderer: any WorkspacePaneRendering,
         theme: WorkspaceShellTheme,
         focused: Bool
     ) {
@@ -1560,9 +1799,10 @@ final class PaneCardView: NSView {
             view.removeFromSuperview()
         }
 
-        terminalPaneView.apply(themePalette: theme.terminalPalette)
-        terminalPaneView.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        terminalPaneView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        paneRenderer.apply(theme: theme)
+        let paneView = paneRenderer.rootPaneView
+        paneView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        paneView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         headerView.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
         statusLabel.stringValue = statusText ?? ""
         statusLabel.textColor = theme.shell.textMuted
@@ -1574,8 +1814,8 @@ final class PaneCardView: NSView {
             container.addArrangedSubview(statusLabel)
             statusLabel.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
         }
-        container.addArrangedSubview(terminalPaneView)
-        terminalPaneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        container.addArrangedSubview(paneView)
+        paneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
 
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
@@ -1595,7 +1835,8 @@ final class PaneHeaderView: NSView {
         terminalTextProvider: @escaping @MainActor (Pane) -> String?,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
-        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        canCloseSinglePaneStack: Bool,
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu
     ) {
         super.init(frame: .zero)
@@ -1626,9 +1867,9 @@ final class PaneHeaderView: NSView {
                     pointSize: 11,
                     weight: pane.id == paneStack.focusedPaneID ? .semibold : .medium
                 ).render(iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))),
-                showsClose: paneStack.panes.count > 1,
+                showsClose: paneStack.panes.count > 1 || canCloseSinglePaneStack,
                 onClose: {
-                    try? onClosePaneTab(pane.id)
+                    try? onClosePane(pane.id)
                 }
             )
             button.onPress = { onSelectPaneTab(pane.id) }

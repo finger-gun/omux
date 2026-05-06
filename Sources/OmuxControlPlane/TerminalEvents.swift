@@ -9,6 +9,7 @@ public enum ControlPlaneTerminalEventName: String, Codable, CaseIterable, Sendab
     case desktopNotification = "terminal.desktopNotification"
     case bell = "terminal.bell"
     case inputSent = "terminal.inputSent"
+    case textActivated = "terminal.textActivated"
     case commandFinished = "terminal.commandFinished"
     case progressReported = "terminal.progressReported"
     case childExited = "terminal.childExited"
@@ -26,6 +27,9 @@ public enum ControlPlaneActionEventName: String, Codable, CaseIterable, Sendable
     case commandStarted = "command.started"
     case notificationRaised = "notification.raised"
     case workspaceRestored = "workspace.restored"
+    case extensionPaneCreated = "extensionPane.created"
+    case extensionPaneUpdated = "extensionPane.updated"
+    case extensionPaneClosed = "extensionPane.closed"
 }
 
 public struct ControlPlaneEvent: Equatable, Codable, Sendable {

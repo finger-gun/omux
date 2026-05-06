@@ -3,6 +3,7 @@ import Darwin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxMarkdownPreviewPlugin
 import OmuxTheme
 
 public struct OmuxCLICommand {
@@ -11,10 +12,14 @@ public struct OmuxCLICommand {
     private let readInputLine: () -> String?
     private let isInteractiveThemePickerAvailable: () -> Bool
     private let selectThemeInteractively: ([OmuxTheme], String?) throws -> OmuxTheme?
+    private let isInteractivePluginPickerAvailable: () -> Bool
+    private let selectPluginInteractively: ([PluginPickerItem]) throws -> PluginPickerItem?
     private let configLoader: OmuxConfigLoader
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
     private let versionProvider: OpenMUXVersionProvider
+    private let pluginRegistry: OmuxCLIPluginRegistry
+    private let pluginRunner: OmuxCLIPluginRunner
     private let environment: () -> [String: String]
 
     public init(
@@ -34,7 +39,9 @@ public struct OmuxCLICommand {
             versionProvider: OpenMUXVersionProvider(),
             environment: { ProcessInfo.processInfo.environment },
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
-            selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) }
+            selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) },
+            isInteractivePluginPickerAvailable: TerminalPluginPicker.isAvailable,
+            selectPluginInteractively: { try TerminalPluginPicker().selectPlugin(items: $0) }
         )
     }
 
@@ -46,10 +53,16 @@ public struct OmuxCLICommand {
         themeRegistry: OmuxThemeRegistry,
         installer: OmuxCLIInstaller,
         versionProvider: OpenMUXVersionProvider = OpenMUXVersionProvider(),
+        pluginRegistry: OmuxCLIPluginRegistry = OmuxCLIPluginRegistry(),
+        pluginRunner: OmuxCLIPluginRunner = OmuxCLIPluginRunner(),
         environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
         selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
             try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1)
+        },
+        isInteractivePluginPickerAvailable: @escaping () -> Bool = TerminalPluginPicker.isAvailable,
+        selectPluginInteractively: @escaping ([PluginPickerItem]) throws -> PluginPickerItem? = {
+            try TerminalPluginPicker().selectPlugin(items: $0)
         }
     ) {
         self.client = client
@@ -57,10 +70,14 @@ public struct OmuxCLICommand {
         self.readInputLine = readInputLine
         self.isInteractiveThemePickerAvailable = isInteractiveThemePickerAvailable
         self.selectThemeInteractively = selectThemeInteractively
+        self.isInteractivePluginPickerAvailable = isInteractivePluginPickerAvailable
+        self.selectPluginInteractively = selectPluginInteractively
         self.configLoader = configLoader
         self.themeRegistry = themeRegistry
         self.installer = installer
         self.versionProvider = versionProvider
+        self.pluginRegistry = pluginRegistry
+        self.pluginRunner = pluginRunner
         self.environment = environment
     }
 
@@ -85,6 +102,8 @@ public struct OmuxCLICommand {
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "theme":
                 return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
+            case "plugin", "plugins":
+                return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -107,6 +126,8 @@ public struct OmuxCLICommand {
                 }
             case "history":
                 return try runHistoryCommand(arguments: Array(commandArguments.dropFirst()))
+            case "extension-pane":
+                return try runExtensionPaneCommand(arguments: Array(commandArguments.dropFirst()))
             case "tab":
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
@@ -276,6 +297,9 @@ public struct OmuxCLICommand {
             case "install-cli":
                 return runInstallCLI(arguments: Array(commandArguments.dropFirst()))
             default:
+                if let registration = pluginRegistry.registration(named: command) {
+                    return try runRegisteredPlugin(registration, arguments: Array(commandArguments.dropFirst()))
+                }
                 writeLine(Self.usage)
                 return 1
             }
@@ -299,12 +323,19 @@ public struct OmuxCLICommand {
       omux theme
       omux theme <name>
       omux theme list
+      omux plugins
+      omux plugin list
+      omux plugin path
       omux list [--full]
       omux sessions
       omux panes
       omux events
       omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
       omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]
+      omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]
+      omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]
+      omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]
+      omux extension-pane close --pane <id>
       omux open [path]
       omux workspace-close [workspace-id]
       omux tab
@@ -337,6 +368,389 @@ public struct OmuxCLICommand {
         )
         .standardizedFileURL
         .path
+    }
+
+    private func runPluginCommand(arguments: [String]) -> Int32 {
+        guard let subcommand = arguments.first else {
+            return runPluginTogglePicker()
+        }
+
+        switch subcommand {
+        case "list":
+            guard arguments.count == 1 else {
+                writeLine("usage: omux plugin list")
+                return 1
+            }
+            let plugins = pluginRegistry.plugins()
+            guard plugins.isEmpty == false else {
+                writeLine("No plugins installed.")
+                return 0
+            }
+            for plugin in plugins {
+                writeLine("\(plugin.commandName)\t\(plugin.displayPath)")
+            }
+            return 0
+        case "path":
+            guard arguments.count == 1 else {
+                writeLine("usage: omux plugin path")
+                return 1
+            }
+            writeLine(pluginRegistry.pluginsDirectoryURL.path)
+            return 0
+        default:
+            writeLine("usage: omux plugins OR omux plugin list|path")
+            return 1
+        }
+    }
+
+    private func runPluginTogglePicker() -> Int32 {
+        do {
+            let configResult = configLoader.load()
+            guard configResult.hasErrors == false else {
+                return printDiagnosticsAndReturnCode(configResult.diagnostics)
+            }
+
+            let items = pluginPickerItems(config: configResult.config)
+            guard items.isEmpty == false else {
+                writeLine("No plugins installed.")
+                return 0
+            }
+
+            let selectedItem: PluginPickerItem?
+            if isInteractivePluginPickerAvailable() {
+                guard let item = try selectPluginInteractively(items) else {
+                    writeLine("Cancelled.")
+                    return 0
+                }
+                selectedItem = item
+            } else {
+                printPluginPickerItems(items)
+                writeLine("Select plugin number or name to toggle:")
+                guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      input.isEmpty == false else {
+                    writeLine("omux error: no plugin selected")
+                    return 1
+                }
+                if ["q", "quit", "exit"].contains(input.lowercased()) {
+                    writeLine("Cancelled.")
+                    return 0
+                }
+                selectedItem = resolvePluginSelection(input, items: items)
+            }
+
+            guard let selectedItem else {
+                writeLine("omux error: unknown plugin")
+                return 1
+            }
+            guard selectedItem.canToggle else {
+                writeLine("Plugin \(selectedItem.commandName) is registered externally and cannot be toggled from OpenMUX config.")
+                return 1
+            }
+
+            return try togglePlugin(selectedItem, current: configResult.config)
+        } catch {
+            writeLine("omux error: \(error)")
+            return 1
+        }
+    }
+
+    private func pluginPickerItems(config: OmuxConfig) -> [PluginPickerItem] {
+        pluginRegistry.plugins().map { plugin in
+            switch plugin {
+            case .bundled(let bundledPlugin):
+                let isEnabled: Bool
+                let canToggle: Bool
+                switch bundledPlugin.commandName {
+                case OmuxMarkdownPreviewPlugin.commandName:
+                    isEnabled = config.plugins.markdownPreview.enabled
+                    canToggle = true
+                default:
+                    isEnabled = true
+                    canToggle = false
+                }
+                return PluginPickerItem(
+                    commandName: bundledPlugin.commandName,
+                    displayPath: bundledPlugin.displayPath,
+                    isEnabled: isEnabled,
+                    canToggle: canToggle
+                )
+            case .external(let externalPlugin):
+                return PluginPickerItem(
+                    commandName: externalPlugin.commandName,
+                    displayPath: externalPlugin.executableURL.path,
+                    isEnabled: true,
+                    canToggle: false
+                )
+            }
+        }
+    }
+
+    private func printPluginPickerItems(_ items: [PluginPickerItem]) {
+        writeLine("Available plugins:")
+        for (index, item) in items.enumerated() {
+            writeLine("\(index + 1). \(item.statusLabel) \(item.commandName) — \(item.displayPath)")
+        }
+    }
+
+    private func resolvePluginSelection(_ selection: String, items: [PluginPickerItem]) -> PluginPickerItem? {
+        if let index = Int(selection), items.indices.contains(index - 1) {
+            return items[index - 1]
+        }
+
+        let normalizedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items.first { $0.commandName.lowercased() == normalizedSelection }
+    }
+
+    private func togglePlugin(_ item: PluginPickerItem, current: OmuxConfig) throws -> Int32 {
+        let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
+        let plugins: OmuxConfigPlugins
+        switch item.commandName {
+        case OmuxMarkdownPreviewPlugin.commandName:
+            let markdownPreview = current.plugins.markdownPreview
+            plugins = OmuxConfigPlugins(
+                markdownPreview: OmuxConfigPlugins.MarkdownPreview(
+                    enabled: !markdownPreview.enabled,
+                    renderer: markdownPreview.renderer,
+                    theme: markdownPreview.theme
+                )
+            )
+        default:
+            writeLine("Plugin \(item.commandName) cannot be toggled from OpenMUX config.")
+            return 1
+        }
+
+        let updated = OmuxConfig(
+            schema: current.schema,
+            autoCheckUpdate: current.autoCheckUpdate,
+            theme: current.theme,
+            terminal: current.terminal,
+            workspace: current.workspace,
+            ui: current.ui,
+            plugins: plugins,
+            keyBindings: current.keyBindings,
+            ghostty: current.ghostty,
+            sourceURL: configURL
+        )
+
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
+
+        let state = item.isEnabled ? "disabled" : "enabled"
+        writeLine("Plugin \(item.commandName) \(state).")
+        return try runConfigReload()
+    }
+
+    private func runRegisteredPlugin(_ plugin: OmuxRegisteredCLIPlugin, arguments: [String]) throws -> Int32 {
+        switch plugin {
+        case .bundled(let bundledPlugin):
+            switch bundledPlugin.commandName {
+            case OmuxMarkdownPreviewPlugin.commandName:
+                return try runMarkdownPreviewCommand(arguments: arguments)
+            default:
+                writeLine("omux error: bundled plugin '\(bundledPlugin.commandName)' is not available")
+                return 1
+            }
+        case .external(let externalPlugin):
+            return try pluginRunner.run(
+                plugin: externalPlugin,
+                arguments: arguments,
+                environment: environment()
+            )
+        }
+    }
+
+    private func runMarkdownPreviewCommand(arguments: [String]) throws -> Int32 {
+        guard let request = parseMarkdownPreviewRequest(arguments) else {
+            writeLine("usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]")
+            return 1
+        }
+
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        let pluginConfig = configResult.config.plugins.markdownPreview
+        guard pluginConfig.enabled else {
+            writeLine("Markdown preview plugin is disabled. Enable [plugins.markdown-preview] enabled = true in ~/.omux/config.toml.")
+            return 1
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: request.fileURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false,
+              FileManager.default.isReadableFile(atPath: request.fileURL.path)
+        else {
+            writeLine("omux markdown-preview error: readable Markdown file not found: \(request.fileURL.path)")
+            return 1
+        }
+
+        return try OmuxMarkdownPreviewPlugin(
+            renderer: OmuxMarkdownPreviewRenderer(theme: pluginConfig.theme)
+        ).run(
+            request: request,
+            client: client,
+            writeLine: writeLine
+        )
+    }
+
+    private func parseMarkdownPreviewRequest(_ arguments: [String]) -> OmuxMarkdownPreviewRequest? {
+        var filePath: String?
+        var paneID: String?
+        var title: String?
+        var watch = false
+        var axis = PaneSplitAxis.columns
+        var index = 0
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--watch":
+                watch = true
+                index += 1
+            case "--pane":
+                guard index + 1 < arguments.count else {
+                    return nil
+                }
+                paneID = arguments[index + 1]
+                index += 2
+            case "--title":
+                guard index + 1 < arguments.count else {
+                    return nil
+                }
+                title = arguments[index + 1]
+                index += 2
+            case "--axis":
+                guard index + 1 < arguments.count,
+                      let parsedAxis = PaneSplitAxis(rawValue: arguments[index + 1])
+                else {
+                    return nil
+                }
+                axis = parsedAxis
+                index += 2
+            default:
+                guard argument.hasPrefix("-") == false, filePath == nil else {
+                    return nil
+                }
+                filePath = argument
+                index += 1
+            }
+        }
+
+        guard let filePath else {
+            return nil
+        }
+
+        return OmuxMarkdownPreviewRequest(
+            fileURL: URL(fileURLWithPath: resolveCLIPath(filePath)),
+            paneID: paneID,
+            title: title,
+            watch: watch,
+            axis: axis
+        )
+    }
+
+    private func runExtensionPaneCommand(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux extension-pane create|update|close ...")
+            return 1
+        }
+
+        switch subcommand {
+        case "create":
+            guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: false) else {
+                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]")
+                return 1
+            }
+            let response = try client.request(method: .createExtensionPane, params: .object(request))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "update":
+            guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: true) else {
+                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]")
+                return 1
+            }
+            let response = try client.request(method: .updateExtensionPane, params: .object(request))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "close":
+            guard arguments.count == 3, arguments[1] == "--pane" else {
+                writeLine("usage: omux extension-pane close --pane <id>")
+                return 1
+            }
+            let response = try client.request(
+                method: .closeExtensionPane,
+                params: .object(["paneID": .string(arguments[2])])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        default:
+            writeLine("usage: omux extension-pane create|update|close ...")
+            return 1
+        }
+    }
+
+    private func parseExtensionPaneRequest(
+        _ arguments: [String],
+        requiresPaneID: Bool
+    ) -> [String: RPCValue]? {
+        var params: [String: RPCValue] = [:]
+        var index = 0
+        while index < arguments.count {
+            let option = arguments[index]
+            guard index + 1 < arguments.count else {
+                return nil
+            }
+            let value = arguments[index + 1]
+            switch option {
+            case "--pane":
+                params["paneID"] = .string(value)
+            case "--plugin":
+                params["pluginID"] = .string(value)
+            case "--title":
+                params["title"] = .string(value)
+            case "--source":
+                params["source"] = .string(resolveCLIPath(value))
+            case "--html":
+                params["html"] = .string(value)
+            case "--html-file":
+                guard let html = try? String(contentsOfFile: resolveCLIPath(value), encoding: .utf8) else {
+                    return nil
+                }
+                params["html"] = .string(html)
+            case "--status":
+                guard ExtensionPaneStatus(rawValue: value) != nil else {
+                    return nil
+                }
+                params["status"] = .string(value)
+            case "--message":
+                params["message"] = .string(value)
+            case "--content-kind":
+                guard ExtensionPaneContentKind(rawValue: value) != nil else {
+                    return nil
+                }
+                params["contentKind"] = .string(value)
+            case "--axis":
+                guard PaneSplitAxis(rawValue: value) != nil else {
+                    return nil
+                }
+                params["axis"] = .string(value)
+            default:
+                return nil
+            }
+            index += 2
+        }
+
+        guard params["pluginID"] != nil else {
+            return nil
+        }
+        if requiresPaneID, params["paneID"] == nil {
+            return nil
+        }
+        return params
     }
 
     private func parseSplitRequest(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, axis: PaneSplitAxis)? {
@@ -845,8 +1259,11 @@ public struct OmuxCLICommand {
             return 1
         }
 
+        let progressRenderer = OmuxTerminalProgressRenderer(writeLine: writeLine)
         _ = try OmuxSelfUpdater(
             versionProvider: versionProvider,
+            writeProgress: progressRenderer.render,
+            finishProgress: progressRenderer.finish,
             writeLine: writeLine,
             readInputLine: readInputLine
         ).runUpdate()
@@ -867,6 +1284,8 @@ public struct OmuxCLICommand {
             theme: OmuxConfigTheme(name: theme.name),
             terminal: current.terminal,
             workspace: current.workspace,
+            ui: current.ui,
+            plugins: current.plugins,
             keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
@@ -949,6 +1368,22 @@ public struct OmuxCLICommand {
         lines.append("")
         lines.append("[workspace]")
         lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
+
+        lines.append("")
+        lines.append("[ui.icons]")
+        lines.append("enabled = \(config.ui.icons.enabled ? "true" : "false")")
+        lines.append("provider = \(render(.string(config.ui.icons.provider.rawValue)))")
+        if let fontFamily = config.ui.icons.fontFamily {
+            lines.append("font_family = \(render(.string(fontFamily)))")
+        }
+        lines.append("colors_enabled = \(config.ui.icons.colorsEnabled ? "true" : "false")")
+
+        lines.append("")
+        lines.append("[plugins.markdown-preview]")
+        let markdownPreview = config.plugins.markdownPreview
+        lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
+        lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
+        lines.append("theme = \(render(.string(markdownPreview.theme)))")
 
         lines.append("")
         lines.append("[keys]")
@@ -1052,6 +1487,35 @@ struct ThemePickerViewport: Equatable {
             endIndex: startIndex + visibleCount,
             visibleCount: visibleCount
         )
+    }
+}
+
+private final class OmuxTerminalProgressRenderer {
+    private let isTerminal = isatty(STDOUT_FILENO) == 1
+    private let writeLine: (String) -> Void
+    private var renderedWidth = 0
+
+    init(writeLine: @escaping (String) -> Void) {
+        self.writeLine = writeLine
+    }
+
+    func render(_ line: String) {
+        guard isTerminal else {
+            writeLine(line)
+            return
+        }
+
+        let paddingWidth = max(renderedWidth - line.count, 0)
+        renderedWidth = line.count
+        print("\r\(line)\(String(repeating: " ", count: paddingWidth))", terminator: "")
+        fflush(stdout)
+    }
+
+    func finish() {
+        guard isTerminal else {
+            return
+        }
+        print("")
     }
 }
 
@@ -1441,6 +1905,352 @@ private extension RPCValue {
             return value
         }
         return nil
+    }
+}
+
+struct PluginPickerItem: Equatable {
+    let commandName: String
+    let displayPath: String
+    let isEnabled: Bool
+    let canToggle: Bool
+
+    var statusLabel: String {
+        if canToggle {
+            return isEnabled ? "[enabled]" : "[disabled]"
+        }
+        return "[external]"
+    }
+}
+
+struct PluginPickerSearch {
+    static func filteredItems(_ items: [PluginPickerItem], query: String) -> [PluginPickerItem] {
+        let terms = query
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard terms.isEmpty == false else {
+            return items
+        }
+
+        return items.filter { item in
+            terms.allSatisfy { term in
+                matches(term: term, in: item.commandName.lowercased())
+                    || matches(term: term, in: item.displayPath.lowercased())
+                    || matches(term: term, in: item.statusLabel.lowercased())
+            }
+        }
+    }
+
+    private static func matches(term: String, in candidate: String) -> Bool {
+        if candidate.contains(term) {
+            return true
+        }
+
+        var remaining = term[...]
+        for character in candidate where remaining.first == character {
+            remaining.removeFirst()
+            if remaining.isEmpty {
+                return true
+            }
+        }
+        return remaining.isEmpty
+    }
+}
+
+private struct TerminalPluginPicker {
+    enum PickerError: Error, LocalizedError {
+        case terminalUnavailable
+        case unableToReadTerminalAttributes
+        case unableToEnterRawMode
+        case unableToRestoreTerminalMode
+
+        var errorDescription: String? {
+            switch self {
+            case .terminalUnavailable:
+                return "interactive terminal is not available"
+            case .unableToReadTerminalAttributes:
+                return "unable to read terminal attributes"
+            case .unableToEnterRawMode:
+                return "unable to enter raw terminal mode"
+            case .unableToRestoreTerminalMode:
+                return "unable to restore terminal mode"
+            }
+        }
+    }
+
+    private enum Key {
+        case up
+        case down
+        case enter
+        case cancel
+        case backspace
+        case character(Character)
+        case other
+    }
+
+    static func isAvailable() -> Bool {
+        isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+    }
+
+    func selectPlugin(items: [PluginPickerItem]) throws -> PluginPickerItem? {
+        guard Self.isAvailable() else {
+            throw PickerError.terminalUnavailable
+        }
+        guard items.isEmpty == false else {
+            return nil
+        }
+
+        var selectedIndex = 0
+        var query = ""
+        var filteredItems = PluginPickerSearch.filteredItems(items, query: query)
+        var renderedLineCount = 0
+
+        return try withRawTerminalMode {
+            write("\u{1B}[?25l")
+            defer {
+                clearRenderedLines(renderedLineCount)
+                write("\u{1B}[?25h")
+            }
+
+            render(
+                items: filteredItems,
+                totalItemCount: items.count,
+                selectedIndex: selectedIndex,
+                searchQuery: query,
+                previousLineCount: &renderedLineCount
+            )
+
+            while true {
+                switch readKey() {
+                case .up:
+                    guard filteredItems.isEmpty == false else {
+                        continue
+                    }
+                    selectedIndex = selectedIndex == 0 ? filteredItems.count - 1 : selectedIndex - 1
+                    render(
+                        items: filteredItems,
+                        totalItemCount: items.count,
+                        selectedIndex: selectedIndex,
+                        searchQuery: query,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .down:
+                    guard filteredItems.isEmpty == false else {
+                        continue
+                    }
+                    selectedIndex = selectedIndex == filteredItems.count - 1 ? 0 : selectedIndex + 1
+                    render(
+                        items: filteredItems,
+                        totalItemCount: items.count,
+                        selectedIndex: selectedIndex,
+                        searchQuery: query,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .enter:
+                    guard filteredItems.isEmpty == false else {
+                        continue
+                    }
+                    return filteredItems[selectedIndex]
+                case .cancel:
+                    return nil
+                case .backspace:
+                    guard query.isEmpty == false else {
+                        continue
+                    }
+                    query.removeLast()
+                    filteredItems = PluginPickerSearch.filteredItems(items, query: query)
+                    selectedIndex = min(selectedIndex, max(0, filteredItems.count - 1))
+                    render(
+                        items: filteredItems,
+                        totalItemCount: items.count,
+                        selectedIndex: selectedIndex,
+                        searchQuery: query,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .character(let character):
+                    query.append(character)
+                    filteredItems = PluginPickerSearch.filteredItems(items, query: query)
+                    selectedIndex = 0
+                    render(
+                        items: filteredItems,
+                        totalItemCount: items.count,
+                        selectedIndex: selectedIndex,
+                        searchQuery: query,
+                        previousLineCount: &renderedLineCount
+                    )
+                case .other:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func withRawTerminalMode<Result>(_ body: () throws -> Result) throws -> Result {
+        var original = termios()
+        guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+            throw PickerError.unableToReadTerminalAttributes
+        }
+
+        var raw = original
+        cfmakeraw(&raw)
+        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
+            throw PickerError.unableToEnterRawMode
+        }
+
+        do {
+            let result = try body()
+            guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) == 0 else {
+                throw PickerError.unableToRestoreTerminalMode
+            }
+            return result
+        } catch {
+            _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
+            throw error
+        }
+    }
+
+    private func render(
+        items: [PluginPickerItem],
+        totalItemCount: Int,
+        selectedIndex: Int,
+        searchQuery: String,
+        previousLineCount: inout Int
+    ) {
+        clearRenderedLines(previousLineCount)
+
+        let viewport = ThemePickerViewport.make(
+            itemCount: items.count,
+            selectedIndex: selectedIndex,
+            terminalRows: terminalRowCount(),
+            reservedRows: 3
+        )
+        let selectedOrdinal = items.isEmpty ? 0 : min(max(0, selectedIndex), items.count - 1) + 1
+        let searchHint = searchQuery.isEmpty
+            ? "type to search, Up/Down, Enter toggles, Esc"
+            : "type to search, Backspace, Enter toggles, Esc"
+        let countLabel = items.count == totalItemCount
+            ? "\(selectedOrdinal)/\(items.count)"
+            : "\(selectedOrdinal)/\(items.count) of \(totalItemCount)"
+        var lines = ["Available plugins \(countLabel) (\(searchHint)):"]
+        lines.append("Search: \(searchQuery)")
+
+        if items.isEmpty {
+            lines.append("  No matching plugins")
+        } else {
+            for index in viewport.startIndex..<viewport.endIndex {
+                let item = items[index]
+                let pointer = index == selectedIndex ? ">" : " "
+                let line = "\(pointer) \(item.statusLabel) \(item.commandName) — \(item.displayPath)"
+                lines.append(index == selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
+            }
+        }
+
+        if viewport.visibleCount < items.count {
+            lines.append("Showing \(viewport.startIndex + 1)-\(viewport.endIndex) of \(items.count)")
+        }
+
+        write(lines.map { "\u{1B}[2K\r\($0)" }.joined(separator: "\n") + "\n")
+        previousLineCount = lines.count
+    }
+
+    private func terminalRowCount() -> Int {
+        var size = winsize()
+        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0 else {
+            return 24
+        }
+        return Int(size.ws_row)
+    }
+
+    private func clearRenderedLines(_ lineCount: Int) {
+        guard lineCount > 0 else {
+            return
+        }
+
+        write("\u{1B}[\(lineCount)A")
+        for index in 0..<lineCount {
+            write("\u{1B}[2K\r")
+            if index < lineCount - 1 {
+                write("\u{1B}[1B")
+            }
+        }
+        write("\u{1B}[\(lineCount - 1)A")
+    }
+
+    private func readKey() -> Key {
+        guard let byte = readByte() else {
+            return .cancel
+        }
+
+        switch byte {
+        case 0x03:
+            return .cancel
+        case 0x0A, 0x0D:
+            return .enter
+        case 0x08, 0x7F:
+            return .backspace
+        case 0x1B:
+            guard let second = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            guard second == 0x5B, let third = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            if third == 0x41 {
+                return .up
+            }
+            if third == 0x42 {
+                return .down
+            }
+            return .other
+        case 0x6A:
+            return .down
+        case 0x6B:
+            return .up
+        case 0x20...0x7E:
+            guard let scalar = UnicodeScalar(Int(byte)) else {
+                return .other
+            }
+            return .character(Character(scalar))
+        default:
+            return .other
+        }
+    }
+
+    private func readByte(timeoutMicroseconds: Int? = nil) -> UInt8? {
+        if let timeoutMicroseconds {
+            let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+            guard flags >= 0 else {
+                return nil
+            }
+            guard fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+                return nil
+            }
+            defer {
+                _ = fcntl(STDIN_FILENO, F_SETFL, flags)
+            }
+
+            let deadline = Date().addingTimeInterval(Double(timeoutMicroseconds) / 1_000_000)
+            while Date() < deadline {
+                var byte: UInt8 = 0
+                let count = Darwin.read(STDIN_FILENO, &byte, 1)
+                if count == 1 {
+                    return byte
+                }
+                if errno != EAGAIN && errno != EWOULDBLOCK {
+                    return nil
+                }
+                usleep(1_000)
+            }
+            return nil
+        }
+
+        var byte: UInt8 = 0
+        let count = Darwin.read(STDIN_FILENO, &byte, 1)
+        return count == 1 ? byte : nil
+    }
+
+    private func write(_ text: String) {
+        FileHandle.standardOutput.write(Data(text.utf8))
     }
 }
 

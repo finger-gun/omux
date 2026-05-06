@@ -295,6 +295,89 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
     }
 
+    func testTerminalTextActivationOpensMarkdownPreviewWhenPluginEnabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TerminalTextActivationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let readmeURL = root.appendingPathComponent("README.md")
+        try "# Hello\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = "README.md"
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview(enabled: true)
+        )
+        var events = [ControlPlaneEvent]()
+        controller.onTerminalEvent = { events.append($0) }
+        let workspace = try controller.openWorkspace(at: root.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let session = try XCTUnwrap(pane.terminalSession)
+        _ = try bridge.attach(session: session, to: pane)
+
+        let claimed = controller.handleTerminalTextActivation(
+            TerminalTextActivationRequest(
+                paneID: pane.id,
+                location: CGPoint(x: 1, y: 1),
+                viewSize: CGSize(width: 80, height: 20),
+                terminalSize: TerminalSize(columns: 10, rows: 1),
+                modifiers: [.leftCommand]
+            )
+        )
+
+        XCTAssertTrue(claimed)
+        let extensionPane = controller.activeWorkspace()?.tabs
+            .flatMap(\.panes)
+            .compactMap(\.extensionPane)
+            .first { $0.source == readmeURL.path }
+        XCTAssertEqual(extensionPane?.pluginID, "dev.fingergun.markdown-preview")
+        XCTAssertEqual(extensionPane?.status, .ready)
+        XCTAssertTrue(extensionPane?.html?.contains("<h1>Hello</h1>") ?? false)
+        XCTAssertTrue(events.contains { event in
+            event.name == ControlPlaneTerminalEventName.textActivated.rawValue
+                && event.paneID == pane.id
+                && event.payload.objectValue?["token"] == .string("README.md")
+        })
+    }
+
+    func testTerminalTextActivationDoesNotClaimMarkdownWhenPluginDisabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TerminalTextActivationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let readmeURL = root.appendingPathComponent("README.md")
+        try "# Hello\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = "README.md"
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview(enabled: false)
+        )
+        let workspace = try controller.openWorkspace(at: root.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let session = try XCTUnwrap(pane.terminalSession)
+        _ = try bridge.attach(session: session, to: pane)
+
+        let claimed = controller.handleTerminalTextActivation(
+            TerminalTextActivationRequest(
+                paneID: pane.id,
+                location: CGPoint(x: 1, y: 1),
+                viewSize: CGSize(width: 80, height: 20),
+                terminalSize: TerminalSize(columns: 10, rows: 1),
+                modifiers: [.leftCommand]
+            )
+        )
+
+        XCTAssertFalse(claimed)
+        XCTAssertTrue(controller.activeWorkspace()?.tabs.flatMap(\.panes).allSatisfy { $0.extensionPane == nil } ?? false)
+    }
+
     func testWorkspaceControllerResizesAndEqualizesFocusedSplit() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -1060,6 +1143,34 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
+    func testWorkspaceControllerCanCloseTerminalPaneThatOpenedExtensionPreview() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let terminalSurfaceID = try XCTUnwrap(bridge.surface(for: terminalPaneID)?.runtimeSurfaceID)
+        let extensionResult = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>"
+            )
+        ))
+
+        let updatedWorkspace = try XCTUnwrap(controller.closePane(paneID: terminalPaneID))
+
+        XCTAssertEqual(updatedWorkspace.focusedTab?.panes.map(\.id), [extensionResult.pane.id])
+        XCTAssertEqual(updatedWorkspace.focusedPane?.id, extensionResult.pane.id)
+        XCTAssertEqual(runtime.destroyedSurfaceIDs, [terminalSurfaceID])
+    }
+
     func testWorkspaceControllerDeletesActiveWorkspaceWhenAnotherExists() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -1324,6 +1435,30 @@ final class OmuxAppShellTests: XCTestCase {
         let updatedPane = try XCTUnwrap(updatedSnapshot.workspaces.first?.focusedPane)
 
         XCTAssertEqual(updatedPane.terminalState.restoredScrollback?.text, "new history")
+    }
+
+    func testHistoryClearIgnoresExtensionPanes() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let terminalPane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: terminalPane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[surfaceID] = "terminal history"
+        let extensionResult = try XCTUnwrap(controller.createExtensionPane(
+            title: "Preview",
+            descriptor: ExtensionPaneDescriptor(pluginID: "dev.fingergun.markdown-preview", source: "/tmp/project/README.md")
+        ))
+
+        let result = try XCTUnwrap(controller.clearTerminalHistory(ControlPlaneHistoryClearRequest()))
+
+        XCTAssertNotNil(extensionResult.pane.extensionPane)
+        XCTAssertEqual(result.clearedCount, 1)
+        XCTAssertEqual(runtime.clearedScreenAndScrollbackSurfaceIDs, [surfaceID])
     }
 
     func testPersistenceSanitizesRepeatedPromptAndLoginTailNoise() throws {
@@ -3153,6 +3288,93 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testControlPlaneManagesExtensionPaneLifecycleAndRejectsTerminalClose() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-ext-\(UUID().uuidString).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+
+        try service.start()
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let createResponse = try requestControlMethod(
+            .createExtensionPane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "pluginID": .string("dev.fingergun.markdown-preview"),
+                "title": .string("README.md"),
+                "source": .string("/tmp/README.md"),
+                "html": .string("<h1>README</h1>"),
+            ])
+        )
+
+        XCTAssertNil(createResponse.error)
+        guard case .object(let created)? = createResponse.result,
+              case .string(let extensionPaneIDRaw)? = created["paneID"]
+        else {
+            return XCTFail("expected extension pane result")
+        }
+
+        let extensionPaneID = PaneID(rawValue: extensionPaneIDRaw)
+        let updateResponse = try requestControlMethod(
+            .updateExtensionPane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "paneID": .string(extensionPaneID.rawValue),
+                "pluginID": .string("dev.fingergun.markdown-preview"),
+                "title": .string("README.md"),
+                "status": .string("error"),
+                "message": .string("render failed"),
+            ])
+        )
+        XCTAssertNil(updateResponse.error)
+        XCTAssertEqual(
+            controller.allWorkspaces().flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == extensionPaneID })?.extensionPane?.status,
+            .error
+        )
+
+        let closeTerminalResponse = try requestControlMethod(
+            .closeExtensionPane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["paneID": .string(terminalPaneID.rawValue)])
+        )
+        XCTAssertEqual(closeTerminalResponse.error?.code, 400)
+
+        let closeExtensionResponse = try requestControlMethod(
+            .closeExtensionPane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["paneID": .string(extensionPaneID.rawValue)])
+        )
+        XCTAssertNil(closeExtensionResponse.error)
+        XCTAssertNil(controller.allWorkspaces().flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == extensionPaneID }))
+    }
+
+    @MainActor
     func testControlPlaneWorkspaceMutationsRunOnMainThreadForHookDrivenRequests() throws {
         let runtime = MainThreadRecordingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3678,6 +3900,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
     var failNextSend = false
@@ -3695,6 +3918,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     }
 
     func destroySurface(runtimeSurfaceID: String) throws {
+        destroyedSurfaceIDs.append(runtimeSurfaceID)
         sessions.removeValue(forKey: runtimeSurfaceID)
         transcriptBySurface.removeValue(forKey: runtimeSurfaceID)
         inputBySurface.removeValue(forKey: runtimeSurfaceID)

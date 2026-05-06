@@ -46,6 +46,7 @@ public protocol GhosttyRuntime {
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws
     func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection?
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
+    func surfaceSize(runtimeSurfaceID: String) -> TerminalSize?
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
     func setTerminalActionHandler(
         _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
@@ -97,6 +98,11 @@ public extension GhosttyRuntime {
         _ = runtimeSurfaceID
         _ = columns
         _ = rows
+    }
+
+    func surfaceSize(runtimeSurfaceID: String) -> TerminalSize? {
+        _ = runtimeSurfaceID
+        return nil
     }
 
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
@@ -410,14 +416,18 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         for pane: Pane,
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
     ) -> HostedTerminalPaneView {
         HostedTerminalPaneView(
             pane: pane,
             bridge: self,
             isFocused: isFocused,
             themePalette: themePalette,
-            onFocus: onFocus
+            onFocus: onFocus,
+            onTextActivation: onTextActivation,
+            onTextActivationHover: onTextActivationHover
         )
     }
 
@@ -548,6 +558,16 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             maxBytes: maxBytes,
             maxLines: maxLines
         )
+    }
+
+    public func terminalSize(for paneID: PaneID) -> TerminalSize? {
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+        guard let state else {
+            return nil
+        }
+        return runtime.surfaceSize(runtimeSurfaceID: state.runtimeSurfaceID) ?? state.size
     }
 
     public func selection(forPane paneID: PaneID) -> RuntimeTerminalSelection? {
@@ -777,7 +797,10 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         for pane: Pane,
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) -> any TerminalSurfaceContentHosting {
         if let surface = surface(for: pane.id),
             let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
@@ -787,7 +810,10 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
                 bridge: self,
                 isFocused: isFocused,
                 themePalette: themePalette,
-                onFocus: onFocus
+                onFocus: onFocus,
+                terminalSizeProvider: terminalSizeProvider,
+                onTextActivation: onTextActivation,
+                onTextActivationHover: onTextActivationHover
             )
         }
 

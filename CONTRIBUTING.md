@@ -28,6 +28,9 @@ You can help by:
 * Explain the problem your change solves.
 * Update documentation when behavior or project structure changes.
 * Add or update tests when code changes affect behavior.
+* Run the relevant validation before handing off. For most code changes, start with `make setup` if needed, then run `make verify`.
+
+For local setup and day-to-day commands, see the [Developer quick start](./docs/developer.md). For module boundaries and architecture notes, see [Development notes](./docs/development.md).
 
 ---
 

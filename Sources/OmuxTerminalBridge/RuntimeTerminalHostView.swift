@@ -8,6 +8,9 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     private let normalizer = BridgeAppKitKeyEventNormalizer()
     private var paneID: PaneID?
     private var onFocus: (@MainActor (PaneID) -> Void)?
+    private var terminalSizeProvider: (@MainActor () -> TerminalSize?)?
+    private var onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
+    private var onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     private var isFocusedPane = false
 
     var normalizedKeyHandler: ((NormalizedKeyEvent) -> Void)?
@@ -32,6 +35,8 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     private var interpretedTerminalEventHandled = false
     private var trackingAreaRef: NSTrackingArea?
     private var pressedMouseButtons: Set<Int> = []
+    private var activationClaimedButtons: Set<Int> = []
+    private(set) var isTextActivationCursorActive = false
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -48,11 +53,17 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     func configureHostedPane(
         paneID: PaneID,
         isFocused: Bool,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) {
         self.paneID = paneID
         self.isFocusedPane = isFocused
         self.onFocus = onFocus
+        self.terminalSizeProvider = terminalSizeProvider
+        self.onTextActivation = onTextActivation
+        self.onTextActivationHover = onTextActivationHover
     }
 
     func updateHostedPaneFocus(_ isFocused: Bool) {
@@ -64,11 +75,17 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         if isFocusedPane == false, let paneID {
             onFocus?(paneID)
         }
+        if handleTextActivation(event, buttonNumber: 0) {
+            return
+        }
         handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_PRESS, buttonNumber: 0)
     }
 
     override func mouseUp(with event: NSEvent) {
+        if activationClaimedButtons.remove(0) != nil {
+            return
+        }
         handleMousePosition(event)
         _ = handleMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, buttonNumber: 0)
     }
@@ -113,6 +130,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 
     override func mouseExited(with event: NSEvent) {
         let modifiers = KeyModifiers.appKitModifierFlags(event.modifierFlags)
+        updateTextActivationCursor(isActive: false)
         reconcilePressedMouseButtons(modifiers: modifiers)
         guard pressedMouseButtons.isEmpty, pressedMouseButtonsProvider() == 0 else {
             return
@@ -222,6 +240,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     }
 
     override func flagsChanged(with event: NSEvent) {
+        updateTextActivationCursor(event)
         normalizedKeyHandler?(normalizer.normalize(event))
     }
 
@@ -383,10 +402,77 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         return mouseButtonHandler?(state, buttonNumber, KeyModifiers.appKitModifierFlags(event.modifierFlags)) ?? false
     }
 
+    private func handleTextActivation(_ event: NSEvent, buttonNumber: Int) -> Bool {
+        guard buttonNumber == 0,
+              event.clickCount == 1,
+              event.modifierFlags.contains(.command),
+              let onTextActivation
+        else {
+            return false
+        }
+
+        guard let request = textActivationRequest(for: event) else {
+            return false
+        }
+        guard onTextActivation(request) else {
+            return false
+        }
+        activationClaimedButtons.insert(buttonNumber)
+        return true
+    }
+
+    private func textActivationRequest(for event: NSEvent) -> TerminalTextActivationRequest? {
+        guard let paneID else {
+            return nil
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location) else {
+            return nil
+        }
+
+        let terminalSize = terminalSizeProvider?() ?? TerminalSize(
+            columns: max(20, Int(bounds.width / 8)),
+            rows: max(5, Int(bounds.height / 18))
+        )
+        return TerminalTextActivationRequest(
+            paneID: paneID,
+            location: location,
+            viewSize: bounds.size,
+            terminalSize: terminalSize,
+            modifiers: KeyModifiers.appKitModifierFlags(event.modifierFlags)
+        )
+    }
+
     private func handleMousePosition(_ event: NSEvent) {
         let modifiers = KeyModifiers.appKitModifierFlags(event.modifierFlags)
+        updateTextActivationCursor(event)
         reconcilePressedMouseButtons(modifiers: modifiers)
         mousePositionHandler?(convert(event.locationInWindow, from: nil), modifiers)
+    }
+
+    private func updateTextActivationCursor(_ event: NSEvent) {
+        guard event.modifierFlags.contains(.command),
+              let request = textActivationRequest(for: event),
+              onTextActivationHover?(request) == true
+        else {
+            updateTextActivationCursor(isActive: false)
+            return
+        }
+        updateTextActivationCursor(isActive: true)
+    }
+
+    private func updateTextActivationCursor(isActive: Bool) {
+        guard isTextActivationCursorActive != isActive else {
+            return
+        }
+
+        isTextActivationCursorActive = isActive
+        if isActive {
+            NSCursor.pointingHand.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 
     private func reconcilePressedMouseButtons(modifiers: KeyModifiers) {
