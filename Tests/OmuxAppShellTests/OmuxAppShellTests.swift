@@ -10,15 +10,6 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxAppShellTests: XCTestCase {
-    @MainActor
-    override class func setUp() {
-        super.setUp()
-        // Prevent AppKit from connecting to the WindowServer on headless CI runners.
-        // Without this, accessing NSApplication.shared hangs indefinitely when there
-        // is no display (e.g. GitHub Actions macos-15 runners).
-        NSApp.setActivationPolicy(.prohibited)
-    }
-
     private enum TestUpdateError: Error {
         case unavailable
     }
@@ -89,18 +80,15 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuUsesScopeShortcutLadder() {
-        let previousMenu = NSApplication.shared.mainMenu
-        defer { NSApplication.shared.mainMenu = previousMenu }
-
         let delegate = OpenMUXAppDelegate()
-        delegate.configureMenus()
+        let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(.defaults)
 
-        let menus = NSApplication.shared.mainMenu?.items
+        let menus = mainMenu.items
             .compactMap(\.submenu)
-        let workspaceMenu = menus?.first { $0.title == "Workspace" }
-        let paneMenu = menus?.first { $0.title == "Pane" }
-        let viewMenu = menus?.first { $0.title == "View" }
+        let workspaceMenu = menus.first { $0.title == "Workspace" }
+        let paneMenu = menus.first { $0.title == "Pane" }
+        let viewMenu = menus.first { $0.title == "View" }
         let resizeSplitMenu = paneMenu?.items.first { $0.title == "Resize Split" }?.submenu
         XCTAssertNotNil(workspaceMenu)
         XCTAssertNotNil(paneMenu)
@@ -199,11 +187,8 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuReflectsReboundAndUnboundKeybindings() throws {
-        let previousMenu = NSApplication.shared.mainMenu
-        defer { NSApplication.shared.mainMenu = previousMenu }
-
         let delegate = OpenMUXAppDelegate()
-        delegate.configureMenus()
+        let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(
             .effective(overrides: [
                 OpenMUXKeyBindingOverride(
@@ -217,7 +202,7 @@ final class OmuxAppShellTests: XCTestCase {
             ])
         )
 
-        let paneMenu = NSApplication.shared.mainMenu?.items
+        let paneMenu = mainMenu.items
             .compactMap(\.submenu)
             .first { $0.title == "Pane" }
 

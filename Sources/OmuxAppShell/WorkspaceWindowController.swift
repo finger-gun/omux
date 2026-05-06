@@ -2530,7 +2530,6 @@ private final class PaneTabButton: NSControl {
 
         guard onDragStarted != nil || onDragMoved != nil || onDragEnded != nil else {
             onPress?()
-            super.mouseDown(with: event)
             return
         }
 
@@ -2742,7 +2741,6 @@ private class ChromePillButton: NSControl {
         }
 
         onPress?()
-        super.mouseDown(with: event)
     }
 
     override func rightMouseDown(with event: NSEvent) {

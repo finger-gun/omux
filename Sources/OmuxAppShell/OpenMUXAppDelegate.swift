@@ -372,7 +372,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
-    func configureMenus() {
+    @discardableResult
+    func configureMenus(assigningToApplication: Bool = true) -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
@@ -612,7 +613,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
-        NSApplication.shared.mainMenu = mainMenu
+        if assigningToApplication {
+            NSApplication.shared.mainMenu = mainMenu
+        }
         self.newWorkspaceMenuItem = newWorkspaceMenuItem
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
@@ -637,6 +640,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.resizeSplitLeftMenuItem = resizeSplitLeftMenuItem
         self.resizeSplitRightMenuItem = resizeSplitRightMenuItem
         applyMenuKeyBindings()
+        return mainMenu
     }
 
     func applyKeyBindings(_ registry: OpenMUXKeyBindingRegistry) {
