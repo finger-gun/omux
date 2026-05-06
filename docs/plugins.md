@@ -119,6 +119,8 @@ OpenMUX emits an input hook when a user intentionally activates text in a termin
 
 Plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting.
 
+The same activation is visible in `omux events` as `terminal.textActivated`. When OpenMUX can handle the Command-hovered token, the terminal view shows a pointer affordance before the click.
+
 ## Bundled plugins
 
 Bundled plugins are documented separately:

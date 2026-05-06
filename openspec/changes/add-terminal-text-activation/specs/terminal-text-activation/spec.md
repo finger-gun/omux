@@ -11,6 +11,10 @@ OpenMUX SHALL activate terminal text only when the user performs a documented mo
 - **WHEN** a user clicks terminal text without the activation modifier
 - **THEN** OpenMUX forwards the pointer event to the terminal runtime for focus, selection, TUI, or mouse-reporting behavior
 
+#### Scenario: Command-hover indicates activatable text
+- **WHEN** a user holds Command while hovering terminal text that OpenMUX can handle
+- **THEN** OpenMUX shows a pointer affordance without forwarding synthetic clicks or changing plain terminal pointer behavior
+
 ### Requirement: Terminal text activation SHALL emit OpenMUX-native context
 OpenMUX SHALL emit terminal text activation context using OpenMUX-native IDs and payload fields rather than terminal-engine structs.
 
