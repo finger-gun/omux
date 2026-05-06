@@ -61,10 +61,16 @@ jobs:
       - name: Package release assets
         run: make package-release RELEASE_VERSION="${{ steps.release.outputs.version }}" BUNDLE_VERSION="${{ github.run_number }}"
 
+      - name: Launch packaged app smoke test
+        run: make smoke-packaged-release APP_ARCHIVE="dist/release/OpenMUX-${{ steps.release.outputs.version }}-macos-unsigned.zip"
+
+      - name: Extract changelog release notes
+        run: Scripts/extract-release-notes.sh "${{ steps.release.outputs.version }}" .build/release-notes.md
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/release/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: .build/release-notes.md

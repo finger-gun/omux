@@ -81,13 +81,24 @@ Be careful around:
 
 When a change touches input, keybindings, terminal encoding, or editor/meta behavior, explicitly account for these cases.
 
-### 4. Prefer hooks and extension points over core bloat
+### 4. Protect packaged app resource loading
+
+OpenMUX is distributed as a manually assembled macOS `.app` bundle, not an Xcode archive.
+Swift Package Manager resource accessors can embed absolute build paths that work locally but fail for downloaded release assets.
+
+When adding bundled resources, `Bundle.module` usage, app bundle layout changes, release assets, signing, or update/install behavior:
+
+- verify resources resolve from the packaged `.app` layout, especially `Contents/Resources`
+- do not rely on SwiftPM's local `.build` fallback paths for shipped app behavior
+- update and run the packaged release smoke test so CI launches the archived app with local build resource bundles hidden
+
+### 5. Prefer hooks and extension points over core bloat
 
 If a feature can be expressed as a hook, plugin contract, or extension point without harming usability, prefer that over hardcoding the behavior into the core.
 
 OpenMUX should make things **buildable**, not attempt to ship every workflow itself.
 
-### 5. Keep it AI-friendly, not AI-shaped
+### 6. Keep it AI-friendly, not AI-shaped
 
 OpenMUX should be easy for AI systems to work with because it uses good engineering discipline:
 

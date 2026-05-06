@@ -145,7 +145,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             if autoCheckUpdate {
                 let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
                 Task { @MainActor in
-                    await updateChecker.checkIfDue()
+                    await updateChecker.check()
                 }
             }
         } catch {

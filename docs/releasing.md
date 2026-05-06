@@ -76,22 +76,26 @@ omux update
 
 ## GitHub Release flow
 
-Pushing a version tag triggers [`.github/workflows/release.yml`](../.github/workflows/release.yml):
+Create and push the version tag with:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+make tag-release
 ```
+
+The command reads `VERSION`, verifies that `CHANGELOG.md` contains notes for that version, refuses to tag a dirty working tree, then runs the equivalent of `git tag v<version>` and `git push origin v<version>`.
+
+Pushing the version tag triggers [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 The workflow:
 
 1. builds the vendored Ghostty runtime
 2. verifies the repository
 3. runs `make package-release RELEASE_VERSION=<tag-version>`
-4. publishes a GitHub Release with the packaged artifacts attached
-5. lets GitHub generate release notes automatically
+4. launches the packaged app from the generated release archive
+5. extracts the matching section from `CHANGELOG.md`
+6. publishes a GitHub Release with the packaged artifacts attached and the committed changelog notes as the release body
 
-Generated release notes are configured through [`.github/release.yml`](../.github/release.yml). `CHANGELOG.md` remains the committed release-note source of truth; GitHub's generated notes are useful as supplemental release-page context.
+`CHANGELOG.md` is the committed release-note source of truth. The GitHub Release body is generated from the matching `## <version>` section at the tagged commit.
 
 ## Current distribution status
 

@@ -89,6 +89,10 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["1.2.3"])
     }
 
+    func testDebugUpdateCommandIsHiddenFromUsage() {
+        XCTAssertFalse(OmuxCLICommand.usage.contains("__debug-update"))
+    }
+
     func testSelfUpdaterCancelsWhenUserDeclinesRunningAppClose() throws {
         let fixture = try makeUpdateFixture(currentVersion: "0.4.0", latestVersion: "0.5.0")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -166,6 +170,77 @@ final class OmuxCLITests: XCTestCase {
             atPath: helperDirectoryURL.appendingPathComponent("OpenMUX_OmuxTheme.bundle", isDirectory: true).path
         ))
         XCTAssertTrue(output.contains("OpenMUX 0.5.0 [##########----------] 50% 5 B / 10 B"))
+        XCTAssertTrue(output.contains("OpenMUX 0.5.0 [####################] 100% 10 B / 10 B"))
+    }
+
+    func testSelfUpdaterDebugReinstallDownloadsLatestAndPromptsBeforeInstall() throws {
+        let fixture = try makeUpdateFixture(currentVersion: "0.5.0", latestVersion: "0.5.0")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let appManager = FakeRunningAppManager()
+        var helperURL: URL?
+        var output = [String]()
+
+        let updater = OmuxSelfUpdater(
+            versionProvider: fixture.versionProvider,
+            latestRelease: { fixture.release },
+            fileManager: .default,
+            homeDirectoryURL: fixture.homeURL,
+            temporaryDirectoryURL: fixture.tempURL,
+            executablePath: fixture.executableURL.path,
+            appManager: appManager,
+            download: { source, destination, progress in
+                progress(OmuxDownloadProgress(bytesDownloaded: 5, totalBytes: 10))
+                progress(OmuxDownloadProgress(bytesDownloaded: 10, totalBytes: 10))
+                try FileManager.default.copyItem(at: source, to: destination)
+            },
+            launchDetachedHelper: { helper, _ in
+                helperURL = helper
+            },
+            writeLine: { output.append($0) },
+            readInputLine: { "y" }
+        )
+
+        let outcome = try updater.runUpdate(allowReinstallLatest: true)
+
+        guard case .handedOff(let version, _) = outcome.state else {
+            return XCTFail("expected helper handoff")
+        }
+        XCTAssertEqual(version, "0.5.0")
+        XCTAssertNotNil(helperURL)
+        XCTAssertTrue(output.contains("Debug update: reinstalling OpenMUX 0.5.0 over installed OpenMUX 0.5.0."))
+        XCTAssertTrue(output.contains("OpenMUX 0.5.0 [##########----------] 50% 5 B / 10 B"))
+        XCTAssertTrue(output.contains("OpenMUX 0.5.0 [####################] 100% 10 B / 10 B"))
+        XCTAssertTrue(output.contains("Install OpenMUX 0.5.0 to \(fixture.installedAppURL.path) and relaunch? [y/N]"))
+    }
+
+    func testSelfUpdaterDebugReinstallCancelsWhenUserDeclinesInstall() throws {
+        let fixture = try makeUpdateFixture(currentVersion: "0.5.0", latestVersion: "0.5.0")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var helperLaunched = false
+        var output = [String]()
+
+        let updater = OmuxSelfUpdater(
+            versionProvider: fixture.versionProvider,
+            latestRelease: { fixture.release },
+            fileManager: .default,
+            homeDirectoryURL: fixture.homeURL,
+            temporaryDirectoryURL: fixture.tempURL,
+            executablePath: fixture.executableURL.path,
+            appManager: FakeRunningAppManager(),
+            download: { source, destination, progress in
+                progress(OmuxDownloadProgress(bytesDownloaded: 10, totalBytes: 10))
+                try FileManager.default.copyItem(at: source, to: destination)
+            },
+            launchDetachedHelper: { _, _ in helperLaunched = true },
+            writeLine: { output.append($0) },
+            readInputLine: { "n" }
+        )
+
+        let outcome = try updater.runUpdate(allowReinstallLatest: true)
+
+        XCTAssertEqual(outcome.state, .cancelled)
+        XCTAssertFalse(helperLaunched)
+        XCTAssertTrue(output.contains("Debug update cancelled."))
         XCTAssertTrue(output.contains("OpenMUX 0.5.0 [####################] 100% 10 B / 10 B"))
     }
 

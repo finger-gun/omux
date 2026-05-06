@@ -98,6 +98,11 @@ public struct OmuxCLICommand {
                 }
                 return OmuxSelfUpdater(writeLine: writeLine, readInputLine: readInputLine)
                     .runHelper(manifestPath: commandArguments[1])
+            case "__debug-update":
+                return try runUpdateCommand(
+                    arguments: Array(commandArguments.dropFirst()),
+                    allowReinstallLatest: true
+                )
             case "config":
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "theme":
@@ -1253,9 +1258,9 @@ public struct OmuxCLICommand {
         }
     }
 
-    private func runUpdateCommand(arguments: [String]) throws -> Int32 {
+    private func runUpdateCommand(arguments: [String], allowReinstallLatest: Bool = false) throws -> Int32 {
         guard arguments.isEmpty else {
-            writeLine("usage: omux update")
+            writeLine(allowReinstallLatest ? "usage: omux __debug-update" : "usage: omux update")
             return 1
         }
 
@@ -1266,7 +1271,7 @@ public struct OmuxCLICommand {
             finishProgress: progressRenderer.finish,
             writeLine: writeLine,
             readInputLine: readInputLine
-        ).runUpdate()
+        ).runUpdate(allowReinstallLatest: allowReinstallLatest)
         return 0
     }
 
