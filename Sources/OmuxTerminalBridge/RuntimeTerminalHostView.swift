@@ -8,6 +8,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     private let normalizer = BridgeAppKitKeyEventNormalizer()
     private var paneID: PaneID?
     private var onFocus: (@MainActor (PaneID) -> Void)?
+    private var terminalSizeProvider: (@MainActor () -> TerminalSize?)?
     private var onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     private var onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     private var isFocusedPane = false
@@ -53,12 +54,14 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
         paneID: PaneID,
         isFocused: Bool,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
         onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
         onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) {
         self.paneID = paneID
         self.isFocusedPane = isFocused
         self.onFocus = onFocus
+        self.terminalSizeProvider = terminalSizeProvider
         self.onTextActivation = onTextActivation
         self.onTextActivationHover = onTextActivationHover
     }
@@ -428,14 +431,15 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
             return nil
         }
 
+        let terminalSize = terminalSizeProvider?() ?? TerminalSize(
+            columns: max(20, Int(bounds.width / 8)),
+            rows: max(5, Int(bounds.height / 18))
+        )
         return TerminalTextActivationRequest(
             paneID: paneID,
             location: location,
             viewSize: bounds.size,
-            terminalSize: TerminalSize(
-                columns: max(20, Int(bounds.width / 8)),
-                rows: max(5, Int(bounds.height / 18))
-            ),
+            terminalSize: terminalSize,
             modifiers: KeyModifiers.appKitModifierFlags(event.modifierFlags)
         )
     }

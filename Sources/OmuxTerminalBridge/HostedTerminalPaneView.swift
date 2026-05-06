@@ -17,6 +17,7 @@ protocol RuntimeTerminalInteractionConfiguring: AnyObject {
         paneID: PaneID,
         isFocused: Bool,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
         onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
         onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     )
@@ -95,6 +96,7 @@ public final class HostedTerminalPaneView: NSView {
             isFocused: isFocused,
             themePalette: themePalette,
             onFocus: onFocus,
+            terminalSizeProvider: { [weak bridge] in bridge?.terminalSize(for: pane.id) },
             onTextActivation: onTextActivation,
             onTextActivationHover: onTextActivationHover
         )
@@ -179,6 +181,7 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         isFocused: Bool,
         themePalette: TerminalThemePalette,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
         onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
         onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) {
@@ -194,6 +197,7 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
             paneID: pane.id,
             isFocused: isFocused,
             onFocus: onFocus,
+            terminalSizeProvider: terminalSizeProvider,
             onTextActivation: onTextActivation,
             onTextActivationHover: onTextActivationHover
         )

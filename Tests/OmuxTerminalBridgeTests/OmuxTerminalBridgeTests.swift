@@ -46,6 +46,64 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(hit?.row, 1)
     }
 
+    func testTerminalTextActivationSelectsPointedTokenInMultiColumnLsOutput() {
+        let paneID = PaneID()
+        let line = "AGENTS.md         LICENSE         README.md         Sources"
+        let readmeColumn = line.distance(from: line.startIndex, to: line.range(of: "README.md")!.lowerBound) + 2
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: CGFloat(readmeColumn * 10), y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\n\(line)",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+    }
+
+    func testTerminalTextActivationDoesNotGuessFirstTokenOnRowWhenPointerMisses() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 140, y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nAGENTS.md         README.md",
+            request: request
+        )
+
+        XCTAssertNil(hit)
+    }
+
+    func testTerminalTextActivationExtractsFilenameFromLongLsOutput() {
+        let paneID = PaneID()
+        let line = "-rw-r--r--  1 lejahmie  staff  1200 May  6 10:00 README.md"
+        let readmeColumn = line.distance(from: line.startIndex, to: line.range(of: "README.md")!.lowerBound) + 3
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: CGFloat(readmeColumn * 10), y: 10),
+            viewSize: CGSize(width: 800, height: 40),
+            terminalSize: TerminalSize(columns: 80, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\n\(line)",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+    }
+
     func testTerminalTextActivationDoesNotFallbackAcrossLines() {
         let paneID = PaneID()
         let request = TerminalTextActivationRequest(

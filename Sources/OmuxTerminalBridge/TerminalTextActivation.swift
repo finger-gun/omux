@@ -96,10 +96,6 @@ public enum TerminalTextActivationResolver {
         if let token = token(in: lines[lineIndex], column: column, tolerance: 2) {
             return TerminalTextActivationHit(token: token, row: row, column: column)
         }
-
-        if let token = firstPathLikeToken(in: lines[lineIndex]) {
-            return TerminalTextActivationHit(token: token, row: row, column: column)
-        }
         return nil
     }
 
@@ -151,18 +147,6 @@ public enum TerminalTextActivationResolver {
     private static func trimToken(_ token: String) -> String? {
         let trimmed = token.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`()[]{}<>"))
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func firstPathLikeToken(in line: String) -> String? {
-        for raw in line.split(whereSeparator: \.isWhitespace) {
-            guard let token = trimToken(String(raw)),
-                  token.contains(".") || token.contains("/")
-            else {
-                continue
-            }
-            return token
-        }
-        return nil
     }
 
     private static func pathCandidates(for token: String) -> [String] {

@@ -46,6 +46,7 @@ public protocol GhosttyRuntime {
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws
     func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection?
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
+    func surfaceSize(runtimeSurfaceID: String) -> TerminalSize?
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
     func setTerminalActionHandler(
         _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
@@ -97,6 +98,11 @@ public extension GhosttyRuntime {
         _ = runtimeSurfaceID
         _ = columns
         _ = rows
+    }
+
+    func surfaceSize(runtimeSurfaceID: String) -> TerminalSize? {
+        _ = runtimeSurfaceID
+        return nil
     }
 
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
@@ -554,6 +560,16 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         )
     }
 
+    public func terminalSize(for paneID: PaneID) -> TerminalSize? {
+        lock.lock()
+        let state = sessionStateByPane[paneID]
+        lock.unlock()
+        guard let state else {
+            return nil
+        }
+        return runtime.surfaceSize(runtimeSurfaceID: state.runtimeSurfaceID) ?? state.size
+    }
+
     public func selection(forPane paneID: PaneID) -> RuntimeTerminalSelection? {
         lock.lock()
         let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
@@ -782,6 +798,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        terminalSizeProvider: @escaping @MainActor () -> TerminalSize?,
         onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
         onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) -> any TerminalSurfaceContentHosting {
@@ -794,6 +811,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
                 isFocused: isFocused,
                 themePalette: themePalette,
                 onFocus: onFocus,
+                terminalSizeProvider: terminalSizeProvider,
                 onTextActivation: onTextActivation,
                 onTextActivationHover: onTextActivationHover
             )
