@@ -679,6 +679,18 @@ final class WorkspaceShellViewController: NSViewController {
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
                 },
+                onPaneTabDragStarted: { [weak self] button, paneID, stackID, _ in
+                    self?.beginPaneTabDrag(button: button, paneID: paneID, sourceStackID: stackID)
+                },
+                onPaneTabDragMoved: { [weak self] _, _, event in
+                    self?.updatePaneTabDrag(with: event)
+                },
+                onPaneTabDragEnded: { [weak self] _, _, event in
+                    self?.endPaneTabDrag(with: event)
+                },
+                onPaneTabDragCancelled: { [weak self] in
+                    self?.cancelPaneTabDrag()
+                },
                 onTextActivation: { [weak self] request in
                     self?.controller.handleTerminalTextActivation(request) ?? false
                 },
@@ -727,6 +739,238 @@ final class WorkspaceShellViewController: NSViewController {
 
             return (splitView, focusedPaneView, children.first?.representativePaneID)
         }
+    }
+
+    // MARK: - Pane Tab Drag
+
+    private enum PaneTabDropIntent {
+        case split(PaneSplitDropDirection)
+        case splitAtRoot(PaneSplitDropDirection)
+        case merge
+    }
+
+    private struct PaneTabDragState {
+        let paneID: PaneID
+        let sourceStackID: PaneStackID
+        weak var sourceButton: NSView?
+        var targetStackID: PaneStackID?
+        var dropIntent: PaneTabDropIntent?
+        var ghostView: NSView?
+    }
+    private var paneTabDragState: PaneTabDragState?
+
+    private func beginPaneTabDrag(button: NSView, paneID: PaneID, sourceStackID: PaneStackID) {
+        // Don't drag if this is the only tab in the only pane stack — nothing to split into.
+        if let tab = currentWorkspace?.focusedTab {
+            let sourceStack = tab.rootLayout.paneStack(id: sourceStackID)
+            if sourceStack?.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
+                return
+            }
+        }
+        clearPaneTabSplitPreview()
+        let ghost = makePaneTabDragGhost(for: button)
+        paneTabDragState = PaneTabDragState(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            sourceButton: button,
+            targetStackID: nil,
+            dropIntent: nil,
+            ghostView: ghost
+        )
+    }
+
+    private func updatePaneTabDrag(with event: NSEvent) {
+        guard var dragState = paneTabDragState else { return }
+        updatePaneTabDragGhost(dragState.ghostView, with: event)
+        clearPaneTabSplitPreview()
+
+        // Title bar zone (above the canvas) → full-width split above all panes.
+        let canvasFrameInWindow = canvasView.convert(canvasView.bounds, to: nil)
+        if event.locationInWindow.y > canvasFrameInWindow.maxY {
+            canvasView.setRootSplitPreview(.up, theme: currentTheme)
+            dragState.targetStackID = nil
+            dragState.dropIntent = .splitAtRoot(.up)
+            paneTabDragState = dragState
+            return
+        }
+
+        // Resolve the pane under the cursor first — merge takes highest priority.
+        if let targetView = paneStackView(atWindowLocation: event.locationInWindow),
+           let targetStackID = targetView.paneStackID
+        {
+            // Hovering over the tab strip of a different pane → merge into that stack.
+            if targetStackID != dragState.sourceStackID,
+               targetView.isWindowPointInHeader(event.locationInWindow)
+            {
+                targetView.setMergePreview(theme: currentTheme)
+                dragState.targetStackID = targetStackID
+                dragState.dropIntent = .merge
+                paneTabDragState = dragState
+                return
+            }
+
+            // Canvas outer-edge zone — but only when NOT in another pane's header.
+            let canvasPoint = canvasView.convert(event.locationInWindow, from: nil)
+            if let rootDirection = PaneSplitDropIntentResolver.outerEdgeDirection(for: canvasPoint, in: canvasView.bounds) {
+                canvasView.setRootSplitPreview(rootDirection, theme: currentTheme)
+                dragState.targetStackID = nil
+                dragState.dropIntent = .splitAtRoot(rootDirection)
+                paneTabDragState = dragState
+                return
+            }
+
+            // Otherwise resolve directional split intent from edge distance.
+            let point = targetView.convert(event.locationInWindow, from: nil)
+            if let direction = PaneSplitDropIntentResolver.direction(for: point, in: targetView.bounds) {
+                targetView.setSplitPreview(direction, theme: currentTheme)
+                dragState.targetStackID = targetStackID
+                dragState.dropIntent = .split(direction)
+                paneTabDragState = dragState
+                return
+            }
+        }
+
+        dragState.targetStackID = nil
+        dragState.dropIntent = nil
+        paneTabDragState = dragState
+    }
+
+    private func endPaneTabDrag(with event: NSEvent) {
+        updatePaneTabDrag(with: event)
+        guard let dragState = paneTabDragState else {
+            clearPaneTabSplitPreview()
+            return
+        }
+
+        defer {
+            dragState.ghostView?.removeFromSuperview()
+            paneTabDragState = nil
+            clearPaneTabSplitPreview()
+        }
+
+        guard let intent = dragState.dropIntent else { return }
+
+        switch intent {
+        case .splitAtRoot(let direction):
+            _ = try? controller.movePaneTabToRootSplit(
+                paneID: dragState.paneID,
+                sourceStackID: dragState.sourceStackID,
+                direction: direction
+            )
+        case .split(let direction):
+            guard let targetStackID = dragState.targetStackID else { return }
+            _ = try? controller.movePaneTabToSplit(
+                paneID: dragState.paneID,
+                sourceStackID: dragState.sourceStackID,
+                targetStackID: targetStackID,
+                direction: direction
+            )
+        case .merge:
+            guard let targetStackID = dragState.targetStackID else { return }
+            _ = try? controller.movePaneTabToStack(
+                paneID: dragState.paneID,
+                sourceStackID: dragState.sourceStackID,
+                targetStackID: targetStackID
+            )
+        }
+    }
+
+    private func cancelPaneTabDrag() {
+        guard let dragState = paneTabDragState else { return }
+        dragState.ghostView?.removeFromSuperview()
+        paneTabDragState = nil
+        clearPaneTabSplitPreview()
+    }
+
+    private func paneStackView(atWindowLocation location: NSPoint) -> PaneStackView? {
+        paneStackView(in: canvasView, atWindowLocation: location)
+    }
+
+    private func paneStackView(in root: NSView, atWindowLocation location: NSPoint) -> PaneStackView? {
+        for subview in root.subviews.reversed() {
+            if let match = paneStackView(in: subview, atWindowLocation: location) {
+                return match
+            }
+        }
+        guard let stackView = root as? PaneStackView else { return nil }
+        let point = stackView.convert(location, from: nil)
+        return stackView.bounds.contains(point) ? stackView : nil
+    }
+
+    private func clearPaneTabSplitPreview() {
+        canvasView.clearRootSplitPreview()
+        clearPaneTabSplitPreview(in: canvasView)
+    }
+
+    private func clearPaneTabSplitPreview(in root: NSView) {
+        if let stackView = root as? PaneStackView {
+            stackView.clearSplitPreview()
+            stackView.clearMergePreview()
+        }
+        root.subviews.forEach { clearPaneTabSplitPreview(in: $0) }
+    }
+
+    private func makePaneTabDragGhost(for button: NSView) -> NSView? {
+        guard let contentView = button.window?.contentView else { return nil }
+        let size = button.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let snapshot = NSImage(size: size, flipped: false) { [weak button] _ in
+            guard let layer = button?.layer else { return false }
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            layer.render(in: ctx)
+            return true
+        }
+
+        let ghost = NSImageView(image: snapshot)
+        ghost.wantsLayer = true
+        ghost.layer?.opacity = 0.82
+        ghost.layer?.cornerRadius = 3
+        ghost.layer?.shadowOpacity = 0.28
+        ghost.layer?.shadowRadius = 10
+        ghost.layer?.shadowColor = NSColor.black.cgColor
+        ghost.layer?.shadowOffset = CGSize(width: 0, height: -3)
+
+        let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+        ghost.frame = buttonFrameInWindow
+        contentView.addSubview(ghost, positioned: NSWindow.OrderingMode.above, relativeTo: nil)
+        return ghost
+    }
+
+    private func updatePaneTabDragGhost(_ ghost: NSView?, with event: NSEvent) {
+        guard let ghost else { return }
+        let cursor = event.locationInWindow
+        ghost.frame.origin = NSPoint(
+            x: cursor.x - ghost.frame.width / 2,
+            y: cursor.y - ghost.frame.height / 2
+        )
+    }
+}
+
+private struct PaneSplitDropIntentResolver {
+    static let outerEdgeThreshold: CGFloat = 40
+
+    static func direction(for point: NSPoint, in bounds: NSRect) -> PaneSplitDropDirection? {
+        guard bounds.width > 0, bounds.height > 0, bounds.contains(point) else { return nil }
+        let distances: [(PaneSplitDropDirection, CGFloat)] = [
+            (.left, point.x - bounds.minX),
+            (.right, bounds.maxX - point.x),
+            (.up, bounds.maxY - point.y),
+            (.down, point.y - bounds.minY),
+        ]
+        return distances.min { $0.1 < $1.1 }?.0
+    }
+
+    /// Returns a direction if `point` falls within the outer-edge drop zone of `bounds`.
+    /// This zone triggers a root-level layout wrap regardless of which pane is under the cursor.
+    /// Note: `.up` is excluded here — it is triggered by the window title bar instead.
+    static func outerEdgeDirection(for point: NSPoint, in bounds: NSRect) -> PaneSplitDropDirection? {
+        guard bounds.width > 0, bounds.height > 0, bounds.contains(point) else { return nil }
+        let t = outerEdgeThreshold
+        if point.y <= bounds.minY + t { return .down }
+        if point.x <= bounds.minX + t { return .left }
+        if point.x >= bounds.maxX - t { return .right }
+        return nil
     }
 }
 
@@ -1186,6 +1430,7 @@ private final class WorkspaceSidebarSectionView: NSView {
 @MainActor
 final class WorkspaceCanvasView: NSView {
     private var currentContentView: NSView?
+    private var rootSplitPreview: PaneSplitPreviewView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1221,6 +1466,20 @@ final class WorkspaceCanvasView: NSView {
             layoutView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ShellLayoutMetrics.canvasPadding),
             layoutView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -ShellLayoutMetrics.canvasPadding),
         ])
+    }
+
+    func setRootSplitPreview(_ direction: PaneSplitDropDirection, theme: WorkspaceShellTheme) {
+        if rootSplitPreview == nil {
+            let preview = PaneSplitPreviewView()
+            addSubview(preview, positioned: NSWindow.OrderingMode.above, relativeTo: nil)
+            rootSplitPreview = preview
+        }
+        rootSplitPreview?.update(direction: direction, theme: theme, in: bounds)
+    }
+
+    func clearRootSplitPreview() {
+        rootSplitPreview?.removeFromSuperview()
+        rootSplitPreview = nil
     }
 }
 
@@ -1665,6 +1924,10 @@ final class PaneStackView: NSView {
     private let paneContentView: NSView
     private let paneRenderer: any WorkspacePaneRendering
     private let paneCardView = PaneCardView()
+    private var splitPreviewView: PaneSplitPreviewView?
+    private var mergePreviewView: PaneMergePreviewView?
+
+    var paneStackID: PaneStackID?
 
     init(
         paneStack: PaneStack,
@@ -1679,6 +1942,10 @@ final class PaneStackView: NSView {
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragCancelled: (() -> Void)? = nil,
         onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
         onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool
     ) {
@@ -1707,6 +1974,7 @@ final class PaneStackView: NSView {
         }
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        self.paneStackID = paneStack.id
 
         let headerView = PaneHeaderView(
             paneStack: paneStack,
@@ -1724,7 +1992,11 @@ final class PaneStackView: NSView {
             onCreatePaneTab: onCreatePaneTab,
             canCloseSinglePaneStack: canCloseSinglePaneStack,
             onClosePane: onClosePane,
-            contextMenuProvider: contextMenuProvider
+            contextMenuProvider: contextMenuProvider,
+            onPaneTabDragStarted: onPaneTabDragStarted,
+            onPaneTabDragMoved: onPaneTabDragMoved,
+            onPaneTabDragEnded: onPaneTabDragEnded,
+            onPaneTabDragCancelled: onPaneTabDragCancelled
         )
         paneCardView.configure(
             headerView: headerView,
@@ -1750,6 +2022,109 @@ final class PaneStackView: NSView {
 
     var focusedPaneView: NSView {
         paneContentView
+    }
+
+    func setSplitPreview(_ direction: PaneSplitDropDirection, theme: WorkspaceShellTheme) {
+        clearMergePreview()
+        if splitPreviewView == nil {
+            let preview = PaneSplitPreviewView()
+            addSubview(preview, positioned: NSWindow.OrderingMode.above, relativeTo: nil)
+            splitPreviewView = preview
+        }
+        splitPreviewView?.update(direction: direction, theme: theme, in: bounds)
+    }
+
+    func setMergePreview(theme: WorkspaceShellTheme) {
+        clearSplitPreview()
+        if mergePreviewView == nil {
+            let preview = PaneMergePreviewView()
+            addSubview(preview, positioned: NSWindow.OrderingMode.above, relativeTo: nil)
+            mergePreviewView = preview
+        }
+        mergePreviewView?.update(theme: theme, headerHeight: ShellLayoutMetrics.paneHeaderHeight, in: bounds)
+    }
+
+    func clearSplitPreview() {
+        splitPreviewView?.removeFromSuperview()
+        splitPreviewView = nil
+    }
+
+    func clearMergePreview() {
+        mergePreviewView?.removeFromSuperview()
+        mergePreviewView = nil
+    }
+
+    func isWindowPointInHeader(_ windowPoint: NSPoint) -> Bool {
+        let localPoint = convert(windowPoint, from: nil)
+        guard bounds.contains(localPoint) else { return false }
+        let threshold = ShellLayoutMetrics.paneHeaderHeight + 4
+        return isFlipped ? localPoint.y <= threshold : localPoint.y >= bounds.height - threshold
+    }
+}
+
+@MainActor
+private final class PaneSplitPreviewView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func update(direction: PaneSplitDropDirection, theme: WorkspaceShellTheme, in bounds: NSRect) {
+        let half: CGFloat
+        let region: NSRect
+        switch direction {
+        case .left:
+            half = bounds.width / 2
+            region = NSRect(x: bounds.minX, y: bounds.minY, width: half, height: bounds.height)
+        case .right:
+            half = bounds.width / 2
+            region = NSRect(x: bounds.minX + half, y: bounds.minY, width: half, height: bounds.height)
+        case .up:
+            half = bounds.height / 2
+            region = NSRect(x: bounds.minX, y: bounds.minY + half, width: bounds.width, height: half)
+        case .down:
+            half = bounds.height / 2
+            region = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: half)
+        }
+        frame = region
+        layer?.backgroundColor = theme.shell.selection.withAlphaComponent(0.35).cgColor
+        layer?.borderColor = theme.shell.selection.withAlphaComponent(0.8).cgColor
+        layer?.borderWidth = 1.5
+    }
+}
+
+@MainActor
+private final class PaneMergePreviewView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 3
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func update(theme: WorkspaceShellTheme, headerHeight: CGFloat, in bounds: NSRect) {
+        let region: NSRect
+        if isFlipped {
+            region = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: headerHeight)
+        } else {
+            region = NSRect(x: bounds.minX, y: bounds.maxY - headerHeight, width: bounds.width, height: headerHeight)
+        }
+        frame = region
+        layer?.backgroundColor = theme.shell.selection.withAlphaComponent(0.45).cgColor
+        layer?.borderColor = theme.shell.selection.withAlphaComponent(0.9).cgColor
+        layer?.borderWidth = 1.5
     }
 }
 
@@ -1837,7 +2212,11 @@ final class PaneHeaderView: NSView {
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         canCloseSinglePaneStack: Bool,
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
-        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu
+        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
+        onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragCancelled: (() -> Void)? = nil
     ) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -1874,6 +2253,15 @@ final class PaneHeaderView: NSView {
             )
             button.onPress = { onSelectPaneTab(pane.id) }
             button.contextMenuProvider = { contextMenuProvider(pane) }
+            if onPaneTabDragStarted != nil {
+                button.onDragStarted = { [weak button] _, event in
+                    guard let button else { return }
+                    onPaneTabDragStarted?(button, pane.id, paneStack.id, event)
+                }
+                button.onDragMoved = { _, event in onPaneTabDragMoved?(pane.id, paneStack.id, event) }
+                button.onDragEnded = { _, event in onPaneTabDragEnded?(pane.id, paneStack.id, event) }
+                button.onDragCancelled = { _ in onPaneTabDragCancelled?() }
+            }
             tabStrip.addArrangedSubview(button)
         }
 
@@ -1955,6 +2343,10 @@ private extension WorkspaceShellTheme {
 @MainActor
 private final class PaneTabButton: NSControl {
     var onPress: (() -> Void)?
+    var onDragStarted: ((PaneTabButton, NSEvent) -> Void)?
+    var onDragMoved: ((PaneTabButton, NSEvent) -> Void)?
+    var onDragEnded: ((PaneTabButton, NSEvent) -> Void)?
+    var onDragCancelled: ((PaneTabButton) -> Void)?
     var contextMenuProvider: (() -> NSMenu)? {
         didSet {
             menu = contextMenuProvider?()
@@ -2134,12 +2526,52 @@ private final class PaneTabButton: NSControl {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard isEnabled else {
+        guard isEnabled else { return }
+
+        guard onDragStarted != nil || onDragMoved != nil || onDragEnded != nil else {
+            onPress?()
+            super.mouseDown(with: event)
             return
         }
 
-        onPress?()
-        super.mouseDown(with: event)
+        let initialLocation = convert(event.locationInWindow, from: nil)
+        var didStartDragging = false
+
+        while let nextEvent = window?.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            switch nextEvent.type {
+            case .keyDown where nextEvent.keyCode == 53: // Escape
+                if didStartDragging {
+                    onDragCancelled?(self)
+                }
+                return
+
+            case .leftMouseDragged:
+                let location = convert(nextEvent.locationInWindow, from: nil)
+                let delta = hypot(location.x - initialLocation.x, location.y - initialLocation.y)
+                guard delta >= 4 else { continue }
+                if !didStartDragging {
+                    didStartDragging = true
+                    onDragStarted?(self, nextEvent)
+                }
+                onDragMoved?(self, nextEvent)
+
+            case .leftMouseUp:
+                if didStartDragging {
+                    onDragEnded?(self, nextEvent)
+                } else {
+                    onPress?()
+                }
+                return
+
+            default:
+                return
+            }
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {

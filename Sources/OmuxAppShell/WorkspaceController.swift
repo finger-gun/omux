@@ -539,9 +539,11 @@ public final class WorkspaceController: @unchecked Sendable {
     public func canClosePaneTab() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return activeWorkspaceIndex.flatMap { index in
-            workspaces[index].focusedPaneStack?.panes.count
-        }.map { $0 > 1 } ?? false
+        guard let index = activeWorkspaceIndex else { return false }
+        let panesCount = workspaces[index].focusedPaneStack?.panes.count ?? 0
+        let tabsCount = workspaces[index].tabs.count
+        let tabPanesCount = workspaces[index].focusedTab?.panes.count ?? 0
+        return panesCount > 1 || tabsCount > 1 || tabPanesCount > 1
     }
 
     public func canFocusPaneTab() -> Bool {
@@ -779,6 +781,83 @@ public final class WorkspaceController: @unchecked Sendable {
                 payload: .object(["axis": .string(axis.rawValue)])
             )
         )
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func movePaneTabToSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[index].movePaneTabToSplit(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            targetStackID: targetStackID,
+            direction: direction
+        )
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func movePaneTabToStack(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID
+    ) throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[index].movePaneTabToExistingStack(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            targetStackID: targetStackID
+        )
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func movePaneTabToRootSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) throws -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[index].movePaneTabToRootSplit(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            direction: direction
+        )
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
         onChange?(updatedWorkspace)
         return updatedWorkspace
     }
@@ -1056,15 +1135,48 @@ public final class WorkspaceController: @unchecked Sendable {
 
         let targetPaneID = paneID ?? workspaces[index].focusedPane?.id
         let targetStackID = targetPaneID.flatMap { paneStackID(for: $0, in: workspaces[index]) }
-        let removedPane = targetPaneID.flatMap { workspaces[index].closePane($0) }
-        let updatedWorkspace = removedPane == nil ? nil : workspaces[index]
-        lock.unlock()
+        let stackPanesCount = targetStackID.flatMap { paneStack(id: $0, in: workspaces[index])?.panes.count } ?? 0
 
-        guard let removedPane,
-              let updatedWorkspace
-        else {
-            return nil
+        let removedPane: Pane
+        if stackPanesCount > 1 {
+            // Multiple pane tabs in the stack: close just this one.
+            guard let pane = targetPaneID.flatMap({ workspaces[index].closePane($0) }) else {
+                lock.unlock()
+                return nil
+            }
+            removedPane = pane
+        } else {
+            // Single-pane stack: close the whole workspace tab, or detach from a split.
+            guard let targetPaneID else {
+                lock.unlock()
+                return nil
+            }
+            guard let containingTab = workspaces[index].tabs.first(where: { $0.panes.contains(where: { $0.id == targetPaneID }) }) else {
+                lock.unlock()
+                return nil
+            }
+            if containingTab.panes.count == 1 {
+                guard workspaces[index].tabs.count > 1,
+                      let removedTab = workspaces[index].closeTab(containingTab.id),
+                      let tabPane = removedTab.panes.first
+                else {
+                    lock.unlock()
+                    return nil
+                }
+                removedPane = tabPane
+            } else {
+                guard let tabIndex = workspaces[index].tabs.firstIndex(where: { $0.id == containingTab.id }),
+                      let pane = workspaces[index].tabs[tabIndex].removePane(targetPaneID)
+                else {
+                    lock.unlock()
+                    return nil
+                }
+                removedPane = pane
+            }
         }
+
+        let updatedWorkspace = workspaces[index]
+        lock.unlock()
 
         if removedPane.isTerminal {
             try bridge.teardown(paneID: removedPane.id)

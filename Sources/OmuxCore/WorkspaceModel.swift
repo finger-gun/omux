@@ -493,6 +493,28 @@ public enum PaneSplitResizeDirection: String, Codable, Sendable {
     }
 }
 
+public enum PaneSplitDropDirection: String, Codable, Sendable {
+    case left
+    case right
+    case up
+    case down
+
+    public var axis: PaneSplitAxis {
+        switch self {
+        case .left, .right: return .columns
+        case .up, .down: return .rows
+        }
+    }
+
+    /// Whether the new split pane should go after (right/down) or before (left/up) the target.
+    public var insertsAfterTarget: Bool {
+        switch self {
+        case .right, .down: return true
+        case .left, .up: return false
+        }
+    }
+}
+
 public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
     private struct PaneDetachResult {
         let pane: Pane
@@ -889,6 +911,159 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
                 }
             }
             return false
+        }
+    }
+
+    /// Moves `paneID` from `sourceStackID` into a new pane stack split adjacent to `targetStackID`
+    /// in the given direction. Returns false if the source equals target or pane/stacks not found.
+    @discardableResult
+    public mutating func movePaneToSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        let saved = self
+        guard let detached = detachPaneResult(id: paneID) else { return false }
+        // collapseNode: true at the leaf level means self (a .paneStack) was NOT updated —
+        // the pane is still in self. Inserting adjacent would duplicate it, so abort.
+        guard !detached.collapseNode else {
+            self = saved
+            return false
+        }
+        let newStack = PaneStack(panes: [detached.pane], focusedPaneID: detached.pane.id)
+        guard insertStack(newStack, adjacentTo: targetStackID, direction: direction) else {
+            self = saved
+            return false
+        }
+        return true
+    }
+
+    /// Wraps the entire layout in a new split in `direction`, placing the detached pane
+    /// before or after the existing root based on `direction.insertsAfterTarget`.
+    @discardableResult
+    public mutating func movePaneToRootSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        let saved = self
+        guard let detached = detachPaneResult(id: paneID) else { return false }
+        guard !detached.collapseNode else {
+            self = saved
+            return false
+        }
+        let newStack = PaneStack(panes: [detached.pane], focusedPaneID: detached.pane.id)
+        let newNode = TabLayoutNode.paneStack(newStack)
+        let children: [TabLayoutNode] = direction.insertsAfterTarget
+            ? [self, newNode] : [newNode, self]
+        self = Self.makeSplit(axis: direction.axis, proportions: [], children: children)
+        return true
+    }
+
+    /// Moves `paneID` from `sourceStackID` into the existing stack identified by `targetStackID`,
+    /// appending it as a new tab. Returns false if source equals target or stacks/pane not found.
+    @discardableResult
+    public mutating func movePaneToExistingStack(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID
+    ) -> Bool {
+        guard sourceStackID != targetStackID else { return false }
+        let saved = self
+        guard let detached = detachPaneResult(id: paneID) else { return false }
+        guard !detached.collapseNode else {
+            self = saved
+            return false
+        }
+        guard appendPane(detached.pane, toStackID: targetStackID) else {
+            self = saved
+            return false
+        }
+        return true
+    }
+
+    private mutating func appendPane(_ pane: Pane, toStackID targetStackID: PaneStackID) -> Bool {
+        switch self {
+        case .paneStack(var stack):
+            guard stack.id == targetStackID else { return false }
+            stack.panes.append(pane)
+            stack.focusedPaneID = pane.id
+            self = .paneStack(stack)
+            return true
+        case .split(let axis, let proportions, var children):
+            for index in children.indices {
+                if children[index].appendPane(pane, toStackID: targetStackID) {
+                    self = Self.makeSplit(axis: axis, proportions: proportions, children: children)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    // Used by insertStack to bubble the insert request up the tree.
+    private enum InsertResult { case notFound, inserted, wrapRequested }
+
+    private mutating func insertStack(
+        _ newStack: PaneStack,
+        adjacentTo targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        switch insertStackBubbling(newStack, adjacentTo: targetStackID, direction: direction) {
+        case .inserted:
+            return true
+        case .wrapRequested:
+            // No ancestor had the matching axis — wrap the entire subtree.
+            let newNode = TabLayoutNode.paneStack(newStack)
+            let children: [TabLayoutNode] = direction.insertsAfterTarget
+                ? [self, newNode] : [newNode, self]
+            self = Self.makeSplit(axis: direction.axis, proportions: [], children: children)
+            return true
+        case .notFound:
+            return false
+        }
+    }
+
+    /// Recursive helper that bubbles a `.wrapRequested` signal up until an ancestor
+    /// split with a matching axis claims it as a sibling insert.
+    private mutating func insertStackBubbling(
+        _ newStack: PaneStack,
+        adjacentTo targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> InsertResult {
+        switch self {
+        case .paneStack(let existingStack):
+            // Signal the parent to handle the insert at the right axis level.
+            guard existingStack.id == targetStackID else { return .notFound }
+            return .wrapRequested
+
+        case .split(let axis, let proportions, var children):
+            for index in children.indices {
+                switch children[index].insertStackBubbling(newStack, adjacentTo: targetStackID, direction: direction) {
+                case .notFound:
+                    continue
+                case .inserted:
+                    self = Self.makeSplit(axis: axis, proportions: proportions, children: children)
+                    return .inserted
+                case .wrapRequested:
+                    if axis == direction.axis {
+                        // This split has the right axis — insert as a sibling to the matched child.
+                        let newNode = TabLayoutNode.paneStack(newStack)
+                        if direction.insertsAfterTarget {
+                            children.insert(newNode, at: index + 1)
+                        } else {
+                            children.insert(newNode, at: index)
+                        }
+                        self = Self.makeSplit(axis: axis, proportions: [], children: children)
+                        return .inserted
+                    } else {
+                        // Wrong axis — bubble further up.
+                        return .wrapRequested
+                    }
+                }
+            }
+            return .notFound
         }
     }
 
@@ -1518,6 +1693,69 @@ public struct Workspace: Equatable, Codable, Sendable {
         }
 
         return tabs[tabIndex].resizeFocusedSplit(direction)
+    }
+
+    /// Moves a pane tab into a new split adjacent to the target pane stack in the given direction.
+    /// Returns false if the move is invalid (same stack, pane not found, or stack not found).
+    @discardableResult
+    public mutating func movePaneTabToSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+            return false
+        }
+        let moved = tabs[tabIndex].rootLayout.movePaneToSplit(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            targetStackID: targetStackID,
+            direction: direction
+        )
+        guard moved else { return false }
+        focus(paneID: paneID)
+        return true
+    }
+
+    /// Wraps the entire root layout in a new split, moving the pane to the new slot.
+    @discardableResult
+    public mutating func movePaneTabToRootSplit(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+            return false
+        }
+        let moved = tabs[tabIndex].rootLayout.movePaneToRootSplit(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            direction: direction
+        )
+        guard moved else { return false }
+        focus(paneID: paneID)
+        return true
+    }
+
+    /// Moves a pane tab into an existing pane stack, appending it as a new tab.
+    @discardableResult
+    public mutating func movePaneTabToExistingStack(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        targetStackID: PaneStackID
+    ) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+            return false
+        }
+        let moved = tabs[tabIndex].rootLayout.movePaneToExistingStack(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            targetStackID: targetStackID
+        )
+        guard moved else { return false }
+        focus(paneID: paneID)
+        return true
     }
 }
 
