@@ -220,6 +220,16 @@ public struct OmuxConfigWorkspace: Equatable, Sendable {
 }
 
 public struct OmuxConfigUI: Equatable, Sendable {
+    public struct Panes: Equatable, Sendable {
+        public static let defaultInactiveOpacity = 0.5
+
+        public let inactiveOpacity: Double
+
+        public init(inactiveOpacity: Double = Self.defaultInactiveOpacity) {
+            self.inactiveOpacity = inactiveOpacity
+        }
+    }
+
     public struct Icons: Equatable, Sendable {
         public enum Provider: String, Equatable, Sendable {
             case nerdFont = "nerd-font"
@@ -245,9 +255,11 @@ public struct OmuxConfigUI: Equatable, Sendable {
         }
     }
 
+    public let panes: Panes
     public let icons: Icons
 
-    public init(icons: Icons = Icons()) {
+    public init(panes: Panes = Panes(), icons: Icons = Icons()) {
+        self.panes = panes
         self.icons = icons
     }
 }
@@ -438,6 +450,9 @@ public enum OmuxConfigTemplate {
 
         [workspace]
         default_root_path = "~"
+
+        [ui.panes]
+        # inactive_opacity = 0.5
 
         [ui.icons]
         # enabled = true
@@ -807,7 +822,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.icons", "plugins.markdown-preview", "keys", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "plugins.markdown-preview", "keys", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -1146,6 +1161,51 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let paneUIAllowedKeys: Set<String> = ["inactive_opacity"]
+        var paneInactiveOpacity = config.ui.panes.inactiveOpacity
+        for entry in document.entries(in: "ui.panes") {
+            guard paneUIAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [ui.panes] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "inactive_opacity":
+                guard let value = entry.value.doubleValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.panes.inactive_opacity must be a number between 0.0 and 1.0.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard (0.0...1.0).contains(value) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.panes.inactive_opacity must be between 0.0 and 1.0.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                paneInactiveOpacity = value
+            default:
+                break
+            }
+        }
+
         let iconAllowedKeys: Set<String> = ["enabled", "provider", "colors_enabled", "font_family"]
         var iconsEnabled = config.ui.icons.enabled
         var iconsProvider = config.ui.icons.provider
@@ -1365,6 +1425,7 @@ public struct OmuxConfigLoader {
             ),
             workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
             ui: OmuxConfigUI(
+                panes: OmuxConfigUI.Panes(inactiveOpacity: paneInactiveOpacity),
                 icons: OmuxConfigUI.Icons(
                     enabled: iconsEnabled,
                     provider: iconsProvider,

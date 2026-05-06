@@ -42,6 +42,7 @@ struct OmuxConfigTests {
         #expect(result.config.autoCheckUpdate)
         #expect(result.config.terminal == OmuxConfig.defaults.terminal)
         #expect(result.config.workspace == OmuxConfig.defaults.workspace)
+        #expect(result.config.ui.panes == OmuxConfig.defaults.ui.panes)
     }
 
     func loadsPersistedScrollbackTerminalSettings() throws {
@@ -347,6 +348,53 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func loadsPaneUISettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [ui.panes]
+            inactive_opacity = 0.72
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.ui.panes.inactiveOpacity == 0.72)
+    }
+
+    @Test
+    func rejectsInvalidPaneUISettings() throws {
+        let cases = [
+            ("inactive_opacity = \"dim\"", "ui.panes.inactive_opacity must be a number"),
+            ("inactive_opacity = -0.1", "ui.panes.inactive_opacity must be between 0.0 and 1.0"),
+            ("inactive_opacity = 1.1", "ui.panes.inactive_opacity must be between 0.0 and 1.0"),
+            ("unknown = true", "Unknown [ui.panes] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [ui.panes]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
     func loadsIconUISettings() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
@@ -526,6 +574,8 @@ struct OmuxConfigTests {
         #expect(contents.contains("# persist_scrollback_bytes = 1048576"))
         #expect(contents.contains("# auto_check_update = true"))
         #expect(contents.contains("default_root_path = \"~\""))
+        #expect(contents.contains("[ui.panes]"))
+        #expect(contents.contains("# inactive_opacity = 0.5"))
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))

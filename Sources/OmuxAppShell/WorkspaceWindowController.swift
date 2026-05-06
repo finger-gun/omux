@@ -61,6 +61,7 @@ final class WorkspaceWindowController: NSWindowController {
         workspace: Workspace,
         controller: WorkspaceController,
         initialTheme: WorkspaceShellTheme = .defaultTheme,
+        initialPanes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared
     ) {
@@ -68,6 +69,7 @@ final class WorkspaceWindowController: NSWindowController {
         self.rootViewController = WorkspaceShellViewController(
             controller: controller,
             initialTheme: initialTheme,
+            initialPanes: initialPanes,
             initialIcons: initialIcons,
             sidebarVisibilityStore: sidebarVisibilityStore
         )
@@ -108,6 +110,10 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.updateIcons(icons)
     }
 
+    func updatePanes(_ panes: OmuxConfigUI.Panes) {
+        rootViewController.updatePanes(panes)
+    }
+
     func toggleSidebarVisibility() {
         rootViewController.toggleSidebarVisibility()
     }
@@ -129,8 +135,10 @@ final class WorkspaceShellViewController: NSViewController {
     private var mainColumnLeadingConstraint: NSLayoutConstraint?
     private var currentWorkspace: Workspace?
     private var currentTheme: WorkspaceShellTheme
+    private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
     private var isSidebarVisible: Bool
+    private var windowIsKey: Bool = false
     private var focusRestoreGeneration: UInt = 0
     private var terminalIconRefreshTimer: Timer?
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
@@ -138,11 +146,13 @@ final class WorkspaceShellViewController: NSViewController {
     init(
         controller: WorkspaceController,
         initialTheme: WorkspaceShellTheme,
+        initialPanes: OmuxConfigUI.Panes,
         initialIcons: OmuxConfigUI.Icons,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
     ) {
         self.controller = controller
         self.currentTheme = initialTheme
+        self.currentPanes = initialPanes
         self.currentIcons = initialIcons
         self.sidebarVisibilityStore = sidebarVisibilityStore
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
@@ -202,6 +212,40 @@ final class WorkspaceShellViewController: NSViewController {
         startTerminalIconRefreshTimer()
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        let nc = NotificationCenter.default
+        nc.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: view.window
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(windowDidResignKey(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: view.window
+        )
+        windowIsKey = view.window?.isKeyWindow ?? false
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: view.window)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: view.window)
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        windowIsKey = true
+        if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
+    @objc private func windowDidResignKey(_ notification: Notification) {
+        windowIsKey = false
+        if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
     func update(workspace: Workspace) {
         let previousWorkspaceID = currentWorkspace?.id
         let previousFocusedPaneID = currentWorkspace?.focusedPane?.id
@@ -244,6 +288,8 @@ final class WorkspaceShellViewController: NSViewController {
             makeLayoutView(
                 for: $0.rootLayout,
                 focusedPaneID: $0.focusedPaneID,
+                windowIsKey: windowIsKey,
+                inactiveOpacity: currentPanes.inactiveOpacity,
                 canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
             )
         }
@@ -281,6 +327,13 @@ final class WorkspaceShellViewController: NSViewController {
 
     func updateIcons(_ icons: OmuxConfigUI.Icons) {
         currentIcons = icons
+        if let currentWorkspace {
+            update(workspace: currentWorkspace)
+        }
+    }
+
+    func updatePanes(_ panes: OmuxConfigUI.Panes) {
+        currentPanes = panes
         if let currentWorkspace {
             update(workspace: currentWorkspace)
         }
@@ -647,6 +700,8 @@ final class WorkspaceShellViewController: NSViewController {
     private func makeLayoutView(
         for node: TabLayoutNode,
         focusedPaneID: PaneID,
+        windowIsKey: Bool,
+        inactiveOpacity: Double,
         canCloseSinglePaneStack: Bool
     ) -> (view: NSView, focusedPaneView: NSView?, representativePaneID: PaneID?) {
         switch node {
@@ -654,6 +709,8 @@ final class WorkspaceShellViewController: NSViewController {
             let stackView = PaneStackView(
                 paneStack: paneStack,
                 focusedPaneID: focusedPaneID,
+                windowIsKey: windowIsKey,
+                inactiveOpacity: inactiveOpacity,
                 bridge: controller.terminalBridge,
                 theme: currentTheme,
                 iconResolver: iconResolver,
@@ -713,6 +770,8 @@ final class WorkspaceShellViewController: NSViewController {
                 let childLayout = makeLayoutView(
                     for: child,
                     focusedPaneID: focusedPaneID,
+                    windowIsKey: windowIsKey,
+                    inactiveOpacity: inactiveOpacity,
                     canCloseSinglePaneStack: canCloseSinglePaneStack
                 )
                 if focusedPaneView == nil {
@@ -1932,6 +1991,8 @@ final class PaneStackView: NSView {
     init(
         paneStack: PaneStack,
         focusedPaneID: PaneID,
+        windowIsKey: Bool,
+        inactiveOpacity: Double,
         bridge: GhosttyTerminalBridge,
         theme: WorkspaceShellTheme,
         iconResolver: WorkspaceIconResolver,
@@ -2003,7 +2064,9 @@ final class PaneStackView: NSView {
             statusText: activePane.terminalState.statusSummary,
             paneRenderer: paneRenderer,
             theme: theme,
-            focused: activePane.id == focusedPaneID
+            focused: activePane.id == focusedPaneID,
+            windowIsKey: windowIsKey,
+            inactiveOpacity: inactiveOpacity
         )
         addSubview(paneCardView)
 
@@ -2167,7 +2230,9 @@ final class PaneCardView: NSView {
         statusText: String?,
         paneRenderer: any WorkspacePaneRendering,
         theme: WorkspaceShellTheme,
-        focused: Bool
+        focused: Bool,
+        windowIsKey: Bool,
+        inactiveOpacity: Double
     ) {
         container.arrangedSubviews.forEach { view in
             container.removeArrangedSubview(view)
@@ -2192,9 +2257,11 @@ final class PaneCardView: NSView {
         container.addArrangedSubview(paneView)
         paneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
 
+        let showActiveBorder = focused && windowIsKey
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
+        alphaValue = showActiveBorder ? 1.0 : inactiveOpacity
     }
 }
 
