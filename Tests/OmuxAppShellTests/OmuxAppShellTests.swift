@@ -14,9 +14,6 @@ final class OmuxAppShellTests: XCTestCase {
         case unavailable
     }
 
-    private static let updateLastCheckKey = "OpenMUXUpdateAvailabilityChecker.lastCheck"
-    private static let updateLastCheckedInstalledVersionKey = "OpenMUXUpdateAvailabilityChecker.lastCheckedInstalledVersion"
-
     @MainActor
     private final class InMemorySidebarVisibilityStore: WorkspaceSidebarVisibilityStoring {
         var isSidebarVisible: Bool
@@ -60,18 +57,6 @@ final class OmuxAppShellTests: XCTestCase {
         try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
         return root
-    }
-
-    private func updateDefaultsFixture() throws -> UserDefaults {
-        let suiteName = "OpenMUXUpdateAvailabilityCheckerTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        return defaults
-    }
-
-    private func cleanUpdateDefaults(_ defaults: UserDefaults) {
-        defaults.removeObject(forKey: Self.updateLastCheckKey)
-        defaults.removeObject(forKey: Self.updateLastCheckedInstalledVersionKey)
     }
 
     private static func release(version: String) -> OpenMUXRelease {
@@ -438,9 +423,6 @@ final class OmuxAppShellTests: XCTestCase {
     func testUpdateCheckerSetsAvailabilityWhenLatestReleaseIsNewer() async throws {
         let root = try versionFixture(version: "0.4.0")
         defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
-        let now = Date(timeIntervalSince1970: 1_000)
         var releaseCalls = 0
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -456,28 +438,19 @@ final class OmuxAppShellTests: XCTestCase {
             latestRelease: {
                 releaseCalls += 1
                 return Self.release(version: "0.5.0")
-            },
-            defaults: defaults,
-            now: { now }
+            }
         )
 
-        await checker.checkIfDue()
+        await checker.check()
 
         XCTAssertEqual(releaseCalls, 1)
         XCTAssertEqual(controller.currentUpdateAvailability(), OpenMUXUpdateAvailability(version: "0.5.0"))
-        XCTAssertEqual(defaults.object(forKey: Self.updateLastCheckKey) as? Date, now)
-        XCTAssertEqual(defaults.string(forKey: Self.updateLastCheckedInstalledVersionKey), "0.4.0")
     }
 
     @MainActor
-    func testUpdateCheckerSkipsRecentSuccessfulCheck() async throws {
+    func testUpdateCheckerFetchesOnEachStartupCheck() async throws {
         let root = try versionFixture(version: "0.4.0")
         defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
-        let now = Date(timeIntervalSince1970: 2_000)
-        defaults.set(now.addingTimeInterval(-60), forKey: Self.updateLastCheckKey)
-        defaults.set("0.4.0", forKey: Self.updateLastCheckedInstalledVersionKey)
         var releaseCalls = 0
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -493,94 +466,21 @@ final class OmuxAppShellTests: XCTestCase {
             latestRelease: {
                 releaseCalls += 1
                 return Self.release(version: "0.5.0")
-            },
-            defaults: defaults,
-            now: { now }
+            }
         )
 
-        await checker.checkIfDue()
+        await checker.check()
+        await checker.check()
 
-        XCTAssertEqual(releaseCalls, 0)
-        XCTAssertNil(controller.currentUpdateAvailability())
-    }
-
-    @MainActor
-    func testUpdateCheckerIgnoresRecentCheckForDifferentInstalledVersion() async throws {
-        let root = try versionFixture(version: "0.4.0")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
-        let now = Date(timeIntervalSince1970: 2_500)
-        defaults.set(now.addingTimeInterval(-60), forKey: Self.updateLastCheckKey)
-        defaults.set("0.5.0", forKey: Self.updateLastCheckedInstalledVersionKey)
-        var releaseCalls = 0
-        let controller = WorkspaceController(
-            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
-            hookRunner: ExternalHookRunner()
-        )
-        _ = try controller.openWorkspace(at: "/tmp")
-        let checker = OpenMUXUpdateAvailabilityChecker(
-            controller: controller,
-            versionProvider: OpenMUXVersionProvider(
-                executablePath: root.appendingPathComponent("bin/omux").path,
-                currentDirectoryPath: root.path
-            ),
-            latestRelease: {
-                releaseCalls += 1
-                return Self.release(version: "0.5.0")
-            },
-            defaults: defaults,
-            now: { now }
-        )
-
-        await checker.checkIfDue()
-
-        XCTAssertEqual(releaseCalls, 1)
+        XCTAssertEqual(releaseCalls, 2)
         XCTAssertEqual(controller.currentUpdateAvailability(), OpenMUXUpdateAvailability(version: "0.5.0"))
-        XCTAssertEqual(defaults.string(forKey: Self.updateLastCheckedInstalledVersionKey), "0.4.0")
-    }
-
-    @MainActor
-    func testUpdateCheckerIgnoresLegacyRecentCheckWithoutInstalledVersion() async throws {
-        let root = try versionFixture(version: "0.4.0")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
-        let now = Date(timeIntervalSince1970: 2_750)
-        defaults.set(now.addingTimeInterval(-60), forKey: Self.updateLastCheckKey)
-        var releaseCalls = 0
-        let controller = WorkspaceController(
-            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
-            hookRunner: ExternalHookRunner()
-        )
-        _ = try controller.openWorkspace(at: "/tmp")
-        let checker = OpenMUXUpdateAvailabilityChecker(
-            controller: controller,
-            versionProvider: OpenMUXVersionProvider(
-                executablePath: root.appendingPathComponent("bin/omux").path,
-                currentDirectoryPath: root.path
-            ),
-            latestRelease: {
-                releaseCalls += 1
-                return Self.release(version: "0.5.0")
-            },
-            defaults: defaults,
-            now: { now }
-        )
-
-        await checker.checkIfDue()
-
-        XCTAssertEqual(releaseCalls, 1)
-        XCTAssertEqual(controller.currentUpdateAvailability(), OpenMUXUpdateAvailability(version: "0.5.0"))
-        XCTAssertEqual(defaults.string(forKey: Self.updateLastCheckedInstalledVersionKey), "0.4.0")
     }
 
     @MainActor
     func testUpdateCheckerDoesNotCacheFailedCheck() async throws {
         let root = try versionFixture(version: "0.4.0")
         defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
+        var releaseCalls = 0
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -593,25 +493,22 @@ final class OmuxAppShellTests: XCTestCase {
                 currentDirectoryPath: root.path
             ),
             latestRelease: {
+                releaseCalls += 1
                 throw TestUpdateError.unavailable
-            },
-            defaults: defaults,
-            now: { Date(timeIntervalSince1970: 3_000) }
+            }
         )
 
-        await checker.checkIfDue()
+        await checker.check()
+        await checker.check()
 
+        XCTAssertEqual(releaseCalls, 2)
         XCTAssertNil(controller.currentUpdateAvailability())
-        XCTAssertNil(defaults.object(forKey: Self.updateLastCheckKey))
-        XCTAssertNil(defaults.string(forKey: Self.updateLastCheckedInstalledVersionKey))
     }
 
     @MainActor
     func testUpdateCheckerClearsAvailabilityWhenInstalledVersionIsCurrent() async throws {
         let root = try versionFixture(version: "0.5.0")
         defer { try? FileManager.default.removeItem(at: root) }
-        let defaults = try updateDefaultsFixture()
-        defer { cleanUpdateDefaults(defaults) }
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -626,12 +523,10 @@ final class OmuxAppShellTests: XCTestCase {
             ),
             latestRelease: {
                 Self.release(version: "0.5.0")
-            },
-            defaults: defaults,
-            now: { Date(timeIntervalSince1970: 4_000) }
+            }
         )
 
-        await checker.checkIfDue()
+        await checker.check()
 
         XCTAssertNil(controller.currentUpdateAvailability())
     }
@@ -3665,6 +3560,56 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(icon.font.familyName, "Symbols Nerd Font Mono")
         XCTAssertFalse(icon.prefersSymbol)
         XCTAssertEqual(icon.colorToken, .ansiGreen)
+    }
+
+    @MainActor
+    func testBundledIconFontLoadsFromPackagedAppContentsResources() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BundledIconFontTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let appURL = root.appendingPathComponent("OpenMUX.app", isDirectory: true)
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
+        let executableURL = contentsURL.appendingPathComponent("MacOS/OpenMUXApp", isDirectory: false)
+        let fontURL = resourcesURL
+            .appendingPathComponent("OpenMUX_OmuxAppShell.bundle", isDirectory: true)
+            .appendingPathComponent("SymbolsNerdFontMono-Regular.ttf", isDirectory: false)
+
+        try FileManager.default.createDirectory(at: fontURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0]).write(to: fontURL)
+        try Data().write(to: executableURL)
+
+        XCTAssertEqual(
+            BundledIconFont.fontURL(
+                mainBundleURL: appURL,
+                mainResourceURL: resourcesURL,
+                mainExecutableURL: executableURL
+            )?.standardizedFileURL,
+            fontURL.standardizedFileURL
+        )
+    }
+
+    @MainActor
+    func testBundledIconFontDoesNotUseSwiftPMFallbackForPackagedApp() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BundledIconFontTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let appURL = root.appendingPathComponent("OpenMUX.app", isDirectory: true)
+        let executableURL = appURL
+            .appendingPathComponent("Contents/MacOS/OpenMUXApp", isDirectory: false)
+        try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: executableURL)
+
+        XCTAssertNil(
+            BundledIconFont.fontURL(
+                mainBundleURL: appURL,
+                mainResourceURL: nil,
+                mainExecutableURL: executableURL
+            )
+        )
     }
 
     @MainActor
