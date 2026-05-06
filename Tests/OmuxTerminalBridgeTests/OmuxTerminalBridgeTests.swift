@@ -2004,7 +2004,7 @@ private final class LockedValue<Value>: @unchecked Sendable {
 }
 
 private func makeTheme(name: String) -> OmuxTheme {
-    let seed = UInt8(abs(name.hashValue) % 160 + 40)
+    let seed = deterministicThemeSeed(name: name, modulo: 160, offset: 40)
     let tokens = Dictionary(
         uniqueKeysWithValues: ThemeToken.allCases.map { token in
             let offset = UInt8(ThemeToken.allCases.firstIndex(of: token) ?? 0)
@@ -2019,6 +2019,13 @@ private func makeTheme(name: String) -> OmuxTheme {
         }
     )
     return OmuxTheme(schema: 1, name: name, displayName: name.capitalized, tokens: tokens)
+}
+
+private func deterministicThemeSeed(name: String, modulo: UInt16, offset: UInt16) -> UInt8 {
+    let hash = name.utf8.reduce(UInt32(2_166_136_261)) { partial, byte in
+        (partial ^ UInt32(byte)) &* 16_777_619
+    }
+    return UInt8((hash % UInt32(modulo)) + UInt32(offset))
 }
 
 private func temporaryDirectory() throws -> URL {

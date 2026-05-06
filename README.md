@@ -17,6 +17,7 @@
     <a href="https://github.com/finger-gun/omux/actions/workflows/ci.yml"><img src="https://github.com/finger-gun/omux/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" /></a>
     <img src="https://img.shields.io/badge/Status-Beta-F59E0B?style=flat-square" alt="Beta status" />
     <img src="https://img.shields.io/badge/Platform-macOS-111827?style=flat-square" alt="macOS platform" />
+    <img src="https://img.shields.io/badge/AI-Friendly-7C3AED?style=flat-square" alt="AI-friendly" />
     <img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
   </span>
 </p>
@@ -41,7 +42,7 @@
 
 ## What OpenMUX is
 
-OpenMUX is a native macOS terminal workspace. It gives you workspaces, tabs, split panes, pane-local tab stacks, persistent shell sessions, themes, a local CLI, hooks, and extension panes without turning the terminal into a browser-first or AI-first product.
+OpenMUX is a native macOS terminal workspace. It gives you workspaces, tabs, split panes, pane-local tab stacks, persistent shell sessions, themes, a local CLI, hooks, and extension panes.
 
 The goal is simple: keep the terminal powerful, inspectable, and open to your workflow.
 

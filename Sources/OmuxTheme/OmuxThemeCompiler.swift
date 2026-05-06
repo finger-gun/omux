@@ -260,9 +260,11 @@ public struct OmuxThemeCompiler {
 
         let activePath = activeFileURL?.standardizedFileURL.path
         let keyedValues = urls.compactMap { url -> (url: URL, size: Int, modified: Date)? in
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let size = values?.fileSize ?? 0
-            let modified = values?.contentModificationDate ?? .distantPast
+            guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else {
+                return nil
+            }
+            let size = attributes[.size] as? Int ?? 0
+            let modified = attributes[.modificationDate] as? Date ?? .distantPast
             return (url, size, modified)
         }
 
@@ -273,7 +275,12 @@ public struct OmuxThemeCompiler {
 
         let removable = keyedValues
             .filter { $0.url.standardizedFileURL.path != activePath }
-            .sorted(by: { $0.modified < $1.modified })
+            .sorted {
+                if $0.modified == $1.modified {
+                    return $0.url.path < $1.url.path
+                }
+                return $0.modified < $1.modified
+            }
 
         for entry in removable where totalBytes > maxDirectoryBytes {
             try? fileManager.removeItem(at: entry.url)
