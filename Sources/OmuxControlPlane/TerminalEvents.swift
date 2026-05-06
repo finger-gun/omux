@@ -9,6 +9,7 @@ public enum ControlPlaneTerminalEventName: String, Codable, CaseIterable, Sendab
     case desktopNotification = "terminal.desktopNotification"
     case bell = "terminal.bell"
     case inputSent = "terminal.inputSent"
+    case textActivated = "terminal.textActivated"
     case commandFinished = "terminal.commandFinished"
     case progressReported = "terminal.progressReported"
     case childExited = "terminal.childExited"

@@ -93,15 +93,12 @@ public enum TerminalTextActivationResolver {
             return nil
         }
         let lineIndex = min(visibleStart + (row - contentTopRow), lines.count - 1)
-        if let token = token(in: lines[lineIndex], column: column) {
+        if let token = token(in: lines[lineIndex], column: column, tolerance: 2) {
             return TerminalTextActivationHit(token: token, row: row, column: column)
         }
 
-        for offset in 0..<visibleLineCount {
-            let candidateLineIndex = min(visibleStart + offset, lines.count - 1)
-            if let token = firstPathLikeToken(in: lines[candidateLineIndex]) {
-                return TerminalTextActivationHit(token: token, row: contentTopRow + offset, column: column)
-            }
+        if let token = firstPathLikeToken(in: lines[lineIndex]) {
+            return TerminalTextActivationHit(token: token, row: row, column: column)
         }
         return nil
     }
@@ -116,23 +113,27 @@ public enum TerminalTextActivationResolver {
         return nil
     }
 
-    private static func token(in line: String, column: Int) -> String? {
+    private static func token(in line: String, column: Int, tolerance: Int) -> String? {
         let characters = Array(line)
         guard characters.isEmpty == false else {
             return nil
         }
 
         let clampedColumn = min(max(column, 0), characters.count - 1)
-        guard isTokenCharacter(characters[clampedColumn]) else {
+        let candidateOffsets = [0] + (1...max(0, tolerance)).flatMap { [-$0, $0] }
+        guard let tokenColumn = candidateOffsets
+            .map({ clampedColumn + $0 })
+            .first(where: { characters.indices.contains($0) && isTokenCharacter(characters[$0]) })
+        else {
             return nil
         }
 
-        var start = clampedColumn
+        var start = tokenColumn
         while start > 0, isTokenCharacter(characters[start - 1]) {
             start -= 1
         }
 
-        var end = clampedColumn
+        var end = tokenColumn
         while end + 1 < characters.count, isTokenCharacter(characters[end + 1]) {
             end += 1
         }

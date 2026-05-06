@@ -592,15 +592,12 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func handleTerminalTextActivation(_ request: TerminalTextActivationRequest) -> Bool {
-        let snapshot = bridge.terminalTextSnapshot(for: request.paneID, maxBytes: 64 * 1024, maxLines: request.terminalSize.rows)
-        guard snapshot.unavailableReason == nil,
-              let hit = TerminalTextActivationResolver.hit(in: snapshot.text, request: request)
-        else {
+        guard let context = resolvedTerminalTextActivationContext(for: request) else {
             return false
         }
 
-        let context = terminalTextActivationContext(for: request, hit: hit)
         emitTerminalTextActivationHook(context)
+        publishTerminalTextActivationEvent(context)
 
         guard let resolvedPath = context.resolvedPath,
               shouldOpenMarkdownPreview(for: resolvedPath)
@@ -610,6 +607,28 @@ public final class WorkspaceController: @unchecked Sendable {
 
         openMarkdownPreview(for: resolvedPath)
         return true
+    }
+
+    public func canHandleTerminalTextActivation(_ request: TerminalTextActivationRequest) -> Bool {
+        guard let context = resolvedTerminalTextActivationContext(for: request),
+              let resolvedPath = context.resolvedPath
+        else {
+            return false
+        }
+        return shouldOpenMarkdownPreview(for: resolvedPath)
+    }
+
+    private func resolvedTerminalTextActivationContext(
+        for request: TerminalTextActivationRequest
+    ) -> TerminalTextActivationContext? {
+        let snapshot = bridge.terminalTextSnapshot(for: request.paneID, maxBytes: 64 * 1024, maxLines: request.terminalSize.rows)
+        guard snapshot.unavailableReason == nil,
+              let hit = TerminalTextActivationResolver.hit(in: snapshot.text, request: request)
+        else {
+            return nil
+        }
+
+        return terminalTextActivationContext(for: request, hit: hit)
     }
 
     @discardableResult
@@ -1851,19 +1870,37 @@ public final class WorkspaceController: @unchecked Sendable {
                     tabID: terminalContext?.tabID,
                     paneID: context.request.paneID,
                     sessionID: terminalContext?.sessionID,
-                    payload: .object([
-                        "token": .string(context.hit.token),
-                        "row": .integer(context.hit.row),
-                        "column": .integer(context.hit.column),
-                        "cwd": context.cwd.map(OmuxValue.string) ?? .null,
-                        "resolvedPath": context.resolvedPath.map(OmuxValue.string) ?? .null,
-                        "modifiers": .integer(Int(context.request.modifiers.rawValue)),
-                    ])
+                    payload: terminalTextActivationPayload(context)
                 )
             )
         } catch {
             fputs("warning: failed to emit terminal-text-activated hook: \(error)\n", stderr)
         }
+    }
+
+    private func publishTerminalTextActivationEvent(_ context: TerminalTextActivationContext) {
+        let terminalContext = terminalContext(for: context.request.paneID)
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .textActivated,
+                workspaceID: terminalContext?.workspaceID,
+                tabID: terminalContext?.tabID,
+                paneID: context.request.paneID,
+                sessionID: terminalContext?.sessionID,
+                payload: terminalTextActivationPayload(context)
+            )
+        )
+    }
+
+    private func terminalTextActivationPayload(_ context: TerminalTextActivationContext) -> OmuxValue {
+        .object([
+            "token": .string(context.hit.token),
+            "row": .integer(context.hit.row),
+            "column": .integer(context.hit.column),
+            "cwd": context.cwd.map(OmuxValue.string) ?? .null,
+            "resolvedPath": context.resolvedPath.map(OmuxValue.string) ?? .null,
+            "modifiers": .integer(Int(context.request.modifiers.rawValue)),
+        ])
     }
 
     private func shouldOpenMarkdownPreview(for path: String) -> Bool {

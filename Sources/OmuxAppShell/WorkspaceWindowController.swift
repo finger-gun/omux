@@ -675,14 +675,17 @@ final class WorkspaceShellViewController: NSViewController {
                         paneStack: paneStack,
                         canCloseSinglePaneStack: canCloseSinglePaneStack
                     )
-                 },
-                 onFocus: { [weak self] paneID in
-                     _ = self?.controller.focus(paneID: paneID)
-                 },
-                 onTextActivation: { [weak self] request in
-                     self?.controller.handleTerminalTextActivation(request) ?? false
-                 }
-             )
+                },
+                onFocus: { [weak self] paneID in
+                    _ = self?.controller.focus(paneID: paneID)
+                },
+                onTextActivation: { [weak self] request in
+                    self?.controller.handleTerminalTextActivation(request) ?? false
+                },
+                onTextActivationHover: { [weak self] request in
+                    self?.controller.canHandleTerminalTextActivation(request) ?? false
+                }
+            )
             return (
                 stackView,
                 paneStack.focusedPaneID == focusedPaneID ? stackView.focusedPaneView : nil,
@@ -1673,11 +1676,12 @@ final class PaneStackView: NSView {
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         canCloseSinglePaneStack: Bool,
-         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
-         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
-         onFocus: @escaping @MainActor (PaneID) -> Void,
-         onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool
-     ) {
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
+        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
+        onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool
+    ) {
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
         if let descriptor = activePane.extensionPane {
             let extensionPaneView = ExtensionPaneHostView(
@@ -1692,11 +1696,12 @@ final class PaneStackView: NSView {
         } else {
             let terminalPaneView = bridge.makeHostedPaneView(
                 for: activePane,
-                 isFocused: activePane.id == focusedPaneID,
-                 themePalette: theme.terminalPalette,
-                 onFocus: onFocus,
-                 onTextActivation: onTextActivation
-             )
+                isFocused: activePane.id == focusedPaneID,
+                themePalette: theme.terminalPalette,
+                onFocus: onFocus,
+                onTextActivation: onTextActivation,
+                onTextActivationHover: onTextActivationHover
+            )
             self.paneRenderer = terminalPaneView
             self.paneContentView = terminalPaneView
         }

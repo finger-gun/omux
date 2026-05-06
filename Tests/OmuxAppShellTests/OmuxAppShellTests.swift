@@ -311,6 +311,8 @@ final class OmuxAppShellTests: XCTestCase {
             hookRunner: ExternalHookRunner(),
             markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview(enabled: true)
         )
+        var events = [ControlPlaneEvent]()
+        controller.onTerminalEvent = { events.append($0) }
         let workspace = try controller.openWorkspace(at: root.path)
         let pane = try XCTUnwrap(workspace.focusedPane)
         let session = try XCTUnwrap(pane.terminalSession)
@@ -334,6 +336,11 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(extensionPane?.pluginID, "dev.fingergun.markdown-preview")
         XCTAssertEqual(extensionPane?.status, .ready)
         XCTAssertTrue(extensionPane?.html?.contains("<h1>Hello</h1>") ?? false)
+        XCTAssertTrue(events.contains { event in
+            event.name == ControlPlaneTerminalEventName.textActivated.rawValue
+                && event.paneID == pane.id
+                && event.payload.objectValue?["token"] == .string("README.md")
+        })
     }
 
     func testTerminalTextActivationDoesNotClaimMarkdownWhenPluginDisabled() throws {

@@ -17,7 +17,8 @@ protocol RuntimeTerminalInteractionConfiguring: AnyObject {
         paneID: PaneID,
         isFocused: Bool,
         onFocus: @escaping @MainActor (PaneID) -> Void,
-        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     )
     func updateHostedPaneFocus(_ isFocused: Bool)
 }
@@ -83,7 +84,8 @@ public final class HostedTerminalPaneView: NSView {
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
         onFocus: @escaping @MainActor (PaneID) -> Void,
-        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
     ) {
         self.paneID = pane.id
         self.bridge = bridge
@@ -93,7 +95,8 @@ public final class HostedTerminalPaneView: NSView {
             isFocused: isFocused,
             themePalette: themePalette,
             onFocus: onFocus,
-            onTextActivation: onTextActivation
+            onTextActivation: onTextActivation,
+            onTextActivationHover: onTextActivationHover
         )
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -176,7 +179,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         isFocused: Bool,
         themePalette: TerminalThemePalette,
         onFocus: @escaping @MainActor (PaneID) -> Void,
-        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) {
         self.paneID = pane.id
         self.bridge = bridge
@@ -190,7 +194,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
             paneID: pane.id,
             isFocused: isFocused,
             onFocus: onFocus,
-            onTextActivation: onTextActivation
+            onTextActivation: onTextActivation,
+            onTextActivationHover: onTextActivationHover
         )
     }
 

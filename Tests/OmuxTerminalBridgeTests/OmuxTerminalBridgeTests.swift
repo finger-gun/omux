@@ -27,6 +27,43 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(hit?.row, 1)
     }
 
+    func testTerminalTextActivationAllowsNearMissWithinSameLine() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 80, y: 10),
+            viewSize: CGSize(width: 320, height: 40),
+            terminalSize: TerminalSize(columns: 40, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nREADME.md",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+        XCTAssertEqual(hit?.row, 1)
+    }
+
+    func testTerminalTextActivationDoesNotFallbackAcrossLines() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 160, y: 10),
+            viewSize: CGSize(width: 320, height: 60),
+            terminalSize: TerminalSize(columns: 40, rows: 3),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "README.md\n ",
+            request: request
+        )
+
+        XCTAssertNil(hit)
+    }
+
     func testTerminalTextActivationResolvesRelativePathFromWorkingDirectory() {
         XCTAssertEqual(
             TerminalTextActivationResolver.resolvedLocalPath(token: "README.md", cwd: "/repo"),
@@ -486,6 +523,63 @@ final class OmuxTerminalBridgeTests: XCTestCase {
 
         XCTAssertEqual(runtime.mouseButtons.count, 1)
         XCTAssertEqual(runtime.mousePositions.count, 1)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewShowsTextActivationCursorOnCommandHover() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+        var hoverRequest: TerminalTextActivationRequest?
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(
+            for: pane,
+            isFocused: true,
+            onFocus: { _ in },
+            onTextActivation: { _ in false },
+            onTextActivationHover: { request in
+                hoverRequest = request
+                return true
+            }
+        )
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let commandHover = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 0,
+            pressure: 0
+        ))
+        runtimeView.mouseMoved(with: commandHover)
+
+        XCTAssertEqual(hoverRequest?.paneID, pane.id)
+        XCTAssertTrue(runtimeView.isTextActivationCursorActive)
+
+        let normalHover = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 0,
+            pressure: 0
+        ))
+        runtimeView.mouseMoved(with: normalHover)
+
+        XCTAssertFalse(runtimeView.isTextActivationCursorActive)
     }
 
     @MainActor

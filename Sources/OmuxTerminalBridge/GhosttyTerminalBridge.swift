@@ -411,7 +411,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
         onFocus: @escaping @MainActor (PaneID) -> Void,
-        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
     ) -> HostedTerminalPaneView {
         HostedTerminalPaneView(
             pane: pane,
@@ -419,7 +420,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             isFocused: isFocused,
             themePalette: themePalette,
             onFocus: onFocus,
-            onTextActivation: onTextActivation
+            onTextActivation: onTextActivation,
+            onTextActivationHover: onTextActivationHover
         )
     }
 
@@ -780,7 +782,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
         onFocus: @escaping @MainActor (PaneID) -> Void,
-        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
+        onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) -> any TerminalSurfaceContentHosting {
         if let surface = surface(for: pane.id),
             let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
@@ -791,7 +794,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
                 isFocused: isFocused,
                 themePalette: themePalette,
                 onFocus: onFocus,
-                onTextActivation: onTextActivation
+                onTextActivation: onTextActivation,
+                onTextActivationHover: onTextActivationHover
             )
         }
 
