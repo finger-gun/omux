@@ -72,10 +72,6 @@ https://ziglang.org/download/$ZIG_VERSION/zig-$zig_arch-macos-$ZIG_VERSION.tar.x
 }
 
 ensure_zig() {
-  if [ -x "$ZIG_BIN" ] && [ "$("$ZIG_BIN" version)" = "$ZIG_VERSION" ]; then
-    return
-  fi
-
   if command -v brew >/dev/null 2>&1; then
     BREW_ZIG="$(brew --prefix zig@0.15 2>/dev/null || true)"
     if [ -n "$BREW_ZIG" ] && [ -x "$BREW_ZIG/bin/zig" ] && [ "$("$BREW_ZIG/bin/zig" version)" = "$ZIG_VERSION" ]; then
@@ -86,6 +82,10 @@ ensure_zig() {
 
   if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$ZIG_VERSION" ]; then
     ZIG_BIN="$(command -v zig)"
+    return
+  fi
+
+  if [ -x "$ZIG_BIN" ] && [ "$("$ZIG_BIN" version)" = "$ZIG_VERSION" ]; then
     return
   fi
 
@@ -105,6 +105,7 @@ fi
 ensure_zig
 
 echo "Building GhosttyKit xcframework against pinned snapshot: $PINNED_REF"
+echo "Using Zig: $ZIG_BIN"
 "$ZIG_BIN" version
 
 cd "$VENDOR_DIR"
