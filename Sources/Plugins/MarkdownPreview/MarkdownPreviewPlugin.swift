@@ -2,18 +2,36 @@ import Foundation
 import OmuxControlPlane
 import OmuxCore
 
-struct OmuxMarkdownPreviewRequest: Equatable {
-    let fileURL: URL
-    let paneID: String?
-    let title: String?
-    let watch: Bool
-    let axis: PaneSplitAxis
+public struct OmuxMarkdownPreviewRequest: Equatable {
+    public let fileURL: URL
+    public let paneID: String?
+    public let title: String?
+    public let watch: Bool
+    public let axis: PaneSplitAxis
+
+    public init(
+        fileURL: URL,
+        paneID: String?,
+        title: String?,
+        watch: Bool,
+        axis: PaneSplitAxis
+    ) {
+        self.fileURL = fileURL
+        self.paneID = paneID
+        self.title = title
+        self.watch = watch
+        self.axis = axis
+    }
 }
 
-struct OmuxMarkdownPreviewRenderer {
-    let theme: String
+public struct OmuxMarkdownPreviewRenderer {
+    public let theme: String
 
-    func render(markdown: String, title: String, sourcePath: String) -> String {
+    public init(theme: String) {
+        self.theme = theme
+    }
+
+    public func render(markdown: String, title: String, sourcePath: String) -> String {
         let body = renderBlocks(markdown)
         return """
         <!doctype html>
@@ -36,7 +54,7 @@ struct OmuxMarkdownPreviewRenderer {
         """
     }
 
-    func renderFile(_ fileURL: URL) throws -> String {
+    public func renderFile(_ fileURL: URL) throws -> String {
         let markdown = try String(contentsOf: fileURL, encoding: .utf8)
         return render(
             markdown: markdown,
@@ -279,12 +297,18 @@ struct OmuxMarkdownPreviewRenderer {
     }
 }
 
-struct OmuxMarkdownPreviewPlugin {
-    static let pluginID = "dev.fingergun.markdown-preview"
+public struct OmuxMarkdownPreviewPlugin {
+    public static let pluginID = "dev.fingergun.markdown-preview"
+    public static let commandName = "markdown-preview"
+    public static let commandDisplayPath = "bundled:\(pluginID)"
 
-    let renderer: OmuxMarkdownPreviewRenderer
+    public let renderer: OmuxMarkdownPreviewRenderer
 
-    func run(
+    public init(renderer: OmuxMarkdownPreviewRenderer) {
+        self.renderer = renderer
+    }
+
+    public func run(
         request: OmuxMarkdownPreviewRequest,
         client: OmuxControlClient,
         writeLine: (String) -> Void

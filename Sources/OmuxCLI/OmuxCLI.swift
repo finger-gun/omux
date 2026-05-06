@@ -3,6 +3,7 @@ import Darwin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxMarkdownPreviewPlugin
 import OmuxTheme
 
 public struct OmuxCLICommand {
@@ -15,6 +16,8 @@ public struct OmuxCLICommand {
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
     private let versionProvider: OpenMUXVersionProvider
+    private let pluginRegistry: OmuxCLIPluginRegistry
+    private let pluginRunner: OmuxCLIPluginRunner
     private let environment: () -> [String: String]
 
     public init(
@@ -46,6 +49,8 @@ public struct OmuxCLICommand {
         themeRegistry: OmuxThemeRegistry,
         installer: OmuxCLIInstaller,
         versionProvider: OpenMUXVersionProvider = OpenMUXVersionProvider(),
+        pluginRegistry: OmuxCLIPluginRegistry = OmuxCLIPluginRegistry(),
+        pluginRunner: OmuxCLIPluginRunner = OmuxCLIPluginRunner(),
         environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
         selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
@@ -61,6 +66,8 @@ public struct OmuxCLICommand {
         self.themeRegistry = themeRegistry
         self.installer = installer
         self.versionProvider = versionProvider
+        self.pluginRegistry = pluginRegistry
+        self.pluginRunner = pluginRunner
         self.environment = environment
     }
 
@@ -85,6 +92,8 @@ public struct OmuxCLICommand {
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "theme":
                 return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
+            case "plugin", "plugins":
+                return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -107,8 +116,6 @@ public struct OmuxCLICommand {
                 }
             case "history":
                 return try runHistoryCommand(arguments: Array(commandArguments.dropFirst()))
-            case "markdown-preview":
-                return try runMarkdownPreviewCommand(arguments: Array(commandArguments.dropFirst()))
             case "extension-pane":
                 return try runExtensionPaneCommand(arguments: Array(commandArguments.dropFirst()))
             case "tab":
@@ -280,6 +287,9 @@ public struct OmuxCLICommand {
             case "install-cli":
                 return runInstallCLI(arguments: Array(commandArguments.dropFirst()))
             default:
+                if let registration = pluginRegistry.registration(named: command) {
+                    return try runRegisteredPlugin(registration, arguments: Array(commandArguments.dropFirst()))
+                }
                 writeLine(Self.usage)
                 return 1
             }
@@ -303,6 +313,8 @@ public struct OmuxCLICommand {
       omux theme
       omux theme <name>
       omux theme list
+      omux plugin list
+      omux plugin path
       omux list [--full]
       omux sessions
       omux panes
@@ -345,6 +357,59 @@ public struct OmuxCLICommand {
         )
         .standardizedFileURL
         .path
+    }
+
+    private func runPluginCommand(arguments: [String]) -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux plugin list|path")
+            return 1
+        }
+
+        switch subcommand {
+        case "list":
+            guard arguments.count == 1 else {
+                writeLine("usage: omux plugin list")
+                return 1
+            }
+            let plugins = pluginRegistry.plugins()
+            guard plugins.isEmpty == false else {
+                writeLine("No plugins installed.")
+                return 0
+            }
+            for plugin in plugins {
+                writeLine("\(plugin.commandName)\t\(plugin.displayPath)")
+            }
+            return 0
+        case "path":
+            guard arguments.count == 1 else {
+                writeLine("usage: omux plugin path")
+                return 1
+            }
+            writeLine(pluginRegistry.pluginsDirectoryURL.path)
+            return 0
+        default:
+            writeLine("usage: omux plugin list|path")
+            return 1
+        }
+    }
+
+    private func runRegisteredPlugin(_ plugin: OmuxRegisteredCLIPlugin, arguments: [String]) throws -> Int32 {
+        switch plugin {
+        case .bundled(let bundledPlugin):
+            switch bundledPlugin.commandName {
+            case OmuxMarkdownPreviewPlugin.commandName:
+                return try runMarkdownPreviewCommand(arguments: arguments)
+            default:
+                writeLine("omux error: bundled plugin '\(bundledPlugin.commandName)' is not available")
+                return 1
+            }
+        case .external(let externalPlugin):
+            return try pluginRunner.run(
+                plugin: externalPlugin,
+                arguments: arguments,
+                environment: environment()
+            )
+        }
     }
 
     private func runMarkdownPreviewCommand(arguments: [String]) throws -> Int32 {

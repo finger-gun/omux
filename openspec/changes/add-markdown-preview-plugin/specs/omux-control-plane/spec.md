@@ -22,6 +22,25 @@ The `omux` CLI SHALL expose commands that let scripts and plugin processes creat
 - **WHEN** a plugin process invokes the documented `omux` extension-pane update command with pane ID and content
 - **THEN** the CLI sends the corresponding JSON-RPC request and prints structured result data
 
+### Requirement: CLI SHALL discover registered plugin commands
+The `omux` CLI SHALL discover user-installed plugin executables from an OpenMUX-owned plugin directory and dispatch matching top-level commands to those executables.
+
+#### Scenario: Registered plugin command runs
+- **WHEN** a user installs an executable plugin command under `~/.omux/plugins/` and invokes `omux <plugin-command> [args...]`
+- **THEN** the CLI executes that plugin process with the remaining arguments and OpenMUX plugin environment variables
+
+#### Scenario: Built-in commands take precedence
+- **WHEN** a registered plugin command name conflicts with a built-in `omux` command
+- **THEN** the CLI executes the built-in command and does not shadow it with the plugin
+
+#### Scenario: Plugin list is inspectable
+- **WHEN** a user invokes the plugin listing command
+- **THEN** the CLI reports discovered plugin command names and executable paths
+
+#### Scenario: Bundled plugin uses registry path
+- **WHEN** a bundled plugin such as Markdown preview exposes a CLI command
+- **THEN** the command is registered through the plugin command registry rather than a core-only command switch
+
 ### Requirement: Terminal-mutating control-plane actions SHALL reject extension panes
 Control-plane operations that require a live terminal session SHALL return structured errors when their target resolves to an extension pane.
 

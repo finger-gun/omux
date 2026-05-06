@@ -79,6 +79,18 @@ Alternatives considered:
 
 Bundled optional plugin behavior proves the contracts without requiring the whole future plugin ecosystem at once.
 
+### Decision: Let external plugins register top-level CLI commands by executable discovery
+
+The `omux` CLI should route plugin commands through a registry. Bundled plugins register in-process command metadata, and user-installed plugins are discovered from `~/.omux/plugins/`. A user plugin can register command `foo` by installing either `~/.omux/plugins/foo` as an executable or `~/.omux/plugins/foo/plugin` as an executable. Built-in CLI commands always win on name conflicts; bundled plugin registrations win over external plugins with the same command name.
+
+Alternatives considered:
+
+- **Config-only command registry:** explicit but makes simple plugin installation harder and creates another stale-config failure mode.
+- **PATH-only discovery:** familiar, but does not make OpenMUX plugin ownership, listing, or documentation inspectable.
+- **In-process Swift registration:** unsuitable for user-created plugins and conflicts with the external-process-first plugin direction.
+
+Executable discovery keeps user plugins language-agnostic and makes plugin commands easy to inspect, while still preserving a narrow, public CLI/control-plane contract.
+
 ### Decision: File watching belongs to the plugin
 
 The Markdown plugin watches the source file and pushes rendered updates into its preview pane. OpenMUX core should not watch arbitrary plugin files except for its own configuration.

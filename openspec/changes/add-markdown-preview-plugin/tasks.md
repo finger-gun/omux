@@ -41,3 +41,11 @@
 - [x] 6.2 Document the Markdown preview workflow for editing in Helix beside a hot-reloading preview pane.
 - [x] 6.3 Validate that terminal keyboard/input behavior remains unchanged for terminal panes, including Option/Alt and dead-key paths.
 - [x] 6.4 Run the existing build, test, and OpenSpec validation workflows.
+
+## 7. External Plugin CLI Registration
+
+- [x] 7.1 Add an OpenMUX-owned plugin directory convention for user-installed executable plugin commands.
+- [x] 7.2 Dispatch unknown top-level `omux` commands to registered plugin executables without allowing plugins to shadow built-in commands.
+- [x] 7.3 Add `omux plugin` inspection commands for listing registered plugins and finding the plugin directory.
+- [x] 7.4 Document external plugin registration and add CLI tests for dispatch, argument/environment forwarding, listing, and built-in precedence.
+- [x] 7.5 Re-run existing test and OpenSpec validation workflows.

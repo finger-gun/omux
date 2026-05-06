@@ -2,6 +2,47 @@
 
 OpenMUX plugins are external, scriptable integrations first. They talk to the same public `omux` CLI and JSON-RPC control plane that users can automate from shell scripts. Extension panes let those integrations place non-terminal content beside terminals without leaking terminal-engine details into plugin code.
 
+## Register a CLI plugin command
+
+User plugins register top-level `omux` commands by installing executables under `~/.omux/plugins/`.
+
+For a single-file plugin, make the file executable:
+
+```sh
+mkdir -p ~/.omux/plugins
+cp ./my-preview ~/.omux/plugins/my-preview
+chmod +x ~/.omux/plugins/my-preview
+omux my-preview --help
+```
+
+For a plugin that needs bundled files, use a directory with an executable named `plugin`:
+
+```sh
+mkdir -p ~/.omux/plugins/my-preview
+cp ./run.sh ~/.omux/plugins/my-preview/plugin
+chmod +x ~/.omux/plugins/my-preview/plugin
+omux my-preview README.md
+```
+
+Built-in `omux` commands always take precedence, so a plugin cannot shadow commands such as `config`, `theme`, `history`, or `extension-pane`. Bundled plugins also register commands through this registry; for example, Markdown preview registers `omux markdown-preview`, and an external plugin cannot replace it by using the same command name.
+
+Inspect registered plugins with:
+
+```sh
+omux plugin path
+omux plugin list
+```
+
+When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchanged and adds these environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
+| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
+| `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
+
+Plugins can call back into `omux extension-pane`, `omux notify`, and other public commands to interact with the running app.
+
 ## Extension pane CLI contract
 
 Use `omux extension-pane` to create, update, and close plugin-owned panes:

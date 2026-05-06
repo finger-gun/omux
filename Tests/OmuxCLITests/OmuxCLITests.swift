@@ -4,6 +4,7 @@ import XCTest
 @testable import OmuxConfig
 @testable import OmuxControlPlane
 @testable import OmuxCore
+@testable import OmuxMarkdownPreviewPlugin
 @testable import OmuxTheme
 
 final class OmuxCLITests: XCTestCase {
@@ -638,6 +639,124 @@ final class OmuxCLITests: XCTestCase {
             return XCTFail("expected extension-pane request params")
         }
         XCTAssertTrue(output.last?.contains("usage: omux extension-pane update") == true)
+    }
+
+    func testCLIRegisteredPluginCommandReceivesArgumentsAndEnvironment() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginDirectory = home.appendingPathComponent("plugins/hello", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let markerURL = home.appendingPathComponent("marker.txt")
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try """
+        #!/bin/sh
+        printf "%s\\n" "$OMUX_PLUGIN_COMMAND" "$1" "$2" "$OMUX_PLUGIN_EXECUTABLE" > "\(markerURL.path)"
+        exit 17
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let command = OmuxCLICommand(writeLine: { _ in })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "hello", "one", "two"]), 17)
+        let marker = try String(contentsOf: markerURL, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(marker, ["hello", "one", "two", executableURL.path])
+    }
+
+    func testCLIPluginListAndPathInspectRegisteredPlugins() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = home.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let alphaURL = pluginsDirectory.appendingPathComponent("alpha")
+        try "#!/bin/sh\n".write(to: alphaURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: alphaURL.path)
+
+        let betaDirectory = pluginsDirectory.appendingPathComponent("beta", isDirectory: true)
+        try FileManager.default.createDirectory(at: betaDirectory, withIntermediateDirectories: true)
+        let betaURL = betaDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\n".write(to: betaURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: betaURL.path)
+
+        let ignoredURL = pluginsDirectory.appendingPathComponent("ignored")
+        try "#!/bin/sh\n".write(to: ignoredURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugin", "path"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "plugin", "list"]), 0)
+        XCTAssertEqual(output.first, pluginsDirectory.path)
+        XCTAssertEqual(output.dropFirst(), [
+            "alpha\t\(alphaURL.path)",
+            "beta\t\(betaURL.path)",
+            "\(OmuxMarkdownPreviewPlugin.commandName)\t\(OmuxMarkdownPreviewPlugin.commandDisplayPath)",
+        ])
+    }
+
+    func testCLIBuiltInCommandTakesPrecedenceOverPlugin() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = home.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let markerURL = home.appendingPathComponent("should-not-exist.txt")
+        let executableURL = pluginsDirectory.appendingPathComponent("help")
+        try """
+        #!/bin/sh
+        echo shadowed > "\(markerURL.path)"
+        exit 42
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "help"]), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+        XCTAssertTrue(output.first?.contains("OpenMUX CLI") == true)
+    }
+
+    func testCLIBundledMarkdownPreviewPluginCannotBeShadowedByExternalPlugin() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = home.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let markerURL = home.appendingPathComponent("should-not-exist.txt")
+        let executableURL = pluginsDirectory.appendingPathComponent(OmuxMarkdownPreviewPlugin.commandName)
+        try """
+        #!/bin/sh
+        echo shadowed > "\(markerURL.path)"
+        exit 42
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", OmuxMarkdownPreviewPlugin.commandName]), 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+        XCTAssertEqual(output, ["usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]"])
     }
 
     func testCLISplitAcceptsDirectionAndTargetInEitherOrder() throws {

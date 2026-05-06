@@ -385,6 +385,8 @@ omux config init
 omux theme
 omux theme <name>
 omux theme list
+omux plugin list
+omux plugin path
 omux list --full
 omux sessions
 omux panes

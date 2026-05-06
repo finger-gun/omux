@@ -44,6 +44,7 @@ OpenMUX keeps user-owned files under `~/.omux/`:
 | `~/.omux/config.toml` | User configuration for theme and terminal settings. |
 | `~/.omux/themes/` | User theme overrides and custom themes. |
 | `~/.omux/hooks/` | Executable hook handlers grouped by hook name. |
+| `~/.omux/plugins/` | Executable plugin commands discoverable as `omux <plugin-command>`. |
 | `~/.omux/generated/ghostty/` | Generated terminal-engine artifacts managed by OpenMUX. |
 
-The generated directory is not the primary user API. Prefer editing `config.toml`, theme files, and hook files.
+The generated directory is not the primary user API. Prefer editing `config.toml`, theme files, hook files, and plugin executables.
