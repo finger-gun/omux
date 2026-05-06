@@ -1049,6 +1049,90 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
+    public func closePane(paneID: PaneID) throws -> Workspace? {
+        lock.lock()
+        var removedPane: Pane?
+        var updatedWorkspace: Workspace?
+        var workspaceID: WorkspaceID?
+        var tabID: TabID?
+        var paneStackID: PaneStackID?
+        var closedPaneTab = false
+
+        for workspaceIndex in workspaces.indices {
+            guard let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }),
+                  let paneStack = workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: paneID)
+            else {
+                continue
+            }
+
+            workspaceID = workspaces[workspaceIndex].id
+            tabID = workspaces[workspaceIndex].tabs[tabIndex].id
+            paneStackID = paneStack.id
+
+            if paneStack.panes.count > 1 {
+                removedPane = workspaces[workspaceIndex].tabs[tabIndex].closePane(paneID)
+                closedPaneTab = true
+            } else if workspaces[workspaceIndex].tabs[tabIndex].panes.count > 1 {
+                removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID)
+            } else if workspaces[workspaceIndex].tabs.count > 1 {
+                removedPane = workspaces[workspaceIndex].closeTab(workspaces[workspaceIndex].tabs[tabIndex].id)?.panes.first
+            }
+
+            if removedPane != nil {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
+            break
+        }
+
+        guard let removedPane,
+              let updatedWorkspace,
+              let workspaceID,
+              let tabID
+        else {
+            lock.unlock()
+            return nil
+        }
+        lock.unlock()
+
+        if removedPane.isTerminal {
+            try bridge.teardown(paneID: removedPane.id)
+        }
+
+        let hookName = closedPaneTab ? "pane-tab-closed" : "pane-removed"
+        try hookRunner.emit(
+            HookInvocation(
+                category: .session,
+                name: hookName,
+                workspaceID: workspaceID,
+                tabID: tabID,
+                paneID: removedPane.id,
+                sessionID: removedPane.terminalSession?.id,
+                payload: .object([
+                    "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+                ])
+            )
+        )
+
+        if closedPaneTab {
+            publishControlPlaneEvent(
+                ControlPlaneEvent(
+                    name: .paneTabClosed,
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    paneID: removedPane.id,
+                    sessionID: removedPane.terminalSession?.id,
+                    payload: .object([
+                        "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+                    ])
+                )
+            )
+        }
+
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
     public func deleteActiveWorkspace() throws -> Workspace? {
         guard let activeWorkspaceID else {
             return nil
@@ -2201,7 +2285,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
         for removedWorkspace in removedWorkspaces {
             for pane in removedWorkspace.tabs.flatMap(\.panes) {
-                try bridge.teardown(paneID: pane.id)
+                if pane.isTerminal {
+                    try bridge.teardown(paneID: pane.id)
+                }
             }
 
             try hookRunner.emit(
@@ -2271,7 +2357,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.unlock()
         for removedPane in removedPanes {
-            try bridge.teardown(paneID: removedPane.id)
+            if removedPane.isTerminal {
+                try bridge.teardown(paneID: removedPane.id)
+            }
             try hookRunner.emit(
                 HookInvocation(
                     category: .session,

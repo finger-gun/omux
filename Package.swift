@@ -50,7 +50,12 @@ targets.append(
         ),
         .target(
             name: "OmuxMarkdownPreviewPlugin",
-            dependencies: ["OmuxControlPlane", "OmuxCore"],
+            dependencies: [
+                "OmuxControlPlane",
+                "OmuxCore",
+                .product(name: "cmark-gfm", package: "swift-cmark"),
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
+            ],
             path: "Sources/Plugins/MarkdownPreview"
         ),
         .target(
@@ -131,6 +136,9 @@ let package = Package(
         .library(name: "OmuxAppShell", targets: ["OmuxAppShell"]),
         .executable(name: "OpenMUXApp", targets: ["OpenMUXApp"]),
         .executable(name: "omux", targets: ["omux"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-cmark.git", branch: "gfm"),
     ],
     targets: targets
 )

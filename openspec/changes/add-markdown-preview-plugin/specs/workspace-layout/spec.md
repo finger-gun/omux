@@ -21,3 +21,7 @@ Workspace layout SHALL distinguish pane focus from terminal target resolution so
 #### Scenario: Split from extension pane is valid
 - **WHEN** a caller requests a layout split from a focused extension pane
 - **THEN** OpenMUX creates a new pane in the requested split location without needing terminal session state from the source pane
+
+#### Scenario: Split pane containing extension content can be closed
+- **WHEN** a workspace contains terminal and extension panes in separate split-tree leaves
+- **THEN** pane close actions can remove either split pane and collapse the remaining layout without requiring pane-local tab siblings

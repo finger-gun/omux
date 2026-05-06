@@ -1060,6 +1060,34 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
+    func testWorkspaceControllerCanCloseTerminalPaneThatOpenedExtensionPreview() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let terminalSurfaceID = try XCTUnwrap(bridge.surface(for: terminalPaneID)?.runtimeSurfaceID)
+        let extensionResult = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>"
+            )
+        ))
+
+        let updatedWorkspace = try XCTUnwrap(controller.closePane(paneID: terminalPaneID))
+
+        XCTAssertEqual(updatedWorkspace.focusedTab?.panes.map(\.id), [extensionResult.pane.id])
+        XCTAssertEqual(updatedWorkspace.focusedPane?.id, extensionResult.pane.id)
+        XCTAssertEqual(runtime.destroyedSurfaceIDs, [terminalSurfaceID])
+    }
+
     func testWorkspaceControllerDeletesActiveWorkspaceWhenAnotherExists() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -3789,6 +3817,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
     var failNextSend = false
@@ -3806,6 +3835,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     }
 
     func destroySurface(runtimeSurfaceID: String) throws {
+        destroyedSurfaceIDs.append(runtimeSurfaceID)
         sessions.removeValue(forKey: runtimeSurfaceID)
         transcriptBySurface.removeValue(forKey: runtimeSurfaceID)
         inputBySurface.removeValue(forKey: runtimeSurfaceID)

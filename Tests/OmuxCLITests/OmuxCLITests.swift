@@ -481,8 +481,67 @@ final class OmuxCLITests: XCTestCase {
             return XCTFail("expected markdown preview extension-pane create params")
         }
         XCTAssertTrue(html.contains("<h1>Preview</h1>"))
-        XCTAssertTrue(html.contains("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"))
         XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("alert(&quot;x&quot;)"))
+    }
+
+    func testMarkdownPreviewRendererRendersGFMAndConstrainsRawHTML() throws {
+        let html = try OmuxMarkdownPreviewRenderer(theme: "light").render(
+            markdown: """
+            # README
+
+            | Name | Value |
+            | --- | --- |
+            | Renderer | GFM |
+
+            - [x] Done
+            - [ ] Todo
+
+            ~~removed~~
+
+            https://example.com
+
+            ```swift
+            let value = 1
+            ```
+
+            ![Screenshot](../assets/screen-1.png)
+
+            <p align="center"><img src="logo.png" alt="Logo"></p>
+            <img src="x" onerror="alert(1)">
+            <a href="javascript:alert(1)">bad</a>
+            <script>alert("x")</script>
+            """,
+            title: "README.md",
+            sourcePath: "/tmp/project/docs/README.md"
+        )
+        let sourceDirectory = URL(fileURLWithPath: "/tmp/project/docs/README.md").deletingLastPathComponent()
+        let rawLogoURL = URL(fileURLWithPath: "logo.png", relativeTo: sourceDirectory)
+            .standardizedFileURL
+            .absoluteString
+        let markdownImageURL = URL(fileURLWithPath: "../assets/screen-1.png", relativeTo: sourceDirectory)
+            .standardizedFileURL
+            .absoluteString
+        let unsafeImageURL = URL(fileURLWithPath: "x", relativeTo: sourceDirectory)
+            .standardizedFileURL
+            .absoluteString
+
+        XCTAssertTrue(html.contains("<table>"))
+        XCTAssertTrue(html.contains("<th>Name</th>"))
+        XCTAssertTrue(html.contains("<td>GFM</td>"))
+        XCTAssertTrue(html.contains("type=\"checkbox\""))
+        XCTAssertTrue(html.contains("checked"))
+        XCTAssertTrue(html.contains("<del>removed</del>"))
+        XCTAssertTrue(html.contains("<a href=\"https://example.com\">https://example.com</a>"))
+        XCTAssertTrue(html.contains("language-swift"))
+        XCTAssertTrue(html.contains("let value = 1"))
+        XCTAssertTrue(html.contains("<img src=\"\(markdownImageURL)\" alt=\"Screenshot\""))
+        XCTAssertTrue(html.contains("<p align=\"center\"><img src=\"\(rawLogoURL)\" alt=\"Logo\"></p>"))
+        XCTAssertTrue(html.contains("<img src=\"\(unsafeImageURL)\">"))
+        XCTAssertTrue(html.contains("<a>bad</a>"))
+        XCTAssertFalse(html.contains("<script"))
+        XCTAssertFalse(html.contains("onerror"))
+        XCTAssertFalse(html.contains("javascript:"))
     }
 
     func testCLIMarkdownPreviewUpdatesExistingPane() throws {

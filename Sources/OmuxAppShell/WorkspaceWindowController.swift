@@ -241,7 +241,11 @@ final class WorkspaceShellViewController: NSViewController {
         )
 
         let layout = workspace.focusedTab.map {
-            makeLayoutView(for: $0.rootLayout, focusedPaneID: $0.focusedPaneID)
+            makeLayoutView(
+                for: $0.rootLayout,
+                focusedPaneID: $0.focusedPaneID,
+                canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
+            )
         }
         canvasView.render(layoutView: layout?.view, theme: currentTheme)
         renderedIconKindByPaneID = iconKindSignature(for: workspace)
@@ -427,7 +431,11 @@ final class WorkspaceShellViewController: NSViewController {
                             action: .pane(pane.id),
                             contextMenuProvider: { [weak self] in
                                 guard let self, let paneStack else { return NSMenu() }
-                                return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
+                                return makePaneTabContextMenu(
+                                    pane: pane,
+                                    paneStack: paneStack,
+                                    canCloseSinglePaneStack: tab.panes.count > 1 || workspace.tabs.count > 1
+                                )
                             }
                         )
                     }
@@ -600,7 +608,8 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func makePaneTabContextMenu(
         pane: Pane,
-        paneStack: PaneStack
+        paneStack: PaneStack,
+        canCloseSinglePaneStack: Bool
     ) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Rename…", action: nil, keyEquivalent: "").onSelect { [weak self] in
@@ -608,9 +617,9 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
-        closeItem.isEnabled = paneStack.panes.count > 1
+        closeItem.isEnabled = paneStack.panes.count > 1 || canCloseSinglePaneStack
         closeItem.onSelect { [weak self] in
-            _ = try? self?.controller.closePaneTab(paneID: pane.id)
+            _ = try? self?.controller.closePane(paneID: pane.id)
         }
 
         let targetIndex = paneStack.panes.firstIndex(where: { $0.id == pane.id }) ?? 0
@@ -637,7 +646,8 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func makeLayoutView(
         for node: TabLayoutNode,
-        focusedPaneID: PaneID
+        focusedPaneID: PaneID,
+        canCloseSinglePaneStack: Bool
     ) -> (view: NSView, focusedPaneView: NSView?, representativePaneID: PaneID?) {
         switch node {
         case .paneStack(let paneStack):
@@ -654,12 +664,17 @@ final class WorkspaceShellViewController: NSViewController {
                 onCreatePaneTab: { [weak self] in
                     _ = try self?.controller.createPaneTab(in: paneStack.id)
                 },
-                onClosePaneTab: { [weak self] paneID in
-                    _ = try self?.controller.closePaneTab(paneID: paneID)
+                canCloseSinglePaneStack: canCloseSinglePaneStack,
+                onClosePane: { [weak self] paneID in
+                    _ = try self?.controller.closePane(paneID: paneID)
                 },
                 contextMenuProvider: { [weak self] pane in
                     guard let self else { return NSMenu() }
-                    return makePaneTabContextMenu(pane: pane, paneStack: paneStack)
+                    return makePaneTabContextMenu(
+                        pane: pane,
+                        paneStack: paneStack,
+                        canCloseSinglePaneStack: canCloseSinglePaneStack
+                    )
                 },
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
@@ -677,7 +692,11 @@ final class WorkspaceShellViewController: NSViewController {
             var childPaneIDs: [PaneID] = []
 
             for child in children {
-                let childLayout = makeLayoutView(for: child, focusedPaneID: focusedPaneID)
+                let childLayout = makeLayoutView(
+                    for: child,
+                    focusedPaneID: focusedPaneID,
+                    canCloseSinglePaneStack: canCloseSinglePaneStack
+                )
                 if focusedPaneView == nil {
                     focusedPaneView = childLayout.focusedPaneView
                 }
@@ -1478,6 +1497,7 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
     private let container = NSView()
     private let placeholderLabel = NSTextField(wrappingLabelWithString: "")
     private let webView: WKWebView
+    private var isLoadingInjectedHTML = false
 
     init(
         pane: Pane,
@@ -1570,7 +1590,8 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        if navigationAction.navigationType == .other, webView.url == nil {
+        if isLoadingInjectedHTML, navigationAction.navigationType == .other {
+            isLoadingInjectedHTML = false
             decisionHandler(.allow)
             return
         }
@@ -1581,6 +1602,18 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
             NSWorkspace.shared.open(url)
         }
         decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        isLoadingInjectedHTML = false
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        isLoadingInjectedHTML = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        isLoadingInjectedHTML = false
     }
 
     private func renderContent(theme: WorkspaceShellTheme) {
@@ -1597,6 +1630,7 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
 
         placeholderLabel.isHidden = true
         webView.isHidden = false
+        isLoadingInjectedHTML = true
         webView.loadHTMLString(html, baseURL: baseURL)
     }
 
@@ -1635,7 +1669,8 @@ final class PaneStackView: NSView {
         iconConfiguration: OmuxConfigUI.Icons,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
-        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        canCloseSinglePaneStack: Bool,
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
         onFocus: @escaping @MainActor (PaneID) -> Void
     ) {
@@ -1677,7 +1712,8 @@ final class PaneStackView: NSView {
             },
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
-            onClosePaneTab: onClosePaneTab,
+            canCloseSinglePaneStack: canCloseSinglePaneStack,
+            onClosePane: onClosePane,
             contextMenuProvider: contextMenuProvider
         )
         paneCardView.configure(
@@ -1789,7 +1825,8 @@ final class PaneHeaderView: NSView {
         terminalTextProvider: @escaping @MainActor (Pane) -> String?,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
-        onClosePaneTab: @escaping @MainActor (PaneID) throws -> Void,
+        canCloseSinglePaneStack: Bool,
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu
     ) {
         super.init(frame: .zero)
@@ -1820,9 +1857,9 @@ final class PaneHeaderView: NSView {
                     pointSize: 11,
                     weight: pane.id == paneStack.focusedPaneID ? .semibold : .medium
                 ).render(iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))),
-                showsClose: paneStack.panes.count > 1,
+                showsClose: paneStack.panes.count > 1 || canCloseSinglePaneStack,
                 onClose: {
-                    try? onClosePaneTab(pane.id)
+                    try? onClosePane(pane.id)
                 }
             )
             button.onPress = { onSelectPaneTab(pane.id) }

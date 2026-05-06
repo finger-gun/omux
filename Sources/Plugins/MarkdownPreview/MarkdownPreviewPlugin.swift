@@ -1,6 +1,8 @@
 import Foundation
 import OmuxControlPlane
 import OmuxCore
+import cmark_gfm
+import cmark_gfm_extensions
 
 public struct OmuxMarkdownPreviewRequest: Equatable {
     public let fileURL: URL
@@ -24,6 +26,23 @@ public struct OmuxMarkdownPreviewRequest: Equatable {
     }
 }
 
+public enum OmuxMarkdownPreviewRenderError: Error, LocalizedError {
+    case parserUnavailable
+    case documentUnavailable
+    case htmlRenderFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .parserUnavailable:
+            "Markdown parser is unavailable."
+        case .documentUnavailable:
+            "Markdown parser did not produce a document."
+        case .htmlRenderFailed:
+            "Markdown parser could not render HTML."
+        }
+    }
+}
+
 public struct OmuxMarkdownPreviewRenderer {
     public let theme: String
 
@@ -31,8 +50,9 @@ public struct OmuxMarkdownPreviewRenderer {
         self.theme = theme
     }
 
-    public func render(markdown: String, title: String, sourcePath: String) -> String {
-        let body = renderBlocks(markdown)
+    public func render(markdown: String, title: String, sourcePath: String) throws -> String {
+        let sourceDirectory = URL(fileURLWithPath: sourcePath).deletingLastPathComponent()
+        let body = try renderMarkdownFragment(markdown, sourceDirectory: sourceDirectory)
         return """
         <!doctype html>
         <html>
@@ -56,147 +76,169 @@ public struct OmuxMarkdownPreviewRenderer {
 
     public func renderFile(_ fileURL: URL) throws -> String {
         let markdown = try String(contentsOf: fileURL, encoding: .utf8)
-        return render(
+        return try render(
             markdown: markdown,
             title: fileURL.lastPathComponent,
             sourcePath: fileURL.path
         )
     }
 
-    private func renderBlocks(_ markdown: String) -> String {
-        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var output: [String] = []
-        var paragraph: [String] = []
-        var listItems: [String] = []
-        var codeLines: [String] = []
-        var isInsideCodeFence = false
+    private func renderMarkdownFragment(_ markdown: String, sourceDirectory: URL) throws -> String {
+        cmark_gfm_core_extensions_ensure_registered()
 
-        func flushParagraph() {
-            guard paragraph.isEmpty == false else {
-                return
+        let options = CMARK_OPT_UNSAFE
+            | CMARK_OPT_VALIDATE_UTF8
+            | CMARK_OPT_SMART
+            | CMARK_OPT_LIBERAL_HTML_TAG
+            | CMARK_OPT_TABLE_SPANS
+        guard let parser = cmark_parser_new(options) else {
+            throw OmuxMarkdownPreviewRenderError.parserUnavailable
+        }
+        defer { cmark_parser_free(parser) }
+
+        let extensions = activeGFMExtensions(for: parser)
+        defer {
+            if let list = extensions {
+                cmark_llist_free(cmark_get_default_mem_allocator(), list)
             }
-            output.append("<p>\(renderInline(paragraph.joined(separator: " ")))</p>")
-            paragraph.removeAll()
         }
 
-        func flushList() {
-            guard listItems.isEmpty == false else {
-                return
-            }
-            output.append("<ul>\n\(listItems.map { "<li>\($0)</li>" }.joined(separator: "\n"))\n</ul>")
-            listItems.removeAll()
+        markdown.withCString { buffer in
+            cmark_parser_feed(parser, buffer, markdown.utf8.count)
         }
-
-        for line in lines {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                if isInsideCodeFence {
-                    output.append("<pre><code>\(escapeHTML(codeLines.joined(separator: "\n")))</code></pre>")
-                    codeLines.removeAll()
-                    isInsideCodeFence = false
-                } else {
-                    flushParagraph()
-                    flushList()
-                    isInsideCodeFence = true
-                }
-                continue
-            }
-
-            if isInsideCodeFence {
-                codeLines.append(line)
-                continue
-            }
-
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty {
-                flushParagraph()
-                flushList()
-                continue
-            }
-
-            if let heading = parseHeading(trimmed) {
-                flushParagraph()
-                flushList()
-                output.append("<h\(heading.level)>\(renderInline(heading.text))</h\(heading.level)>")
-                continue
-            }
-
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                flushParagraph()
-                listItems.append(renderInline(String(trimmed.dropFirst(2))))
-                continue
-            }
-
-            flushList()
-            paragraph.append(trimmed)
+        guard let document = cmark_parser_finish(parser) else {
+            throw OmuxMarkdownPreviewRenderError.documentUnavailable
         }
+        defer { cmark_node_free(document) }
 
-        if isInsideCodeFence {
-            output.append("<pre><code>\(escapeHTML(codeLines.joined(separator: "\n")))</code></pre>")
+        guard let rendered = cmark_render_html(document, options, extensions) else {
+            throw OmuxMarkdownPreviewRenderError.htmlRenderFailed
         }
-        flushParagraph()
-        flushList()
+        defer { free(rendered) }
 
-        return output.joined(separator: "\n")
+        return sanitizeRenderedHTML(String(cString: rendered), sourceDirectory: sourceDirectory)
     }
 
-    private func parseHeading(_ line: String) -> (level: Int, text: String)? {
-        var level = 0
-        for character in line {
-            if character == "#" {
-                level += 1
-            } else {
-                break
+    private func activeGFMExtensions(for parser: UnsafeMutablePointer<cmark_parser>) -> UnsafeMutablePointer<cmark_llist>? {
+        var list: UnsafeMutablePointer<cmark_llist>?
+        let allocator = cmark_get_default_mem_allocator()
+        for name in ["table", "strikethrough", "tasklist", "autolink"] {
+            guard let syntaxExtension = cmark_find_syntax_extension(name) else {
+                continue
             }
+            cmark_parser_attach_syntax_extension(parser, syntaxExtension)
+            list = cmark_llist_append(allocator, list, syntaxExtension)
         }
-        guard (1...6).contains(level),
-              line.dropFirst(level).first == " "
+        return list
+    }
+
+    private func sanitizeRenderedHTML(_ html: String, sourceDirectory: URL) -> String {
+        var sanitized = html
+        sanitized = sanitized.replacingRegex(
+            #"(?is)<script\b[^>]*>.*?</script\s*>"#,
+            with: ""
+        )
+        sanitized = sanitized.replacingRegex(
+            #"(?is)<script\b[^>]*/\s*>"#,
+            with: ""
+        )
+        sanitized = sanitized.replacingRegex(
+            #"(?is)\s+on[a-z][a-z0-9_-]*\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
+            with: ""
+        )
+        sanitized = sanitized.replacingRegex(
+            #"(?is)\s+(href|src|xlink:href)\s*=\s*"\s*(javascript|vbscript):[^"]*""#,
+            with: ""
+        )
+        sanitized = sanitized.replacingRegex(
+            #"(?is)\s+(href|src|xlink:href)\s*=\s*'\s*(javascript|vbscript):[^']*'"#,
+            with: ""
+        )
+        sanitized = sanitized.replacingRegex(
+            #"(?is)\s+(href|src|xlink:href)\s*=\s*(javascript|vbscript):[^\s>]+"#,
+            with: ""
+        )
+        return rewriteLocalImageSources(in: sanitized, sourceDirectory: sourceDirectory)
+    }
+
+    private func rewriteLocalImageSources(in html: String, sourceDirectory: URL) -> String {
+        html.replacingRegex(#"(?is)(<img\b[^>]*\bsrc\s*=\s*)(["'])([^"']*)(["'])"#) { match, source in
+            guard match.numberOfRanges == 5,
+                  let fullRange = Range(match.range(at: 0), in: source),
+                  let prefixRange = Range(match.range(at: 1), in: source),
+                  let quoteRange = Range(match.range(at: 2), in: source),
+                  let valueRange = Range(match.range(at: 3), in: source),
+                  let closingQuoteRange = Range(match.range(at: 4), in: source)
+            else {
+                return nil
+            }
+
+            let value = String(source[valueRange])
+            guard let resolvedSource = resolvedLocalImageSource(value, sourceDirectory: sourceDirectory) else {
+                return String(source[fullRange])
+            }
+
+            return "\(source[prefixRange])\(source[quoteRange])\(escapeAttribute(resolvedSource))\(source[closingQuoteRange])"
+        }
+    }
+
+    private func resolvedLocalImageSource(_ value: String, sourceDirectory: URL) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false,
+              trimmed.hasPrefix("#") == false,
+              trimmed.hasPrefix("//") == false,
+              let components = URLComponents(string: trimmed)
         else {
             return nil
         }
-        return (level, String(line.dropFirst(level + 1)))
-    }
 
-    private func renderInline(_ text: String) -> String {
-        let characters = Array(text)
-        var output = ""
-        var index = 0
-
-        while index < characters.count {
-            if characters[index] == "`",
-               let end = characters[(index + 1)...].firstIndex(of: "`") {
-                let content = String(characters[(index + 1)..<end])
-                output += "<code>\(escapeHTML(content))</code>"
-                index = end + 1
-                continue
+        if let scheme = components.scheme?.lowercased() {
+            guard scheme == "file",
+                  let fileURL = URL(string: trimmed)
+            else {
+                return nil
             }
-
-            if characters[index] == "[",
-               let labelEnd = characters[(index + 1)...].firstIndex(of: "]"),
-               labelEnd + 1 < characters.count,
-               characters[labelEnd + 1] == "(",
-               let urlEnd = characters[(labelEnd + 2)...].firstIndex(of: ")") {
-                let label = String(characters[(index + 1)..<labelEnd])
-                let url = sanitizeURL(String(characters[(labelEnd + 2)..<urlEnd]))
-                output += "<a href=\"\(escapeAttribute(url))\">\(escapeHTML(label))</a>"
-                index = urlEnd + 1
-                continue
-            }
-
-            output += escapeHTML(String(characters[index]))
-            index += 1
+            return embeddedLocalImageSource(for: fileURL.standardizedFileURL) ?? trimmed
         }
 
-        return output
+        let path = components.path
+        guard path.isEmpty == false else {
+            return nil
+        }
+
+        let fileURL = path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : URL(fileURLWithPath: path, relativeTo: sourceDirectory).standardizedFileURL
+
+        return embeddedLocalImageSource(for: fileURL) ?? fileURL.absoluteString
     }
 
-    private func sanitizeURL(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let components = URLComponents(string: trimmed),
-              let scheme = components.scheme?.lowercased()
+    private func embeddedLocalImageSource(for fileURL: URL) -> String? {
+        guard fileURL.isFileURL,
+              let mimeType = imageMIMEType(for: fileURL),
+              let data = try? Data(contentsOf: fileURL),
+              data.isEmpty == false
         else {
-            return trimmed
+            return nil
         }
-        return ["http", "https", "mailto"].contains(scheme) ? trimmed : "#"
+        return "data:\(mimeType);base64,\(data.base64EncodedString())"
+    }
+
+    private func imageMIMEType(for fileURL: URL) -> String? {
+        switch fileURL.pathExtension.lowercased() {
+        case "png":
+            "image/png"
+        case "jpg", "jpeg":
+            "image/jpeg"
+        case "gif":
+            "image/gif"
+        case "webp":
+            "image/webp"
+        case "svg":
+            "image/svg+xml"
+        default:
+            nil
+        }
     }
 
     private func escapeHTML(_ value: String) -> String {
@@ -254,8 +296,27 @@ public struct OmuxMarkdownPreviewRenderer {
           margin: 24px 0 16px;
           line-height: 1.25;
         }
-        p, ul, pre { margin: 0 0 16px; }
+        p, ul, ol, pre, table, blockquote { margin: 0 0 16px; }
         a { color: var(--link); }
+        blockquote {
+          color: var(--muted);
+          border-left: .25em solid var(--border);
+          padding: 0 1em;
+        }
+        img { max-width: 100%; }
+        table {
+          border-collapse: collapse;
+          display: block;
+          overflow: auto;
+          width: max-content;
+          max-width: 100%;
+        }
+        th, td {
+          border: 1px solid var(--border);
+          padding: 6px 13px;
+        }
+        tr:nth-child(2n) { background: color-mix(in srgb, var(--code-bg) 60%, transparent); }
+        input[type="checkbox"] { margin-right: .35em; }
         code {
           background: var(--code-bg);
           border-radius: 6px;
@@ -294,6 +355,39 @@ public struct OmuxMarkdownPreviewRenderer {
         --code-bg: #161b22;
         --link: #2f81f7;
         """
+    }
+}
+
+private extension String {
+    func replacingRegex(_ pattern: String, with replacement: String) -> String {
+        let expression = try! NSRegularExpression(pattern: pattern)
+        let range = NSRange(startIndex..<endIndex, in: self)
+        return expression.stringByReplacingMatches(
+            in: self,
+            range: range,
+            withTemplate: replacement
+        )
+    }
+
+    func replacingRegex(
+        _ pattern: String,
+        transform: (_ match: NSTextCheckingResult, _ source: String) -> String?
+    ) -> String {
+        let expression = try! NSRegularExpression(pattern: pattern)
+        let matches = expression.matches(
+            in: self,
+            range: NSRange(startIndex..<endIndex, in: self)
+        )
+        var result = self
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: result),
+                  let replacement = transform(match, self)
+            else {
+                continue
+            }
+            result.replaceSubrange(range, with: replacement)
+        }
+        return result
     }
 }
 

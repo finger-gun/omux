@@ -86,7 +86,7 @@ Then open a Markdown file from an OpenMUX terminal pane:
 omux markdown-preview README.md --watch
 ```
 
-The command renders the file to safe local preview HTML, opens an extension pane beside the current terminal, and keeps updating the preview while it runs. This fits editor workflows such as opening `README.md` in Helix in one pane and running the preview watcher in the neighboring pane.
+The command renders the file to local preview HTML using GitHub Flavored Markdown-compatible parsing, opens an extension pane beside the current terminal, and keeps updating the preview while it runs. This fits editor workflows such as opening `README.md` in Helix in one pane and running the preview watcher in the neighboring pane.
 
 To reuse an existing preview pane, pass its pane ID:
 
@@ -94,4 +94,4 @@ To reuse an existing preview pane, pass its pane ID:
 omux markdown-preview README.md --pane <pane-id> --watch
 ```
 
-The built-in renderer escapes raw HTML and script content before it reaches the preview host. Links open externally, and the preview host disables JavaScript.
+The built-in renderer supports common README features such as tables, task lists, strikethrough, autolinks, fenced code blocks, and raw HTML used for layout or images. Relative image paths are resolved from the Markdown file's directory so local README assets render in the preview. Script blocks and script-oriented attributes are stripped before content reaches the preview host. Links open externally, and the preview host disables JavaScript.

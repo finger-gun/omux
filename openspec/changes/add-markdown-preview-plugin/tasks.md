@@ -49,3 +49,9 @@
 - [x] 7.3 Add `omux plugin` inspection commands for listing registered plugins and finding the plugin directory.
 - [x] 7.4 Document external plugin registration and add CLI tests for dispatch, argument/environment forwarding, listing, and built-in precedence.
 - [x] 7.5 Re-run existing test and OpenSpec validation workflows.
+
+## 8. Preview Runtime Fixes
+
+- [x] 8.1 Ensure injected local preview HTML is allowed to complete its initial WebKit load while keeping external navigation constrained.
+- [x] 8.2 Allow pane chrome to close split panes containing terminal or extension content, not only pane-local tabs.
+- [x] 8.3 Add app-shell regression coverage for closing the terminal pane that opened an extension preview pane.
