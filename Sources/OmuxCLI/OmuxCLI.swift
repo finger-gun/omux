@@ -107,6 +107,10 @@ public struct OmuxCLICommand {
                 }
             case "history":
                 return try runHistoryCommand(arguments: Array(commandArguments.dropFirst()))
+            case "markdown-preview":
+                return try runMarkdownPreviewCommand(arguments: Array(commandArguments.dropFirst()))
+            case "extension-pane":
+                return try runExtensionPaneCommand(arguments: Array(commandArguments.dropFirst()))
             case "tab":
                 let response = try client.request(method: .createTab)
                 writeLine(response.result?.prettyPrinted ?? "")
@@ -305,6 +309,10 @@ public struct OmuxCLICommand {
       omux events
       omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
       omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]
+      omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]
+      omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]
+      omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]
+      omux extension-pane close --pane <id>
       omux open [path]
       omux workspace-close [workspace-id]
       omux tab
@@ -337,6 +345,197 @@ public struct OmuxCLICommand {
         )
         .standardizedFileURL
         .path
+    }
+
+    private func runMarkdownPreviewCommand(arguments: [String]) throws -> Int32 {
+        guard let request = parseMarkdownPreviewRequest(arguments) else {
+            writeLine("usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]")
+            return 1
+        }
+
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        let pluginConfig = configResult.config.plugins.markdownPreview
+        guard pluginConfig.enabled else {
+            writeLine("Markdown preview plugin is disabled. Enable [plugins.markdown-preview] enabled = true in ~/.omux/config.toml.")
+            return 1
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: request.fileURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false,
+              FileManager.default.isReadableFile(atPath: request.fileURL.path)
+        else {
+            writeLine("omux markdown-preview error: readable Markdown file not found: \(request.fileURL.path)")
+            return 1
+        }
+
+        return try OmuxMarkdownPreviewPlugin(
+            renderer: OmuxMarkdownPreviewRenderer(theme: pluginConfig.theme)
+        ).run(
+            request: request,
+            client: client,
+            writeLine: writeLine
+        )
+    }
+
+    private func parseMarkdownPreviewRequest(_ arguments: [String]) -> OmuxMarkdownPreviewRequest? {
+        var filePath: String?
+        var paneID: String?
+        var title: String?
+        var watch = false
+        var axis = PaneSplitAxis.columns
+        var index = 0
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--watch":
+                watch = true
+                index += 1
+            case "--pane":
+                guard index + 1 < arguments.count else {
+                    return nil
+                }
+                paneID = arguments[index + 1]
+                index += 2
+            case "--title":
+                guard index + 1 < arguments.count else {
+                    return nil
+                }
+                title = arguments[index + 1]
+                index += 2
+            case "--axis":
+                guard index + 1 < arguments.count,
+                      let parsedAxis = PaneSplitAxis(rawValue: arguments[index + 1])
+                else {
+                    return nil
+                }
+                axis = parsedAxis
+                index += 2
+            default:
+                guard argument.hasPrefix("-") == false, filePath == nil else {
+                    return nil
+                }
+                filePath = argument
+                index += 1
+            }
+        }
+
+        guard let filePath else {
+            return nil
+        }
+
+        return OmuxMarkdownPreviewRequest(
+            fileURL: URL(fileURLWithPath: resolveCLIPath(filePath)),
+            paneID: paneID,
+            title: title,
+            watch: watch,
+            axis: axis
+        )
+    }
+
+    private func runExtensionPaneCommand(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux extension-pane create|update|close ...")
+            return 1
+        }
+
+        switch subcommand {
+        case "create":
+            guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: false) else {
+                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]")
+                return 1
+            }
+            let response = try client.request(method: .createExtensionPane, params: .object(request))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "update":
+            guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: true) else {
+                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]")
+                return 1
+            }
+            let response = try client.request(method: .updateExtensionPane, params: .object(request))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "close":
+            guard arguments.count == 3, arguments[1] == "--pane" else {
+                writeLine("usage: omux extension-pane close --pane <id>")
+                return 1
+            }
+            let response = try client.request(
+                method: .closeExtensionPane,
+                params: .object(["paneID": .string(arguments[2])])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        default:
+            writeLine("usage: omux extension-pane create|update|close ...")
+            return 1
+        }
+    }
+
+    private func parseExtensionPaneRequest(
+        _ arguments: [String],
+        requiresPaneID: Bool
+    ) -> [String: RPCValue]? {
+        var params: [String: RPCValue] = [:]
+        var index = 0
+        while index < arguments.count {
+            let option = arguments[index]
+            guard index + 1 < arguments.count else {
+                return nil
+            }
+            let value = arguments[index + 1]
+            switch option {
+            case "--pane":
+                params["paneID"] = .string(value)
+            case "--plugin":
+                params["pluginID"] = .string(value)
+            case "--title":
+                params["title"] = .string(value)
+            case "--source":
+                params["source"] = .string(resolveCLIPath(value))
+            case "--html":
+                params["html"] = .string(value)
+            case "--html-file":
+                guard let html = try? String(contentsOfFile: resolveCLIPath(value), encoding: .utf8) else {
+                    return nil
+                }
+                params["html"] = .string(html)
+            case "--status":
+                guard ExtensionPaneStatus(rawValue: value) != nil else {
+                    return nil
+                }
+                params["status"] = .string(value)
+            case "--message":
+                params["message"] = .string(value)
+            case "--content-kind":
+                guard ExtensionPaneContentKind(rawValue: value) != nil else {
+                    return nil
+                }
+                params["contentKind"] = .string(value)
+            case "--axis":
+                guard PaneSplitAxis(rawValue: value) != nil else {
+                    return nil
+                }
+                params["axis"] = .string(value)
+            default:
+                return nil
+            }
+            index += 2
+        }
+
+        guard params["pluginID"] != nil else {
+            return nil
+        }
+        if requiresPaneID, params["paneID"] == nil {
+            return nil
+        }
+        return params
     }
 
     private func parseSplitRequest(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, axis: PaneSplitAxis)? {
@@ -867,6 +1066,8 @@ public struct OmuxCLICommand {
             theme: OmuxConfigTheme(name: theme.name),
             terminal: current.terminal,
             workspace: current.workspace,
+            ui: current.ui,
+            plugins: current.plugins,
             keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
@@ -949,6 +1150,22 @@ public struct OmuxCLICommand {
         lines.append("")
         lines.append("[workspace]")
         lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
+
+        lines.append("")
+        lines.append("[ui.icons]")
+        lines.append("enabled = \(config.ui.icons.enabled ? "true" : "false")")
+        lines.append("provider = \(render(.string(config.ui.icons.provider.rawValue)))")
+        if let fontFamily = config.ui.icons.fontFamily {
+            lines.append("font_family = \(render(.string(fontFamily)))")
+        }
+        lines.append("colors_enabled = \(config.ui.icons.colorsEnabled ? "true" : "false")")
+
+        lines.append("")
+        lines.append("[plugins.markdown-preview]")
+        let markdownPreview = config.plugins.markdownPreview
+        lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
+        lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
+        lines.append("theme = \(render(.string(markdownPreview.theme)))")
 
         lines.append("")
         lines.append("[keys]")

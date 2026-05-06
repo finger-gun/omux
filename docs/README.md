@@ -11,6 +11,7 @@ If you are new to OpenMUX, start with [Getting started](./getting-started.md). I
 | Use OpenMUX as your daily terminal workspace | [Getting started](./getting-started.md) | [Configuration and themes](./configuration.md) |
 | Customize themes, fonts, scrollback, or Option-key behavior | [Configuration and themes](./configuration.md) | [Getting started](./getting-started.md#customize-the-terminal) |
 | Automate your workspace with scripts | [Hooks](./hooks.md) | [Configuration and themes](./configuration.md#cli) |
+| Build or use optional content-pane plugins | [Plugins and extension panes](./plugins.md) | [Configuration and themes](./configuration.md#pluginsmarkdown-preview-settings) |
 | Understand where the product is headed | [Roadmap](./roadmap.md) | [Manifesto](./manifest.md) |
 | Contribute to OpenMUX itself | [Development notes](./development.md) | [Releasing](./releasing.md), [CONTRIBUTING](../CONTRIBUTING.md) |
 | Research architecture and terminal-engine boundaries | [Research notes](./research/) | [Manifesto](./manifest.md), [Development notes](./development.md) |
@@ -21,6 +22,7 @@ These docs describe OpenMUX from the outside: what you can run, configure, and a
 
 - [Getting started](./getting-started.md) - first launch, CLI setup, workspaces, panes, themes, and simple automation.
 - [Configuration and themes](./configuration.md) - `~/.omux/config.toml`, built-in themes, custom theme tokens, and config commands.
+- [Plugins and extension panes](./plugins.md) - optional plugin workflows, extension-pane CLI contracts, and Markdown preview.
 - [Hooks](./hooks.md) - executable user hooks in `~/.omux/hooks/`, invocation JSON, current hook names, and examples.
 - [Roadmap](./roadmap.md) - what works today and what is next.
 

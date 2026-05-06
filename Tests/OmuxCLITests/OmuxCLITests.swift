@@ -426,6 +426,220 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["\(ControlMethod.listWorkspaces.rawValue):true"])
     }
 
+    func testCLIMarkdownPreviewCreatesExtensionPaneWhenEnabled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [plugins.markdown-preview]
+        enabled = true
+        renderer = "builtin"
+        theme = "dark"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let markdownURL = root.appendingPathComponent("README.md")
+        try """
+        # Preview
+
+        <script>alert("x")</script>
+        """.write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-md-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .object(["paneID": .string("pane-preview")]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller()
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "markdown-preview", markdownURL.path]), 0)
+        XCTAssertEqual(output, [])
+        XCTAssertEqual(requests.value.map(\.method), [ControlMethod.createExtensionPane.rawValue])
+        guard case .object(let params)? = requests.value.first?.params,
+              case .string(OmuxMarkdownPreviewPlugin.pluginID)? = params["pluginID"],
+              case .string(markdownURL.path)? = params["source"],
+              case .string("html")? = params["contentKind"],
+              case .string("ready")? = params["status"],
+              case .string(let html)? = params["html"]
+        else {
+            return XCTFail("expected markdown preview extension-pane create params")
+        }
+        XCTAssertTrue(html.contains("<h1>Preview</h1>"))
+        XCTAssertTrue(html.contains("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"))
+        XCTAssertFalse(html.contains("<script>"))
+    }
+
+    func testCLIMarkdownPreviewUpdatesExistingPane() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [plugins.markdown-preview]
+        enabled = true
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let markdownURL = root.appendingPathComponent("notes.md")
+        try "Hello `code`\n".write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-mdu-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .object(["paneID": .string("pane-existing")]))
+        }
+        defer { server.stop() }
+
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller()
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "markdown-preview", markdownURL.path, "--pane", "pane-existing"]), 0)
+        XCTAssertEqual(requests.value.map(\.method), [ControlMethod.updateExtensionPane.rawValue])
+        guard case .object(let params)? = requests.value.first?.params,
+              case .string("pane-existing")? = params["paneID"],
+              case .string(let html)? = params["html"]
+        else {
+            return XCTFail("expected markdown preview update params")
+        }
+        XCTAssertTrue(html.contains("<code>code</code>"))
+    }
+
+    func testCLIMarkdownPreviewRequiresEnabledPlugin() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configURL = root.appendingPathComponent("config.toml")
+        try "schema = 1\n".write(to: configURL, atomically: true, encoding: .utf8)
+        let markdownURL = root.appendingPathComponent("README.md")
+        try "# Disabled\n".write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: root.appendingPathComponent("unused.sock").path(percentEncoded: false)),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller()
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "markdown-preview", markdownURL.path]), 1)
+        XCTAssertTrue(output.contains(where: { $0.contains("Markdown preview plugin is disabled") }))
+    }
+
+    func testCLIMarkdownPreviewRejectsMissingFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [plugins.markdown-preview]
+        enabled = true
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: root.appendingPathComponent("unused.sock").path(percentEncoded: false)),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller()
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "markdown-preview", root.appendingPathComponent("missing.md").path]), 1)
+        XCTAssertTrue(output.contains(where: { $0.contains("readable Markdown file not found") }))
+    }
+
+    func testCLIExtensionPaneCommandsSendExpectedRequests() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let htmlURL = root.appendingPathComponent("preview.html")
+        try "<h1>Preview</h1>".write(to: htmlURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-extcli-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .object(["paneID": .string("pane-preview")]))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "extension-pane", "create",
+            "--plugin", "dev.example.preview",
+            "--title", "Preview",
+            "--source", root.path,
+            "--html-file", htmlURL.path,
+            "--axis", "rows",
+        ]), 0)
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "extension-pane", "update",
+            "--pane", "pane-preview",
+            "--plugin", "dev.example.preview",
+            "--status", "error",
+            "--message", "render failed",
+        ]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "extension-pane", "close", "--pane", "pane-preview"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "extension-pane", "update", "--pane", "pane-preview", "--plugin", "dev.example.preview", "--status", "bad"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.createExtensionPane.rawValue,
+            ControlMethod.updateExtensionPane.rawValue,
+            ControlMethod.closeExtensionPane.rawValue,
+        ])
+        guard case .object(let createParams)? = requests.value[0].params,
+              case .object(let updateParams)? = requests.value[1].params,
+              case .object(let closeParams)? = requests.value[2].params,
+              case .string("rows")? = createParams["axis"],
+              case .string("<h1>Preview</h1>")? = createParams["html"],
+              case .string("error")? = updateParams["status"],
+              case .string("render failed")? = updateParams["message"],
+              case .string("pane-preview")? = closeParams["paneID"]
+        else {
+            return XCTFail("expected extension-pane request params")
+        }
+        XCTAssertTrue(output.last?.contains("usage: omux extension-pane update") == true)
+    }
+
     func testCLISplitAcceptsDirectionAndTargetInEitherOrder() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
