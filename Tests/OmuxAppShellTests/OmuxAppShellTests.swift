@@ -10,6 +10,7 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxAppShellTests: XCTestCase {
+    @MainActor
     override class func setUp() {
         super.setUp()
         // Prevent AppKit from connecting to the WindowServer on headless CI runners.
