@@ -848,6 +848,26 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(paneTabWorkspace.focusedPane?.title, "omux")
     }
 
+    func testTerminalApplicationTitlesDriveIconsWithoutReplacingPathTitle() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/omux")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.titleChanged("hx"), on: runtimeSurfaceID)
+
+        let updatedPane = try XCTUnwrap(controller.activeWorkspace()?.focusedPane)
+        XCTAssertEqual(updatedPane.title, "omux")
+        XCTAssertEqual(updatedPane.terminalState.reportedTitle, "hx")
+        XCTAssertEqual(WorkspaceIconResolver().icon(for: updatedPane).kind, .helix)
+    }
+
     func testTerminalHistoryResolvesActivePaneAndAllWorkspaceScopes() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3315,6 +3335,78 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(resolver.icon(for: aiPane).kind, .ai)
     }
 
+    func testWorkspaceIconResolverDetectsTerminalApplicationTitles() throws {
+        let resolver = WorkspaceIconResolver()
+        let cases: [(String, OmuxSemanticIcon.Kind)] = [
+            ("hx", .helix),
+            ("helix src/main.swift", .helix),
+            ("vim README.md", .vim),
+            ("nvim init.lua", .neovim),
+            ("tmux", .tmux),
+            ("ssh dev.example.com", .ssh),
+            ("lazygit", .git),
+            ("lazydocker", .docker),
+            ("nano notes.txt", .nano),
+            ("emacs", .emacs),
+        ]
+
+        for (title, expectedKind) in cases {
+            let pane = Pane(
+                title: "project",
+                session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp/project"),
+                terminalState: PaneTerminalState(reportedTitle: title)
+            )
+            XCTAssertEqual(resolver.icon(for: pane).kind, expectedKind, title)
+        }
+    }
+
+    func testWorkspaceIconResolverDetectsTerminalApplicationScreenText() throws {
+        let resolver = WorkspaceIconResolver()
+        let pane = Pane(
+            title: "project",
+            session: SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp/project")
+        )
+
+        XCTAssertEqual(
+            resolver.icon(for: pane, terminalText: "VIM - Vi IMproved\nversion 9.1").kind,
+            .vim
+        )
+        XCTAssertEqual(
+            resolver.icon(for: pane, terminalText: "UW PICO 5.09 New Buffer\n^G Get Help").kind,
+            .nano
+        )
+        XCTAssertEqual(
+            resolver.icon(for: pane, terminalText: "[scratch]\nNOR [scratch] 1 sel 1:1").kind,
+            .helix
+        )
+    }
+
+    @MainActor
+    func testSidebarAndPaneTabsUseTerminalScreenTextForFullScreenAppIcons() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp/omux")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[runtimeSurfaceID] = "VIM - Vi IMproved\nversion 9.1"
+
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            initialIcons: OmuxConfigUI.Icons(provider: .text)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let vimIconLabels = findViews(ofType: NSTextField.self, in: rootView)
+            .filter { $0.stringValue == "Vi" }
+        XCTAssertGreaterThanOrEqual(vimIconLabels.count, 2)
+    }
+
     func testWorkspaceIconResolverAggregatesWorkspaceIcons() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceIconResolverTests-\(UUID().uuidString)", isDirectory: true)
@@ -3367,6 +3459,34 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(icon.symbolName, "hexagon")
         XCTAssertEqual(icon.text, "JS")
         XCTAssertEqual(icon.colorToken, .ansiGreen)
+    }
+
+    @MainActor
+    func testIconRendererCarriesColorToggle() throws {
+        let icon = try XCTUnwrap(
+            OmuxIconRenderer(
+                configuration: OmuxConfigUI.Icons(provider: .text, colorsEnabled: false),
+                pointSize: 11,
+                weight: .medium
+            ).render(.helix)
+        )
+
+        XCTAssertEqual(icon.text, "Hx")
+        XCTAssertFalse(icon.colorsEnabled)
+    }
+
+    @MainActor
+    func testIconRendererUsesDNAGlyphForHelix() throws {
+        let icon = try XCTUnwrap(
+            OmuxIconRenderer(
+                configuration: OmuxConfigUI.Icons(provider: .nerdFont),
+                pointSize: 11,
+                weight: .medium
+            ).render(.helix)
+        )
+
+        XCTAssertEqual(icon.text, "\u{ed7d}")
+        XCTAssertEqual(icon.font.familyName, "Symbols Nerd Font Mono")
     }
 
     @MainActor

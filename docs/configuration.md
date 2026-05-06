@@ -30,6 +30,7 @@ default_root_path = "~"
 [ui.icons]
 # enabled = true
 # provider = "nerd-font"
+# colors_enabled = true
 # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
 [keys]
@@ -266,9 +267,10 @@ OpenMUX can show lightweight project/session icons in workspace rows, terminal r
 | --- | --- | --- |
 | `enabled` | boolean | Enables semantic icons. Defaults to `true`. |
 | `provider` | `"nerd-font"` \| `"sf-symbols"` \| `"text"` | Preferred icon rendering provider. Defaults to `"nerd-font"`. |
+| `colors_enabled` | boolean | Tints icons from semantic theme colors. Defaults to `true`; set to `false` to use normal label colors. |
 | `font_family` | string | Optional Nerd Font family override for icon glyphs. |
 
-The Nerd Font provider uses a bundled `Symbols Nerd Font Mono` resource for common developer contexts such as Node, Swift, Rust, Go, Python, Docker, Git, terminal, workspace, and AI/Copilot sessions. Users do not need to install Nerd Fonts separately. Icons are tinted from the active theme's ANSI palette, such as green for Node, cyan for Docker/Go, red for Git/Rust/Swift, and magenta for AI sessions, with contrast-safe fallback on selected rows. Set `font_family` only if you want OpenMUX to prefer another installed Nerd Font; if that font cannot render a glyph, OpenMUX falls back to the bundled font and then to simple text/SF Symbol-style representations so the UI remains readable. The bundled Nerd Fonts Symbols Only license is included with the app resources.
+The Nerd Font provider uses a bundled `Symbols Nerd Font Mono` resource for common developer contexts such as Node, Swift, Rust, Go, Python, Docker, Git, terminal, workspace, AI/Copilot sessions, and common terminal apps such as Helix, Vim, Neovim, tmux, and SSH. Users do not need to install Nerd Fonts separately. Icons are tinted from the active theme's ANSI palette, such as green for Node/editors, cyan for Docker/Go/SSH, red for Git/Rust/Swift, and magenta for AI sessions, with contrast-safe fallback on selected rows. Set `colors_enabled = false` to keep icons in the same color as surrounding labels. Set `font_family` only if you want OpenMUX to prefer another installed Nerd Font; if that font cannot render a glyph, OpenMUX falls back to the bundled font and then to simple text/SF Symbol-style representations so the UI remains readable. The bundled Nerd Fonts Symbols Only license is included with the app resources.
 
 Example:
 
@@ -276,6 +278,7 @@ Example:
 [ui.icons]
 enabled = true
 provider = "nerd-font"
+colors_enabled = true
 # font_family = "JetBrainsMono Nerd Font"
 ```
 

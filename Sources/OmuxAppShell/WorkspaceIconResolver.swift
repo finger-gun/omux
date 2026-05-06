@@ -12,12 +12,19 @@ struct OmuxSemanticIcon: Equatable {
         case folder
         case git
         case go
+        case helix
+        case emacs
+        case nano
         case node
+        case neovim
         case package
         case python
         case rust
+        case ssh
         case swift
         case terminal
+        case tmux
+        case vim
         case workspace
     }
 
@@ -74,6 +81,33 @@ struct OmuxSemanticIcon: Equatable {
         accessibilityLabel: "Go project",
         priority: 90
     )
+    static let helix = OmuxSemanticIcon(
+        kind: .helix,
+        nerdFontGlyph: "\u{ed7d}",
+        fallbackText: "Hx",
+        sfSymbolName: "pencil.and.scribble",
+        colorToken: .ansiBrightGreen,
+        accessibilityLabel: "Helix editor",
+        priority: 110
+    )
+    static let emacs = OmuxSemanticIcon(
+        kind: .emacs,
+        nerdFontGlyph: "\u{e632}",
+        fallbackText: "Em",
+        sfSymbolName: "pencil",
+        colorToken: .ansiMagenta,
+        accessibilityLabel: "Emacs editor",
+        priority: 110
+    )
+    static let nano = OmuxSemanticIcon(
+        kind: .nano,
+        nerdFontGlyph: "\u{f040}",
+        fallbackText: "Na",
+        sfSymbolName: "pencil",
+        colorToken: .ansiCyan,
+        accessibilityLabel: "nano editor",
+        priority: 110
+    )
     static let node = OmuxSemanticIcon(
         kind: .node,
         nerdFontGlyph: "\u{e718}",
@@ -82,6 +116,15 @@ struct OmuxSemanticIcon: Equatable {
         colorToken: .ansiGreen,
         accessibilityLabel: "Node project",
         priority: 90
+    )
+    static let neovim = OmuxSemanticIcon(
+        kind: .neovim,
+        nerdFontGlyph: "\u{e7c5}",
+        fallbackText: "Nv",
+        sfSymbolName: "pencil",
+        colorToken: .ansiGreen,
+        accessibilityLabel: "Neovim editor",
+        priority: 110
     )
     static let package = OmuxSemanticIcon(
         kind: .package,
@@ -110,6 +153,15 @@ struct OmuxSemanticIcon: Equatable {
         accessibilityLabel: "Rust project",
         priority: 90
     )
+    static let ssh = OmuxSemanticIcon(
+        kind: .ssh,
+        nerdFontGlyph: "\u{f817}",
+        fallbackText: "SSH",
+        sfSymbolName: "network",
+        colorToken: .ansiBrightCyan,
+        accessibilityLabel: "SSH session",
+        priority: 105
+    )
     static let swift = OmuxSemanticIcon(
         kind: .swift,
         nerdFontGlyph: "\u{e755}",
@@ -127,6 +179,24 @@ struct OmuxSemanticIcon: Equatable {
         colorToken: .ansiBrightBlack,
         accessibilityLabel: "Terminal",
         priority: 20
+    )
+    static let tmux = OmuxSemanticIcon(
+        kind: .tmux,
+        nerdFontGlyph: "\u{f120}",
+        fallbackText: "Tx",
+        sfSymbolName: "rectangle.split.3x1",
+        colorToken: .ansiBrightBlue,
+        accessibilityLabel: "tmux session",
+        priority: 105
+    )
+    static let vim = OmuxSemanticIcon(
+        kind: .vim,
+        nerdFontGlyph: "\u{e7c5}",
+        fallbackText: "Vi",
+        sfSymbolName: "pencil",
+        colorToken: .ansiGreen,
+        accessibilityLabel: "Vim editor",
+        priority: 110
     )
     static let workspace = OmuxSemanticIcon(
         kind: .workspace,
@@ -310,8 +380,8 @@ final class WorkspaceIconResolver {
         self.fileManager = fileManager
     }
 
-    func icon(for pane: Pane) -> OmuxSemanticIcon {
-        specificIcon(for: pane) ?? .terminal
+    func icon(for pane: Pane, terminalText: String? = nil) -> OmuxSemanticIcon {
+        specificIcon(for: pane, terminalText: terminalText) ?? .terminal
     }
 
     func icon(for workspace: Workspace) -> OmuxSemanticIcon {
@@ -322,7 +392,19 @@ final class WorkspaceIconResolver {
 
         return workspace.tabs
             .flatMap(\.panes)
-            .compactMap(specificIcon(for:))
+            .compactMap { specificIcon(for: $0) }
+            .max { $0.priority < $1.priority }
+            ?? .workspace
+    }
+
+    func icon(for panes: [Pane], focusedPaneID: PaneID?, terminalText: (Pane) -> String?) -> OmuxSemanticIcon {
+        if let focusedPane = panes.first(where: { $0.id == focusedPaneID }),
+           let focusedIcon = specificIcon(for: focusedPane, terminalText: terminalText(focusedPane)) {
+            return focusedIcon
+        }
+
+        return panes
+            .compactMap { pane in specificIcon(for: pane, terminalText: terminalText(pane)) }
             .max { $0.priority < $1.priority }
             ?? .workspace
     }
@@ -331,9 +413,19 @@ final class WorkspaceIconResolver {
         iconByPath.removeValue(forKey: normalizedPath(path))
     }
 
-    private func specificIcon(for pane: Pane) -> OmuxSemanticIcon? {
-        let title = pane.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let icon = titleIcon(for: title) {
+    private func specificIcon(for pane: Pane, terminalText: String? = nil) -> OmuxSemanticIcon? {
+        let titleCandidates = [
+            pane.terminalState.reportedTitle,
+            pane.title,
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        for title in titleCandidates where title.isEmpty == false {
+            if let icon = Self.terminalApplicationIcon(forTitle: title) ?? titleIcon(for: title) {
+                return icon
+            }
+        }
+
+        if let icon = terminalText.flatMap(Self.terminalApplicationIcon(forScreenText:)) {
             return icon
         }
 
@@ -352,6 +444,88 @@ final class WorkspaceIconResolver {
             return .ai
         }
         return nil
+    }
+
+    static func terminalApplicationIcon(forTitle title: String) -> OmuxSemanticIcon? {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedTitle.isEmpty == false else {
+            return nil
+        }
+
+        let commandCandidates = commandCandidates(from: normalizedTitle)
+        if commandCandidates.contains("lazydocker") {
+            return .docker
+        }
+        if commandCandidates.contains("lazygit") {
+            return .git
+        }
+        if commandCandidates.contains("nvim") || commandCandidates.contains("neovim") {
+            return .neovim
+        }
+        if commandCandidates.contains("vim") {
+            return .vim
+        }
+        if commandCandidates.contains("hx") || commandCandidates.contains("helix") {
+            return .helix
+        }
+        if commandCandidates.contains("emacs") {
+            return .emacs
+        }
+        if commandCandidates.contains("nano") {
+            return .nano
+        }
+        if commandCandidates.contains("tmux") {
+            return .tmux
+        }
+        if commandCandidates.contains("ssh") {
+            return .ssh
+        }
+        return nil
+    }
+
+    static func terminalApplicationIcon(forScreenText text: String) -> OmuxSemanticIcon? {
+        let lowercased = text.localizedLowercase
+        guard lowercased.isEmpty == false else {
+            return nil
+        }
+
+        if lowercased.contains("vim - vi improved")
+            || lowercased.contains("vi improved")
+            || lowercased.contains("type  :q<enter>") {
+            return .vim
+        }
+
+        if lowercased.contains("gnu nano")
+            || lowercased.contains("uw pico")
+            || (lowercased.contains("writeout") && lowercased.contains("where is")) {
+            return .nano
+        }
+
+        if lowercased.contains("[scratch]")
+            && (lowercased.contains(" nor ") || lowercased.contains(" ins ") || lowercased.contains("1 sel")) {
+            return .helix
+        }
+
+        return nil
+    }
+
+    private static func commandCandidates(from title: String) -> Set<String> {
+        let lowercased = title.localizedLowercase
+        let separators = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: "-_./"))
+            .inverted
+        let tokens = lowercased
+            .components(separatedBy: separators)
+            .filter { $0.isEmpty == false }
+
+        var candidates = Set(tokens)
+        for token in tokens {
+            let executableName = URL(fileURLWithPath: token).lastPathComponent
+            if executableName.isEmpty == false {
+                candidates.insert(executableName)
+            }
+        }
+        return candidates
     }
 
     private func projectIcon(forPath path: String) -> OmuxSemanticIcon? {

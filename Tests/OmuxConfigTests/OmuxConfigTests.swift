@@ -357,6 +357,7 @@ struct OmuxConfigTests {
             [ui.icons]
             enabled = false
             provider = "text"
+            colors_enabled = false
             font_family = "Symbols Nerd Font Mono"
             """,
             to: home.appendingPathComponent("config.toml")
@@ -366,6 +367,7 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(result.config.ui.icons.enabled == false)
         #expect(result.config.ui.icons.provider == .text)
+        #expect(result.config.ui.icons.colorsEnabled == false)
         #expect(result.config.ui.icons.fontFamily == "Symbols Nerd Font Mono")
     }
 
@@ -374,6 +376,7 @@ struct OmuxConfigTests {
         let cases = [
             ("enabled = \"yes\"", "ui.icons.enabled must be a boolean"),
             ("provider = \"emoji\"", "ui.icons.provider must be"),
+            ("colors_enabled = \"no\"", "ui.icons.colors_enabled must be a boolean"),
             ("font_family = 123", "ui.icons.font_family must be a string"),
             ("unknown = true", "Unknown [ui.icons] key"),
         ]
@@ -464,6 +467,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("default_root_path = \"~\""))
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
+        #expect(contents.contains("# colors_enabled = true"))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
             #expect(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))

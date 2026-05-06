@@ -1638,7 +1638,10 @@ public final class WorkspaceController: @unchecked Sendable {
                     updatedWorkspace = workspaces[workspaceIndex]
                 case .titleChanged(let title):
                     _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        pane.title = title
+                        pane.terminalState.reportedTitle = title
+                        if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil {
+                            pane.title = title
+                        }
                     }
                     updatedWorkspace = workspaces[workspaceIndex]
                 case .tabTitleChanged(let title):

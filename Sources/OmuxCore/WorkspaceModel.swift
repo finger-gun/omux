@@ -175,6 +175,7 @@ public struct PaneScrollbackSnapshot: Equatable, Codable, Sendable {
 }
 
 public struct PaneTerminalState: Equatable, Codable, Sendable {
+    public var reportedTitle: String?
     public var reportedWorkingDirectory: String?
     public var progress: PaneProgress?
     public var lastExit: PaneExitStatus?
@@ -182,12 +183,14 @@ public struct PaneTerminalState: Equatable, Codable, Sendable {
     public var restoredScrollback: PaneScrollbackSnapshot?
 
     public init(
+        reportedTitle: String? = nil,
         reportedWorkingDirectory: String? = nil,
         progress: PaneProgress? = nil,
         lastExit: PaneExitStatus? = nil,
         rendererHealthy: Bool? = nil,
         restoredScrollback: PaneScrollbackSnapshot? = nil
     ) {
+        self.reportedTitle = reportedTitle
         self.reportedWorkingDirectory = reportedWorkingDirectory
         self.progress = progress
         self.lastExit = lastExit
