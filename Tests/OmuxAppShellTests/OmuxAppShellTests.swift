@@ -10,6 +10,14 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxAppShellTests: XCTestCase {
+    override class func setUp() {
+        super.setUp()
+        // Prevent AppKit from connecting to the WindowServer on headless CI runners.
+        // Without this, accessing NSApplication.shared hangs indefinitely when there
+        // is no display (e.g. GitHub Actions macos-15 runners).
+        NSApp.setActivationPolicy(.prohibited)
+    }
+
     private enum TestUpdateError: Error {
         case unavailable
     }
