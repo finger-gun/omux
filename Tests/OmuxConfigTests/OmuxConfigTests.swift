@@ -424,6 +424,16 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func defaultsMarkdownPreviewPluginToEnabled() throws {
+        let result = OmuxConfigLoader(configURL: temporaryMissingConfigURL()).load()
+
+        #expect(result.hasErrors == false)
+        #expect(result.config.plugins.markdownPreview.enabled)
+        #expect(result.config.plugins.markdownPreview.renderer == "builtin")
+        #expect(result.config.plugins.markdownPreview.theme == "auto")
+    }
+
+    @Test
     func rejectsInvalidMarkdownPreviewPluginSettings() throws {
         let cases = [
             ("enabled = \"yes\"", "plugins.markdown-preview.enabled must be a boolean"),
@@ -520,7 +530,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))
         #expect(contents.contains("[plugins.markdown-preview]"))
-        #expect(contents.contains("enabled = false"))
+        #expect(contents.contains("enabled = true"))
         #expect(contents.contains("renderer = \"builtin\""))
         #expect(contents.contains("theme = \"auto\""))
         #expect(contents.contains("[keys]"))

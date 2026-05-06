@@ -72,6 +72,7 @@ targets.append(
                 "OmuxTerminalBridge",
                 "OmuxControlPlane",
                 "OmuxHooks",
+                "OmuxMarkdownPreviewPlugin",
             ],
             resources: [
                 .process("Resources"),

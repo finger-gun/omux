@@ -595,7 +595,12 @@ final class OmuxCLITests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let configURL = root.appendingPathComponent("config.toml")
-        try "schema = 1\n".write(to: configURL, atomically: true, encoding: .utf8)
+        try """
+        schema = 1
+
+        [plugins.markdown-preview]
+        enabled = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
         let markdownURL = root.appendingPathComponent("README.md")
         try "# Disabled\n".write(to: markdownURL, atomically: true, encoding: .utf8)
 
@@ -762,6 +767,75 @@ final class OmuxCLITests: XCTestCase {
             "beta\t\(betaURL.path)",
             "\(OmuxMarkdownPreviewPlugin.commandName)\t\(OmuxMarkdownPreviewPlugin.commandDisplayPath)",
         ])
+    }
+
+    func testCLIPluginPickerTogglesMarkdownPreviewAndReloads() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try OmuxConfigTemplate.starter().write(to: configURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-plugin-\(UUID().uuidString).sock"
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            if request.method == ControlMethod.configReload.rawValue {
+                return JSONRPCResponse(id: request.id, result: .object([
+                    "applied": .bool(true),
+                    "diagnostics": .array([]),
+                ]))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            isInteractivePluginPickerAvailable: { true },
+            selectPluginInteractively: { items in
+                let markdownPreview = try XCTUnwrap(items.first { $0.commandName == OmuxMarkdownPreviewPlugin.commandName })
+                XCTAssertTrue(markdownPreview.isEnabled)
+                XCTAssertTrue(markdownPreview.canToggle)
+                return markdownPreview
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins"]), 0)
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("[plugins.markdown-preview]"))
+        XCTAssertTrue(contents.contains("enabled = false"))
+        XCTAssertEqual(output, ["Plugin markdown-preview disabled.", "No diagnostics.", "OpenMUX config reloaded."])
+    }
+
+    func testPluginPickerSearchSupportsFuzzyTerms() {
+        let items = [
+            PluginPickerItem(commandName: "markdown-preview", displayPath: "bundled:dev.fingergun.markdown-preview", isEnabled: true, canToggle: true),
+            PluginPickerItem(commandName: "hello-world", displayPath: "/tmp/plugins/hello-world", isEnabled: true, canToggle: false),
+            PluginPickerItem(commandName: "session-tools", displayPath: "/tmp/plugins/session-tools/plugin", isEnabled: true, canToggle: false),
+        ]
+
+        XCTAssertEqual(
+            PluginPickerSearch.filteredItems(items, query: "mdp").map(\.commandName),
+            ["markdown-preview"]
+        )
+        XCTAssertEqual(
+            PluginPickerSearch.filteredItems(items, query: "sess").map(\.commandName),
+            ["session-tools"]
+        )
+        XCTAssertEqual(
+            PluginPickerSearch.filteredItems(items, query: "external").map(\.commandName),
+            ["hello-world", "session-tools"]
+        )
     }
 
     func testCLIBuiltInCommandTakesPrecedenceOverPlugin() throws {

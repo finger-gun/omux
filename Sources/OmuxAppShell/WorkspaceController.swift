@@ -4,6 +4,7 @@ import OmuxConfig
 import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
+import OmuxMarkdownPreviewPlugin
 import OmuxTerminalBridge
 
 private struct CommandAutomationContext: Sendable {
@@ -36,6 +37,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let bridge: GhosttyTerminalBridge
     private let hookRunner: ExternalHookRunner
     private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
+    private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
@@ -68,12 +70,14 @@ public final class WorkspaceController: @unchecked Sendable {
         hookRunner: ExternalHookRunner,
         defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
         self.persistedScrollback = persistedScrollback
+        self.markdownPreviewConfiguration = markdownPreviewConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
@@ -578,6 +582,34 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         self.persistedScrollback = persistedScrollback
         lock.unlock()
+    }
+
+    public func updateMarkdownPreviewConfiguration(_ configuration: OmuxConfigPlugins.MarkdownPreview) {
+        lock.lock()
+        markdownPreviewConfiguration = configuration
+        lock.unlock()
+    }
+
+    @discardableResult
+    public func handleTerminalTextActivation(_ request: TerminalTextActivationRequest) -> Bool {
+        let snapshot = bridge.terminalTextSnapshot(for: request.paneID, maxBytes: 64 * 1024, maxLines: request.terminalSize.rows)
+        guard snapshot.unavailableReason == nil,
+              let hit = TerminalTextActivationResolver.hit(in: snapshot.text, request: request)
+        else {
+            return false
+        }
+
+        let context = terminalTextActivationContext(for: request, hit: hit)
+        emitTerminalTextActivationHook(context)
+
+        guard let resolvedPath = context.resolvedPath,
+              shouldOpenMarkdownPreview(for: resolvedPath)
+        else {
+            return false
+        }
+
+        openMarkdownPreview(for: resolvedPath)
+        return true
     }
 
     @discardableResult
@@ -1743,6 +1775,21 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    private func terminalContext(for paneID: PaneID) -> ControlPlaneTerminalContext? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        for workspace in workspaces {
+            for tab in workspace.tabs {
+                guard let pane = tab.panes.first(where: { $0.id == paneID }) else {
+                    continue
+                }
+                return terminalContext(workspace: workspace, tab: tab, pane: pane)
+            }
+        }
+        return nil
+    }
+
     private static func historyTargets(in workspace: Workspace) -> [PaneHistoryTarget] {
         workspace.tabs.flatMap { tab in
             tab.panes.compactMap { pane in
@@ -1778,6 +1825,119 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private func terminalTextActivationContext(
+        for request: TerminalTextActivationRequest,
+        hit: TerminalTextActivationHit
+    ) -> TerminalTextActivationContext {
+        let cwd = workingDirectory(for: request.paneID)
+        return TerminalTextActivationContext(
+            request: request,
+            hit: hit,
+            cwd: cwd,
+            resolvedPath: TerminalTextActivationResolver.resolvedLocalPath(token: hit.token, cwd: cwd)
+        )
+    }
+
+    private func emitTerminalTextActivationHook(_ context: TerminalTextActivationContext) {
+        let terminalContext = terminalContext(for: context.request.paneID)
+        do {
+            try hookRunner.emit(
+                HookInvocation(
+                    category: .input,
+                    name: "terminal-text-activated",
+                    workspaceID: terminalContext?.workspaceID,
+                    tabID: terminalContext?.tabID,
+                    paneID: context.request.paneID,
+                    sessionID: terminalContext?.sessionID,
+                    payload: .object([
+                        "token": .string(context.hit.token),
+                        "row": .integer(context.hit.row),
+                        "column": .integer(context.hit.column),
+                        "cwd": context.cwd.map(OmuxValue.string) ?? .null,
+                        "resolvedPath": context.resolvedPath.map(OmuxValue.string) ?? .null,
+                        "modifiers": .integer(Int(context.request.modifiers.rawValue)),
+                    ])
+                )
+            )
+        } catch {
+            fputs("warning: failed to emit terminal-text-activated hook: \(error)\n", stderr)
+        }
+    }
+
+    private func shouldOpenMarkdownPreview(for path: String) -> Bool {
+        lock.lock()
+        let markdownPreviewConfiguration = self.markdownPreviewConfiguration
+        lock.unlock()
+
+        guard markdownPreviewConfiguration.enabled else {
+            return false
+        }
+
+        let fileURL = URL(fileURLWithPath: path)
+        let fileExtension = fileURL.pathExtension.lowercased()
+        guard fileExtension == "md" || fileExtension == "markdown" else {
+            return false
+        }
+
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue == false
+            && FileManager.default.isReadableFile(atPath: path)
+    }
+
+    private func openMarkdownPreview(for path: String) {
+        lock.lock()
+        let markdownPreviewConfiguration = self.markdownPreviewConfiguration
+        lock.unlock()
+
+        let fileURL = URL(fileURLWithPath: path)
+        let descriptor: ExtensionPaneDescriptor
+        do {
+            let html = try OmuxMarkdownPreviewRenderer(theme: markdownPreviewConfiguration.theme)
+                .renderFile(fileURL)
+            descriptor = ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: path,
+                html: html,
+                status: .ready
+            )
+        } catch {
+            descriptor = ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: path,
+                html: "",
+                status: .error,
+                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+
+        if let paneID = markdownPreviewPaneID(for: path) {
+            _ = updateExtensionPane(paneID: paneID, descriptor: descriptor, title: fileURL.lastPathComponent)
+        } else {
+            _ = createExtensionPane(title: fileURL.lastPathComponent, descriptor: descriptor)
+        }
+    }
+
+    private func markdownPreviewPaneID(for sourcePath: String) -> PaneID? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let activeWorkspaceIndex else {
+            return nil
+        }
+
+        return workspaces[activeWorkspaceIndex]
+            .tabs
+            .flatMap(\.panes)
+            .first { pane in
+                pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
+                    && pane.extensionPane?.source == sourcePath
+            }?
+            .id
     }
 
     func enrichedCommandCompletionPayload(

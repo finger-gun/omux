@@ -8,6 +8,37 @@ import XCTest
 @testable import OmuxTerminalBridge
 
 final class OmuxTerminalBridgeTests: XCTestCase {
+    func testTerminalTextActivationExtractsTokenAtPointerLocation() {
+        let paneID = PaneID()
+        let request = TerminalTextActivationRequest(
+            paneID: paneID,
+            location: CGPoint(x: 40, y: 10),
+            viewSize: CGSize(width: 320, height: 40),
+            terminalSize: TerminalSize(columns: 40, rows: 2),
+            modifiers: [.leftCommand]
+        )
+
+        let hit = TerminalTextActivationResolver.hit(
+            in: "older line\nREADME.md docs/configuration.md",
+            request: request
+        )
+
+        XCTAssertEqual(hit?.token, "README.md")
+        XCTAssertEqual(hit?.row, 1)
+    }
+
+    func testTerminalTextActivationResolvesRelativePathFromWorkingDirectory() {
+        XCTAssertEqual(
+            TerminalTextActivationResolver.resolvedLocalPath(token: "README.md", cwd: "/repo"),
+            "/repo/README.md"
+        )
+        XCTAssertEqual(
+            TerminalTextActivationResolver.resolvedLocalPath(token: "docs/guide.md:42", cwd: "/repo"),
+            "/repo/docs/guide.md"
+        )
+        XCTAssertNil(TerminalTextActivationResolver.resolvedLocalPath(token: "https://example.com", cwd: "/repo"))
+    }
+
     func testBridgeOwnsSurfaceLifecycle() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -386,6 +417,75 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.mouseButtons.count, 1)
         XCTAssertEqual(runtime.mouseButtons.first?.state, GHOSTTY_MOUSE_PRESS)
         XCTAssertEqual(runtime.mouseButtons.first?.buttonNumber, 0)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewClaimsCommandClickActivation() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+        var activationRequest: TerminalTextActivationRequest?
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true, onFocus: { _ in }) { request in
+            activationRequest = request
+            return true
+        }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        runtimeView.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(activationRequest?.paneID, pane.id)
+        XCTAssertEqual(runtime.mouseButtons.count, 0)
+        XCTAssertEqual(runtime.mousePositions.count, 0)
+    }
+
+    @MainActor
+    func testRuntimeHostedViewForwardsUnhandledCommandClick() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Runtime", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        let hostedView = bridge.makeHostedPaneView(for: pane, isFocused: true, onFocus: { _ in }) { _ in false }
+        let runtimeView = try XCTUnwrap(runtime.hostedViews["inspect:\(pane.id.rawValue)"])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hostedView
+        hostedView.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 640, height: 480)
+        runtimeView.frame = hostedView.bounds
+
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 24, y: 32),
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        runtimeView.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(runtime.mouseButtons.count, 1)
+        XCTAssertEqual(runtime.mousePositions.count, 1)
     }
 
     @MainActor

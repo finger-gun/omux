@@ -16,7 +16,8 @@ protocol RuntimeTerminalInteractionConfiguring: AnyObject {
     func configureHostedPane(
         paneID: PaneID,
         isFocused: Bool,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     )
     func updateHostedPaneFocus(_ isFocused: Bool)
 }
@@ -81,7 +82,8 @@ public final class HostedTerminalPaneView: NSView {
         bridge: GhosttyTerminalBridge,
         isFocused: Bool,
         themePalette: TerminalThemePalette = .defaultDark,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)? = nil
     ) {
         self.paneID = pane.id
         self.bridge = bridge
@@ -90,7 +92,8 @@ public final class HostedTerminalPaneView: NSView {
             for: pane,
             isFocused: isFocused,
             themePalette: themePalette,
-            onFocus: onFocus
+            onFocus: onFocus,
+            onTextActivation: onTextActivation
         )
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -172,7 +175,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         bridge: GhosttyTerminalBridge,
         isFocused: Bool,
         themePalette: TerminalThemePalette,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) {
         self.paneID = pane.id
         self.bridge = bridge
@@ -185,7 +189,8 @@ final class RuntimeTerminalSurfaceContentHost: TerminalSurfaceContentHosting {
         (runtimeView as? any RuntimeTerminalInteractionConfiguring)?.configureHostedPane(
             paneID: pane.id,
             isFocused: isFocused,
-            onFocus: onFocus
+            onFocus: onFocus,
+            onTextActivation: onTextActivation
         )
     }
 

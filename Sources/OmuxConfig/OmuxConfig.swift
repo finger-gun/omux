@@ -271,7 +271,7 @@ public struct OmuxConfigPlugins: Equatable, Sendable {
         public let theme: String
 
         public init(
-            enabled: Bool = false,
+            enabled: Bool = true,
             renderer: String = "builtin",
             theme: String = "auto"
         ) {
@@ -446,7 +446,7 @@ public enum OmuxConfigTemplate {
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
         [plugins.markdown-preview]
-        enabled = false
+        enabled = true
         renderer = "builtin"
         theme = "auto"
 

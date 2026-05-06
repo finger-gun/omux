@@ -31,15 +31,18 @@ Inspect registered plugins with:
 ```sh
 omux plugin path
 omux plugin list
+omux plugins
 ```
+
+`omux plugins` opens an interactive picker with fuzzy search. Press Enter on a configurable bundled plugin to toggle it enabled or disabled; external executable plugins are listed as externally registered and remain managed by their files in `~/.omux/plugins/`.
 
 When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchanged and adds these environment variables:
 
-| Variable | Meaning |
-| --- | --- |
-| `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
+| Variable                 | Meaning                                           |
+|--------------------------|---------------------------------------------------|
+| `OMUX_PLUGIN_COMMAND`    | Command name the user invoked.                    |
 | `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
-| `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
+| `OMUX_PLUGINS_DIR`       | Directory containing the plugin executable.       |
 
 Plugins can call back into `omux extension-pane`, `omux notify`, and other public commands to interact with the running app.
 
@@ -56,22 +59,22 @@ omux extension-pane close --pane <pane-id>
 
 The control plane accepts these fields:
 
-| Field | Meaning |
-| --- | --- |
-| `--plugin <id>` | Stable plugin identifier. Required for create and update. |
-| `--pane <id>` | Existing extension pane to update or close. |
-| `--title <title>` | User-facing pane title. |
-| `--source <path>` | Local source path represented by the pane. |
-| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host. |
-| `--status ready\|disabled\|error` | Rendering state. Non-ready states show placeholder copy. |
-| `--message <text>` | Placeholder or error message. |
-| `--axis columns\|rows` | Split direction for new panes. |
+| Field                                  | Meaning                                                   |
+|----------------------------------------|-----------------------------------------------------------|
+| `--plugin <id>`                        | Stable plugin identifier. Required for create and update. |
+| `--pane <id>`                          | Existing extension pane to update or close.               |
+| `--title <title>`                      | User-facing pane title.                                   |
+| `--source <path>`                      | Local source path represented by the pane.                |
+| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host.      |
+| `--status ready\|disabled\|error`      | Rendering state. Non-ready states show placeholder copy.  |
+| `--message <text>`                     | Placeholder or error message.                             |
+| `--axis columns\|rows`                 | Split direction for new panes.                            |
 
 Extension panes are shell-owned content panes. They are not terminal sessions, do not allocate Ghostty surfaces, and terminal-only actions such as `omux run`, `send-text`, and history operations reject or ignore them.
 
 ## Markdown preview workflow
 
-Enable the bundled Markdown preview plugin:
+The bundled Markdown preview plugin is enabled by default. To configure it explicitly:
 
 ```toml
 [plugins.markdown-preview]
@@ -88,10 +91,22 @@ omux markdown-preview README.md --watch
 
 The command renders the file to local preview HTML using GitHub Flavored Markdown-compatible parsing, opens an extension pane beside the current terminal, and keeps updating the preview while it runs. This fits editor workflows such as opening `README.md` in Helix in one pane and running the preview watcher in the neighboring pane.
 
+Set `enabled = false` in `[plugins.markdown-preview]` to disable the bundled preview command and terminal-path activation behavior.
+
 To reuse an existing preview pane, pass its pane ID:
 
 ```sh
 omux markdown-preview README.md --pane <pane-id> --watch
 ```
 
-The built-in renderer supports common README features such as tables, task lists, strikethrough, autolinks, fenced code blocks, and raw HTML used for layout or images. Relative image paths are resolved from the Markdown file's directory so local README assets render in the preview. Script blocks and script-oriented attributes are stripped before content reaches the preview host. Links open externally, and the preview host disables JavaScript.
+The built-in renderer supports common markdown features such as tables, task lists, strikethrough, autolinks, fenced code blocks, and raw HTML used for layout or images. Relative image paths are resolved from the Markdown file's directory so local markdown file assets render in the preview. Script blocks and script-oriented attributes are stripped before content reaches the preview host. Links open externally, and the preview host disables JavaScript.
+
+When Markdown preview is enabled, Command-clicking a readable local `.md` or `.markdown` path in terminal text opens or updates a Markdown preview extension pane for that file. Plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting.
+
+OpenMUX also emits an input hook for intentional terminal text activation:
+
+| Hook                            | Payload                                                                   |
+|---------------------------------|---------------------------------------------------------------------------|
+| `input:terminal-text-activated` | `token`, `row`, `column`, `cwd`, `resolvedPath`, and numeric `modifiers`. |
+
+The hook is generic terminal infrastructure; Markdown preview is just the bundled plugin handler for local Markdown paths.

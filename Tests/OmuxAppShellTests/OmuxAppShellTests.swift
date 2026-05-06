@@ -295,6 +295,82 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
     }
 
+    func testTerminalTextActivationOpensMarkdownPreviewWhenPluginEnabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TerminalTextActivationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let readmeURL = root.appendingPathComponent("README.md")
+        try "# Hello\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = "README.md"
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview(enabled: true)
+        )
+        let workspace = try controller.openWorkspace(at: root.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let session = try XCTUnwrap(pane.terminalSession)
+        _ = try bridge.attach(session: session, to: pane)
+
+        let claimed = controller.handleTerminalTextActivation(
+            TerminalTextActivationRequest(
+                paneID: pane.id,
+                location: CGPoint(x: 1, y: 1),
+                viewSize: CGSize(width: 80, height: 20),
+                terminalSize: TerminalSize(columns: 10, rows: 1),
+                modifiers: [.leftCommand]
+            )
+        )
+
+        XCTAssertTrue(claimed)
+        let extensionPane = controller.activeWorkspace()?.tabs
+            .flatMap(\.panes)
+            .compactMap(\.extensionPane)
+            .first { $0.source == readmeURL.path }
+        XCTAssertEqual(extensionPane?.pluginID, "dev.fingergun.markdown-preview")
+        XCTAssertEqual(extensionPane?.status, .ready)
+        XCTAssertTrue(extensionPane?.html?.contains("<h1>Hello</h1>") ?? false)
+    }
+
+    func testTerminalTextActivationDoesNotClaimMarkdownWhenPluginDisabled() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TerminalTextActivationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let readmeURL = root.appendingPathComponent("README.md")
+        try "# Hello\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        runtime.transcript = "README.md"
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview(enabled: false)
+        )
+        let workspace = try controller.openWorkspace(at: root.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let session = try XCTUnwrap(pane.terminalSession)
+        _ = try bridge.attach(session: session, to: pane)
+
+        let claimed = controller.handleTerminalTextActivation(
+            TerminalTextActivationRequest(
+                paneID: pane.id,
+                location: CGPoint(x: 1, y: 1),
+                viewSize: CGSize(width: 80, height: 20),
+                terminalSize: TerminalSize(columns: 10, rows: 1),
+                modifiers: [.leftCommand]
+            )
+        )
+
+        XCTAssertFalse(claimed)
+        XCTAssertTrue(controller.activeWorkspace()?.tabs.flatMap(\.panes).allSatisfy { $0.extensionPane == nil } ?? false)
+    }
+
     func testWorkspaceControllerResizesAndEqualizesFocusedSplit() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
