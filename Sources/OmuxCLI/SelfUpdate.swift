@@ -156,7 +156,7 @@ final class OmuxSelfUpdater {
         self.readInputLine = readInputLine
     }
 
-    func runUpdate() throws -> OmuxSelfUpdateOutcome {
+    func runUpdate(allowReinstallLatest: Bool = false) throws -> OmuxSelfUpdateOutcome {
         let installedVersionString = try versionProvider.currentVersion()
         guard let installedVersion = OpenMUXSemanticVersion(parsing: installedVersionString) else {
             throw UpdateError.invalidInstalledVersion(installedVersionString)
@@ -169,9 +169,13 @@ final class OmuxSelfUpdater {
             throw UpdateError.latestReleaseUnavailable(error.localizedDescription)
         }
 
-        guard release.version > installedVersion else {
+        let isReleaseNewer = release.version > installedVersion
+        guard isReleaseNewer || allowReinstallLatest else {
             writeLine("OpenMUX \(installedVersion) is already up to date.")
             return OmuxSelfUpdateOutcome(state: .alreadyCurrent(installedVersion.description))
+        }
+        if isReleaseNewer == false {
+            writeLine("Debug update: reinstalling OpenMUX \(release.version) over installed OpenMUX \(installedVersion).")
         }
 
         guard let appAsset = release.appArchiveAsset else {
@@ -209,6 +213,20 @@ final class OmuxSelfUpdater {
             let stagedAppURL = unpackURL.appendingPathComponent("OpenMUX.app", isDirectory: true)
             try validateBundle(at: stagedAppURL, version: release.version.description)
             let targetURL = try selectInstallTarget()
+
+            if allowReinstallLatest {
+                let action = appManager.runningApplications(bundleIdentifier: Self.bundleIdentifier).isEmpty
+                    ? "Install"
+                    : "Close OpenMUX, install"
+                writeLine("\(action) OpenMUX \(release.version) to \(targetURL.path) and relaunch? [y/N]")
+                let answer = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+                guard answer == "y" || answer == "yes" else {
+                    try? fileManager.removeItem(at: stagingRoot)
+                    writeLine("Debug update cancelled.")
+                    return OmuxSelfUpdateOutcome(state: .cancelled)
+                }
+            }
+
             let manifestURL = try prepareHelperManifest(
                 stagingRoot: stagingRoot,
                 stagedAppURL: stagedAppURL,
@@ -216,7 +234,8 @@ final class OmuxSelfUpdater {
                 version: release.version.description
             )
 
-            if appManager.runningApplications(bundleIdentifier: Self.bundleIdentifier).isEmpty == false {
+            if allowReinstallLatest == false &&
+                appManager.runningApplications(bundleIdentifier: Self.bundleIdentifier).isEmpty == false {
                 writeLine("Close OpenMUX to install \(release.version) to \(targetURL.path)? [Y/n]")
                 let answer = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
                 if answer == "n" || answer == "no" {

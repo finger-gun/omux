@@ -311,10 +311,11 @@ struct OmuxIconRenderer {
 }
 
 @MainActor
-private enum BundledIconFont {
+enum BundledIconFont {
     static let familyName = "Symbols Nerd Font Mono"
     private static let resourceName = "SymbolsNerdFontMono-Regular"
     private static let resourceSubdirectory = "Fonts"
+    private static let appShellResourceBundleName = "OpenMUX_OmuxAppShell.bundle"
     private static var didAttemptRegistration = false
 
     static func registerIfNeeded() {
@@ -327,11 +328,7 @@ private enum BundledIconFont {
             return
         }
 
-        guard let fontURL = Bundle.module.url(
-            forResource: resourceName,
-            withExtension: "ttf",
-            subdirectory: resourceSubdirectory
-        ) ?? Bundle.module.url(forResource: resourceName, withExtension: "ttf") else {
+        guard let fontURL = fontURL() else {
             fputs("warning: bundled OpenMUX icon font resource is missing\n", stderr)
             return
         }
@@ -349,6 +346,94 @@ private enum BundledIconFont {
 
     private static func fontIsAvailable() -> Bool {
         NSFont(name: familyName, size: 11) != nil
+    }
+
+    static func fontURL(
+        fileManager: FileManager = .default,
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        mainResourceURL: URL? = Bundle.main.resourceURL,
+        mainExecutableURL: URL? = Bundle.main.executableURL
+    ) -> URL? {
+        packagedFontURL(
+            fileManager: fileManager,
+            mainBundleURL: mainBundleURL,
+            mainResourceURL: mainResourceURL,
+            mainExecutableURL: mainExecutableURL
+        ) ?? swiftPMModuleFontURL(mainBundleURL: mainBundleURL)
+    }
+
+    private static func packagedFontURL(
+        fileManager: FileManager,
+        mainBundleURL: URL,
+        mainResourceURL: URL?,
+        mainExecutableURL: URL?
+    ) -> URL? {
+        let executableURLs = executableResourceLookupURLs(from: mainExecutableURL)
+        let executableCandidates = executableURLs.flatMap { executableURL in
+            [
+                executableURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent(appShellResourceBundleName, isDirectory: true),
+                executableURL
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("Resources", isDirectory: true)
+                    .appendingPathComponent(appShellResourceBundleName, isDirectory: true),
+            ]
+        }
+
+        let candidates = [
+            mainResourceURL?.appendingPathComponent(appShellResourceBundleName, isDirectory: true),
+            mainBundleURL
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("Resources", isDirectory: true)
+                .appendingPathComponent(appShellResourceBundleName, isDirectory: true),
+        ].compactMap { $0 } + executableCandidates
+
+        for bundleURL in candidates {
+            guard fileManager.fileExists(atPath: bundleURL.path) else {
+                continue
+            }
+            if let fontURL = fontURL(inResourceBundleAt: bundleURL, fileManager: fileManager) {
+                return fontURL
+            }
+        }
+
+        return nil
+    }
+
+    private static func swiftPMModuleFontURL(mainBundleURL: URL) -> URL? {
+        guard mainBundleURL.pathExtension != "app" else {
+            return nil
+        }
+        return Bundle.module.url(
+            forResource: resourceName,
+            withExtension: "ttf",
+            subdirectory: resourceSubdirectory
+        ) ?? Bundle.module.url(forResource: resourceName, withExtension: "ttf")
+    }
+
+    private static func fontURL(inResourceBundleAt bundleURL: URL, fileManager: FileManager) -> URL? {
+        let candidates = [
+            bundleURL
+                .appendingPathComponent(resourceSubdirectory, isDirectory: true)
+                .appendingPathComponent("\(resourceName).ttf", isDirectory: false),
+            bundleURL.appendingPathComponent("\(resourceName).ttf", isDirectory: false),
+        ]
+        return candidates.first { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    private static func executableResourceLookupURLs(from executableURL: URL?) -> [URL] {
+        guard let executableURL else {
+            return []
+        }
+
+        let resolvedURL = executableURL.resolvingSymlinksInPath().standardizedFileURL
+        let standardizedURL = executableURL.standardizedFileURL
+        if resolvedURL == standardizedURL {
+            return [standardizedURL]
+        }
+        return [standardizedURL, resolvedURL]
     }
 }
 

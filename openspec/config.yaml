@@ -68,6 +68,7 @@ rules:
     - Include error handling, failure modes, and lifecycle behavior for user-visible changes.
     - For terminal/input changes, include international keyboard behavior and modifier semantics where relevant.
     - For architecture changes, preserve the narrow libghostty bridge and avoid leaking upstream implementation details into the rest of the system.
+    - For bundled resources, Bundle.module usage, packaging, signing, updates, or install behavior, specify how the downloaded .app resolves resources from its packaged layout and does not depend on local SwiftPM .build paths.
     - Note performance expectations when a change could affect startup time, memory, rendering, or background activity.
 
   tasks:
@@ -75,4 +76,5 @@ rules:
     - Sequence foundational interface work before UI polish or broad feature additions.
     - Include documentation updates when a change affects public behavior, plugin contracts, or architecture direction.
     - Include validation tasks for keyboard/input behavior whenever key handling, PTY behavior, or command dispatch is affected.
+    - Include packaged release smoke validation whenever work changes SwiftPM resources, bundled assets, app bundle layout, release packaging, signing, self-update, or install paths.
     - Prefer incremental slices that produce a coherent vertical capability instead of scattered partial implementation.
