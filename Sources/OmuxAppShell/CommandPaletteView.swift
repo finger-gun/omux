@@ -349,9 +349,11 @@ final class CommandPaletteSearchField: NSTextField {
     }
     var commandHandler: ((Command) -> Void)?
 
-    @MainActor override func awakeFromNib() {
+    override func awakeFromNib() {
         super.awakeFromNib()
-        (cell as? NSTextFieldCell)?.usesSingleLineMode = true
+        MainActor.assumeIsolated {
+            (cell as? NSTextFieldCell)?.usesSingleLineMode = true
+        }
     }
 
     override init(frame frameRect: NSRect) {
