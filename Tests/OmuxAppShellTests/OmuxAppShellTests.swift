@@ -3613,7 +3613,11 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     func testPaneTabTitleFormatterKeepsShortTitlesUnchanged() {
+        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("Opencode"), "Opencode")
         XCTAssertEqual(PaneTabTitleFormatter.displayTitle("~/Projects/DungeonPlanner"), "~/Projects/DungeonPlanner")
+
+        let exactMaximum = String(repeating: "a", count: PaneTabTitleFormatter.defaultMaximumLength)
+        XCTAssertEqual(PaneTabTitleFormatter.displayTitle(exactMaximum), exactMaximum)
     }
 
     func testPaneTabTitleFormatterBoundsLongTitles() {
@@ -3624,6 +3628,37 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(displayTitle.hasPrefix(".../T/openmux-update"))
         XCTAssertTrue(displayTitle.hasSuffix("unpacked"))
         XCTAssertNotEqual(displayTitle, title)
+    }
+
+    func testPaneTabTitleFormatterSplitsTruncatedTitlesWithinMaximum() {
+        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("abcdefghij", maximumLength: 8), "ab...hij")
+        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("abcdefghij", maximumLength: 9), "abc...hij")
+    }
+
+    @MainActor
+    func testPaneTabTitleLabelDoesNotMiddleTruncateShortTitles() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let renamedWorkspace = try XCTUnwrap(controller.renamePaneTab(pane.id, to: "Opencode"))
+        let windowController = WorkspaceWindowController(
+            workspace: renamedWorkspace,
+            controller: controller
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let tabButton = try XCTUnwrap(findViews(ofType: NSControl.self, in: rootView).first {
+            $0.identifier?.rawValue == "pane-tab-\(pane.id.rawValue)"
+        })
+        let titleLabel = try XCTUnwrap(findLabelView(withString: "Opencode", in: tabButton))
+
+        XCTAssertEqual(titleLabel.stringValue, "Opencode")
+        XCTAssertNotEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
+        XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
     }
 
     func testWorkspaceIconResolverDetectsProjectMarkersAndAITitles() throws {

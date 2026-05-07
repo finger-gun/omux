@@ -2512,7 +2512,7 @@ private final class PaneTabButton: NSControl {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(pane.title)" } ?? pane.title)
         toolTip = pane.title
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         iconLabel.translatesAutoresizingMaskIntoConstraints = false
         iconLabel.font = icon?.font ?? .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
@@ -2536,7 +2536,7 @@ private final class PaneTabButton: NSControl {
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
-        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.lineBreakMode = .byClipping
         titleLabel.stringValue = PaneTabTitleFormatter.displayTitle(pane.title)
         titleLabel.toolTip = pane.title
         titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
