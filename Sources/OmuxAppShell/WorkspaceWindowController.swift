@@ -2480,7 +2480,7 @@ private final class PaneTabButton: NSControl {
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
-        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.lineBreakMode = .byClipping
         titleLabel.stringValue = PaneTabTitleFormatter.displayTitle(pane.title)
         titleLabel.toolTip = pane.title
         titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
