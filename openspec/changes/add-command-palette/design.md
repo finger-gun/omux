@@ -2,7 +2,7 @@
 
 OpenMUX already treats workspaces, keybindings, actions, and the `omux` control plane as native product concepts. The command palette should compose those existing concepts into a fast keyboard-first overlay rather than becoming a separate launcher subsystem.
 
-The palette has two search modes. Opening with `Cmd+P` starts in workspace mode with an empty query and lets the user search and switch workspaces. Opening with `Cmd+Shift+P`, or typing `>` as the first character, starts command mode and searches invokable shortcut-backed actions plus supported `omux` CLI commands.
+The palette has two search modes. Opening with `Cmd+P` starts in workspace mode with an empty query and lists currently open workspaces for switching. Opening with `Cmd+Shift+P`, or typing `>` as the first character, starts command mode and searches safe discoverable OpenMUX actions plus supported safe-default `omux` CLI commands.
 
 The implementation must preserve terminal input correctness. Palette shortcuts are application commands, while normal text, Option-key combinations, dead keys, and IME composition must continue flowing to the focused terminal when the palette is not open.
 
@@ -12,7 +12,7 @@ The implementation must preserve terminal input correctness. Palette shortcuts a
 
 - Provide one native command palette overlay that supports workspace mode and command mode.
 - Route workspace results through workspace/session action APIs.
-- Route command results through OpenMUX action dispatch or explicit `omux` control-plane command invocations.
+- Route command results through OpenMUX action dispatch or typed control APIs shared with explicit `omux` control-plane command invocations.
 - Keep search local and lightweight for the initial implementation.
 - Make command result metadata inspectable enough to support titles, shortcuts, categories, and enabled/disabled state.
 - Keep `libghostty` details behind the existing terminal bridge boundary.
@@ -23,6 +23,7 @@ The implementation must preserve terminal input correctness. Palette shortcuts a
 - Introducing a browser/webview command UI.
 - Adding plugin-provided palette items before the core action and CLI metadata contracts are stable.
 - Running arbitrary shell strings from the palette without an explicit supported command contract.
+- Collecting arbitrary CLI arguments, file paths, selectors, or freeform command text in the palette.
 - Adding persistent indexing or network-backed search.
 
 ## Decisions
@@ -46,13 +47,13 @@ Alternative considered: separate UI commands for separate palettes. This was rej
 
 ### Keep Command Invocation On Existing Boundaries
 
-Shortcut-backed commands should be discovered from action/keybinding metadata and invoked through terminal action dispatch. CLI-backed commands should be discovered from an explicit supported `omux` command metadata contract and invoked through the control plane, not by constructing ad hoc shell commands.
+Safe OpenMUX actions should be discovered from action metadata and invoked through terminal action dispatch, with shortcut labels included when an effective shortcut exists. CLI-backed commands should be discovered from an explicit supported `omux` command metadata contract and invoked through the same typed control APIs behind the control plane, not by constructing ad hoc shell commands, spawning `omux`, or calling the app's own JSON-RPC socket.
 
-Alternative considered: treat every palette command as a CLI string. This was rejected because it bypasses existing typed action dispatch, makes enabled/disabled state harder to represent, and creates avoidable quoting and security risks.
+Alternative considered: treat every palette command as a CLI string. This was rejected because it bypasses existing typed action dispatch, makes enabled/disabled state harder to represent, and creates avoidable quoting and security risks. Full CLI command invocation with argument prompting should be specified separately.
 
 ### Make Result Metadata Explicit
 
-Palette results should use OpenMUX-native metadata: stable identifier, title, optional subtitle, category, match text, optional shortcut label, enabled state, and invocation target. Workspaces, shortcut-backed actions, and CLI-backed commands can provide different invocation targets while sharing a common presentation and selection model.
+Palette results should use OpenMUX-native metadata: stable identifier, title, optional subtitle, category, match text, aliases, optional shortcut label, enabled state, disabled reason, and invocation target. Workspaces, safe actions, and CLI-backed commands can provide different invocation targets while sharing a common presentation and selection model.
 
 Alternative considered: return display strings only. This was rejected because display-only results make keyboard shortcuts, disabled states, telemetry/debugging, and future extension points harder to implement predictably.
 
@@ -69,7 +70,7 @@ Alternative considered: capture key equivalents inside the terminal view. This w
 - Disabled or context-sensitive actions may appear confusing -> Mitigation: include enabled state and optional disabled reason in command result metadata.
 - Palette focus handling can break terminal input after dismissal -> Mitigation: explicitly store and restore the previously focused responder/surface and add UI tests for open, dismiss, and invoke flows.
 - Large workspace or command lists could make search feel slow -> Mitigation: keep matching in-memory, debounce only if needed, and avoid background indexing for the initial scope.
-- Prefix-based command mode may conflict with workspace names starting with `>` -> Mitigation: treat only the first character as a reserved mode prefix in the palette query and document escaping/renaming behavior if it becomes necessary.
+- Prefix-based command mode may conflict with workspace names starting with `>` -> Mitigation: reserve only an exact first-character `>` for command mode in v1 and defer escape syntax until real usage demands it.
 
 ## Migration Plan
 
@@ -80,6 +81,4 @@ Alternative considered: capture key equivalents inside the terminal view. This w
 
 ## Open Questions
 
-- Which exact `omux` CLI commands are safe and useful enough to expose in the initial command-mode result set?
-- Should disabled command results be shown by default, hidden, or shown only when the query exactly matches?
-- Should workspace matching include persisted inactive workspaces only, currently open workspaces only, or both?
+- Which exact safe-default `omux` CLI commands should be exposed in the initial command-mode result set?

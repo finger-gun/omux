@@ -6,7 +6,7 @@ Developers need a fast keyboard-first way to move between workspaces and invoke 
 
 - Add a command palette opened by `Cmd+P` for workspace search and switching.
 - Add `Cmd+Shift+P` to open the same palette with `>` prefilled for command-mode search.
-- Use a leading `>` prefix to search and trigger available keyboard shortcut commands and `omux` CLI commands.
+- Use a leading `>` prefix to search and trigger safe discoverable OpenMUX actions and safe-default `omux` CLI commands.
 - Keep palette behavior keyboard-first, fast, and backed by explicit OpenMUX-native action/workspace/command contracts.
 - Preserve keyboard correctness for macOS shortcuts, including ISO/EU layouts, dead keys, IME composition, and right-Option behavior.
 
@@ -20,10 +20,11 @@ Developers need a fast keyboard-first way to move between workspaces and invoke 
 ## What Changes
 
 - Introduce a command palette overlay in the macOS app shell.
-- Bind `Cmd+P` to open the palette with an empty search field that searches workspaces and switches to the selected workspace.
-- Bind `Cmd+Shift+P` to open the palette with `>` already entered, searching available keyboard shortcut commands and `omux` CLI commands.
+- Bind `Cmd+P` to open the palette with an empty search field that lists currently open workspaces and switches to a selected non-current workspace.
+- Bind `Cmd+Shift+P` to open the palette with `>` already entered, searching safe discoverable OpenMUX actions and safe-default `omux` CLI commands.
 - Interpret user-entered `>` as an explicit command-mode prefix; removing the prefix returns the palette to workspace search mode.
-- Provide a searchable registry of invokable actions from keybindings and supported `omux` CLI commands.
+- Provide searchable metadata for safe invokable actions, including shortcut labels when available, and supported safe-default `omux` CLI commands.
+- Defer full CLI command invocation with argument prompting, path entry, target selection, quoting, and confirmation semantics to a separate future change.
 - Ensure invocation routes through existing OpenMUX-native action and control-plane boundaries rather than coupling the palette to terminal engine internals.
 
 ## Capabilities
@@ -35,7 +36,7 @@ Developers need a fast keyboard-first way to move between workspaces and invoke 
 ### Modified Capabilities
 
 - `keybinding-config`: Adds default bindings for `Cmd+P` and `Cmd+Shift+P` and defines how they participate in configurable keyboard handling.
-- `terminal-action-dispatch`: Extends action discovery and invocation so palette results can trigger available shortcut-backed actions through the same dispatch path.
+- `terminal-action-dispatch`: Extends action discovery and invocation so palette results can trigger safe discoverable actions through the same dispatch path.
 - `workspace-session-actions`: Adds palette-driven workspace search and switch behavior.
 - `omux-control-plane`: Defines how supported `omux` CLI commands are discoverable and invokable from command-mode palette search.
 - `appkit-terminal-input`: Ensures palette shortcuts are captured correctly without breaking terminal text input, IME composition, dead keys, or Option-key semantics.

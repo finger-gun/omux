@@ -25,3 +25,7 @@ Palette shortcut routing SHALL NOT claim Option-modified input, dead-key composi
 #### Scenario: Palette text stays inside palette while open
 - **WHEN** the palette is open and the user types query text including `>`
 - **THEN** OpenMUX updates the palette query and does not send that query text to the focused terminal session
+
+#### Scenario: Rebound palette shortcut is forwarded when unclaimed
+- **WHEN** the user config maps a default palette shortcut to `"none"` and a focused terminal receives that chord
+- **THEN** OpenMUX does not open the palette and allows the existing terminal input routing path to handle the chord when representable
