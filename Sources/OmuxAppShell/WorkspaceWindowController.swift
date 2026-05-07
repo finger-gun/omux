@@ -736,6 +736,9 @@ final class WorkspaceShellViewController: NSViewController {
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
                 },
+                canStartPaneTabDrag: { [weak self] paneID in
+                    self?.canStartPaneTabDrag(paneID: paneID, sourceStackID: paneStack.id) ?? false
+                },
                 onPaneTabDragStarted: { [weak self] button, paneID, stackID, _ in
                     self?.beginPaneTabDrag(button: button, paneID: paneID, sourceStackID: stackID)
                 },
@@ -818,13 +821,21 @@ final class WorkspaceShellViewController: NSViewController {
     }
     private var paneTabDragState: PaneTabDragState?
 
+    private func canStartPaneTabDrag(paneID: PaneID, sourceStackID: PaneStackID) -> Bool {
+        guard let tab = currentWorkspace?.focusedTab else {
+            return false
+        }
+        return PaneTabDragReadiness.canStart(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            in: tab,
+            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
+        )
+    }
+
     private func beginPaneTabDrag(button: NSView, paneID: PaneID, sourceStackID: PaneStackID) {
-        // Don't drag if this is the only tab in the only pane stack — nothing to split into.
-        if let tab = currentWorkspace?.focusedTab {
-            let sourceStack = tab.rootLayout.paneStack(id: sourceStackID)
-            if sourceStack?.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
-                return
-            }
+        guard canStartPaneTabDrag(paneID: paneID, sourceStackID: sourceStackID) else {
+            return
         }
         clearPaneTabSplitPreview()
         let ghost = makePaneTabDragGhost(for: button)
@@ -1030,6 +1041,32 @@ private struct PaneSplitDropIntentResolver {
         if point.x <= bounds.minX + t { return .left }
         if point.x >= bounds.maxX - t { return .right }
         return nil
+    }
+}
+
+enum PaneTabDragReadiness {
+    static func canStart(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        in tab: Tab,
+        attachedSessionExists: Bool
+    ) -> Bool {
+        guard let sourceStack = tab.rootLayout.paneStack(id: sourceStackID),
+              let pane = sourceStack.panes.first(where: { $0.id == paneID })
+        else {
+            return false
+        }
+
+        // Don't drag if this is the only tab in the only pane stack — nothing to split into.
+        if sourceStack.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
+            return false
+        }
+
+        if let extensionPane = pane.extensionPane {
+            return extensionPane.status == .ready
+        }
+
+        return pane.isTerminal && attachedSessionExists && pane.terminalState.reportedTitle != nil
     }
 }
 
@@ -2003,6 +2040,7 @@ final class PaneStackView: NSView {
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        canStartPaneTabDrag: @escaping @MainActor (PaneID) -> Bool,
         onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
@@ -2054,6 +2092,7 @@ final class PaneStackView: NSView {
             canCloseSinglePaneStack: canCloseSinglePaneStack,
             onClosePane: onClosePane,
             contextMenuProvider: contextMenuProvider,
+            canStartPaneTabDrag: canStartPaneTabDrag,
             onPaneTabDragStarted: onPaneTabDragStarted,
             onPaneTabDragMoved: onPaneTabDragMoved,
             onPaneTabDragEnded: onPaneTabDragEnded,
@@ -2280,6 +2319,7 @@ final class PaneHeaderView: NSView {
         canCloseSinglePaneStack: Bool,
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
+        canStartPaneTabDrag: @escaping @MainActor (PaneID) -> Bool,
         onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
@@ -2321,6 +2361,7 @@ final class PaneHeaderView: NSView {
             button.onPress = { onSelectPaneTab(pane.id) }
             button.contextMenuProvider = { contextMenuProvider(pane) }
             if onPaneTabDragStarted != nil {
+                button.canStartDrag = { canStartPaneTabDrag(pane.id) }
                 button.onDragStarted = { [weak button] _, event in
                     guard let button else { return }
                     onPaneTabDragStarted?(button, pane.id, paneStack.id, event)
@@ -2414,6 +2455,7 @@ private final class PaneTabButton: NSControl {
     var onDragMoved: ((PaneTabButton, NSEvent) -> Void)?
     var onDragEnded: ((PaneTabButton, NSEvent) -> Void)?
     var onDragCancelled: ((PaneTabButton) -> Void)?
+    var canStartDrag: (() -> Bool)?
     var contextMenuProvider: (() -> NSMenu)? {
         didSet {
             menu = contextMenuProvider?()
@@ -2621,6 +2663,9 @@ private final class PaneTabButton: NSControl {
                 let delta = hypot(location.x - initialLocation.x, location.y - initialLocation.y)
                 guard delta >= 4 else { continue }
                 if !didStartDragging {
+                    guard canStartDrag?() ?? true else {
+                        return
+                    }
                     didStartDragging = true
                     onDragStarted?(self, nextEvent)
                 }

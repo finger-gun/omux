@@ -631,6 +631,49 @@ final class OmuxAppShellTests: XCTestCase {
         }
     }
 
+    func testPaneTabSplitAgainstFullWidthBottomPaneSplitsTargetRegion() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let topPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let splitDown = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
+        let bottomPaneID = try XCTUnwrap(splitDown.focusedPane?.id)
+        _ = controller.focus(paneID: topPaneID)
+        let topStackID = try XCTUnwrap(controller.activeWorkspace()?.focusedPaneStack?.id)
+        let withPaneTab = try XCTUnwrap(controller.createPaneTab(in: topStackID))
+        let movedPaneID = try XCTUnwrap(withPaneTab.focusedPane?.id)
+        let bottomStackID = try XCTUnwrap(
+            withPaneTab.focusedTab?.rootLayout.paneStack(containingPaneID: bottomPaneID)?.id
+        )
+
+        let moved = try XCTUnwrap(controller.movePaneTabToSplit(
+            paneID: movedPaneID,
+            sourceStackID: topStackID,
+            targetStackID: bottomStackID,
+            direction: .right
+        ))
+
+        guard case .split(axis: .rows, proportions: _, children: let rootChildren)? = moved.focusedTab?.rootLayout else {
+            return XCTFail("expected root layout to remain a row split")
+        }
+
+        XCTAssertEqual(rootChildren.count, 2)
+        guard case .paneStack(let topStack) = rootChildren[0] else {
+            return XCTFail("expected top region to remain a pane stack")
+        }
+        guard case .split(axis: .columns, proportions: _, children: let bottomChildren) = rootChildren[1] else {
+            return XCTFail("expected bottom region to split into columns")
+        }
+
+        XCTAssertEqual(topStack.panes.map(\.id), [topPaneID])
+        XCTAssertEqual(bottomChildren.count, 2)
+        XCTAssertTrue(bottomChildren[0].containsPane(id: bottomPaneID))
+        XCTAssertTrue(bottomChildren[1].containsPane(id: movedPaneID))
+    }
+
     func testWorkspaceControllerCyclesPanesInVisibleLayoutOrder() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -3489,6 +3532,96 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(titleLabel.stringValue, "Opencode")
         XCTAssertNotEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
         XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
+    }
+
+    func testPaneTabDragRequiresInitializedTerminalPane() throws {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        var secondPane = Pane(
+            title: "two",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let uninitializedStack = PaneStack(panes: [firstPane, secondPane], focusedPaneID: firstPane.id)
+        let uninitializedTab = Tab(title: "Main", rootLayout: .paneStack(uninitializedStack), focusedPaneID: firstPane.id)
+
+        secondPane.terminalState.reportedTitle = "zsh"
+        let initializedStack = PaneStack(panes: [firstPane, secondPane], focusedPaneID: firstPane.id)
+        let initializedTab = Tab(title: "Main", rootLayout: .paneStack(initializedStack), focusedPaneID: firstPane.id)
+        let stackID = initializedStack.id
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: uninitializedStack.id,
+                in: uninitializedTab,
+                attachedSessionExists: false
+            )
+        )
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: uninitializedStack.id,
+                in: uninitializedTab,
+                attachedSessionExists: true
+            )
+        )
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: stackID,
+                in: initializedTab,
+                attachedSessionExists: false
+            )
+        )
+        XCTAssertTrue(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: stackID,
+                in: initializedTab,
+                attachedSessionExists: true
+            )
+        )
+    }
+
+    func testPaneTabDragRequiresReadyExtensionPane() throws {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let disabledPane = Pane(
+            title: "extension",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "test", status: .disabled)
+        )
+        let readyPane = Pane(
+            title: "extension",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "test", status: .ready)
+        )
+        let disabledStack = PaneStack(panes: [firstPane, disabledPane], focusedPaneID: firstPane.id)
+        let readyStack = PaneStack(panes: [firstPane, readyPane], focusedPaneID: firstPane.id)
+        let disabledTab = Tab(title: "Main", rootLayout: .paneStack(disabledStack), focusedPaneID: firstPane.id)
+        let readyTab = Tab(title: "Main", rootLayout: .paneStack(readyStack), focusedPaneID: firstPane.id)
+        let disabledStackID = disabledStack.id
+        let readyStackID = readyStack.id
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: disabledPane.id,
+                sourceStackID: disabledStackID,
+                in: disabledTab,
+                attachedSessionExists: true
+            )
+        )
+        XCTAssertTrue(
+            PaneTabDragReadiness.canStart(
+                paneID: readyPane.id,
+                sourceStackID: readyStackID,
+                in: readyTab,
+                attachedSessionExists: false
+            )
+        )
     }
 
     func testWorkspaceIconResolverDetectsProjectMarkersAndAITitles() throws {
