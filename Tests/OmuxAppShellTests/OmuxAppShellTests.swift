@@ -3488,6 +3488,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertEqual(titleLabel.stringValue, "Opencode")
         XCTAssertNotEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
+        XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
     }
 
     func testWorkspaceIconResolverDetectsProjectMarkersAndAITitles() throws {
