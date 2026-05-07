@@ -167,7 +167,7 @@ public enum CommandPaletteSearch {
         query: String,
         commands: [CommandPaletteCommand]
     ) -> [CommandPaletteResult] {
-        let visibleCommands = commands.filter(\.isPaletteVisible)
+        let visibleCommands = commands.filter { $0.isPaletteVisible && $0.isEnabled }
         return rankedMatches(query: query, items: visibleCommands) { command in
             [command.title, command.matchText] + command.aliases
         }

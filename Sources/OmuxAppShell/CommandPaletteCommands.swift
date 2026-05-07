@@ -230,12 +230,21 @@ extension OpenMUXKeyChord {
             .split(separator: "+")
             .map { part in
                 switch part {
-                case "cmd": return "Command"
-                case "ctrl": return "Control"
-                case "shift": return "Shift"
+                case "cmd":   return "⌘"
+                case "ctrl":  return "⌃"
+                case "shift": return "⇧"
+                case "alt":   return "⌥"
+                case "up":    return "↑"
+                case "down":  return "↓"
+                case "left":  return "←"
+                case "right": return "→"
+                case "tab":   return "⇥"
+                case "enter", "return": return "↩"
+                case "delete", "backspace": return "⌫"
+                case "escape": return "⎋"
                 default: return String(part).uppercased()
                 }
             }
-            .joined(separator: "-")
+            .joined()
     }
 }

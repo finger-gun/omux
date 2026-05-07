@@ -378,6 +378,7 @@ final class WorkspaceShellViewController: NSViewController {
         view.window?.backgroundColor = theme.shell.windowBackground
         sidebarView.apply(theme: theme)
         canvasView.apply(theme: theme)
+        commandPaletteView?.apply(theme: theme)
     }
 
     private func shouldRestoreFocus(
@@ -612,6 +613,7 @@ final class WorkspaceShellViewController: NSViewController {
                 paletteView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ])
         }
+        paletteView.apply(theme: currentTheme)
 
         paletteView.resultProvider = { [weak self] query in
             guard let self else { return [] }
