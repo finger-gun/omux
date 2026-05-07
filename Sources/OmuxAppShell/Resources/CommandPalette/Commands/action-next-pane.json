@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.next",
+  "title": "Next Pane",
+  "subtitle": "Focus the next visible pane",
+  "category": "action",
+  "matchText": "Next Pane Focus the next visible pane next split",
+  "aliases": ["next split"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No alternate pane",
+  "command": { "kind": "action", "target": "pane.next" }
+}

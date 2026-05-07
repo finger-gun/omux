@@ -47,9 +47,11 @@ Alternative considered: separate UI commands for separate palettes. This was rej
 
 ### Keep Command Invocation On Existing Boundaries
 
-Safe OpenMUX actions should be discovered from action metadata and invoked through terminal action dispatch, with shortcut labels included when an effective shortcut exists. CLI-backed commands should be discovered from an explicit supported `omux` command metadata contract and invoked through the same typed control APIs behind the control plane, not by constructing ad hoc shell commands, spawning `omux`, or calling the app's own JSON-RPC socket.
+Safe OpenMUX actions should be discovered from explicit metadata and invoked through terminal action dispatch, with shortcut labels included when an effective shortcut exists. Built-in metadata can live in bundled JSON command descriptors so future plugin descriptors can follow the same shape. CLI-backed commands should be discovered from an explicit supported `omux` command metadata contract and invoked through the same typed control APIs behind the control plane, not by constructing ad hoc shell commands, spawning `omux`, or calling the app's own JSON-RPC socket.
 
 Alternative considered: treat every palette command as a CLI string. This was rejected because it bypasses existing typed action dispatch, makes enabled/disabled state harder to represent, and creates avoidable quoting and security risks. Full CLI command invocation with argument prompting should be specified separately.
+
+The descriptor `command` object is intentionally not bash text. `command.kind` selects an allowlisted resolver such as `action` or `builtin`, and `command.target` is an identifier that must map to a typed OpenMUX action or control operation before a result is invokable.
 
 ### Make Result Metadata Explicit
 

@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.remove",
+  "title": "Remove Active Pane",
+  "subtitle": "Close the focused pane",
+  "category": "action",
+  "matchText": "Remove Active Pane Close the focused pane close pane remove pane",
+  "aliases": ["close pane", "remove pane"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "Cannot remove the last pane",
+  "command": { "kind": "action", "target": "pane.remove" }
+}

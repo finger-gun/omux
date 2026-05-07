@@ -1,0 +1,12 @@
+{
+  "id": "action:pane-tab.close",
+  "title": "Close Pane Tab",
+  "subtitle": "Close the focused pane tab",
+  "category": "action",
+  "matchText": "Close Pane Tab Close the focused pane tab close tab",
+  "aliases": ["close tab"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "Cannot close the last pane tab",
+  "command": { "kind": "action", "target": "pane-tab.close" }
+}

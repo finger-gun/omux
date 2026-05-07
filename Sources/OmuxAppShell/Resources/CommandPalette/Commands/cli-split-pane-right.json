@@ -1,0 +1,12 @@
+{
+  "id": "cli:omux-pane-split-right",
+  "title": "omux: Split Pane Right",
+  "subtitle": "Split the focused pane through the typed control API",
+  "category": "cli",
+  "matchText": "omux pane split right",
+  "aliases": ["split right"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused pane",
+  "command": { "kind": "builtin", "target": "pane.split-right" }
+}

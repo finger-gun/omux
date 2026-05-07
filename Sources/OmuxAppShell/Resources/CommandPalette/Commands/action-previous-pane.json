@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.previous",
+  "title": "Previous Pane",
+  "subtitle": "Focus the previous visible pane",
+  "category": "action",
+  "matchText": "Previous Pane Focus the previous visible pane previous split",
+  "aliases": ["previous split"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No alternate pane",
+  "command": { "kind": "action", "target": "pane.previous" }
+}

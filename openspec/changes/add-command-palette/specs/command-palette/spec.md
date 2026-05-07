@@ -57,7 +57,7 @@ In workspace mode, the palette SHALL search currently open switchable OpenMUX wo
 - **THEN** OpenMUX shows workspace results rather than shortcut command or `omux` CLI command results
 
 ### Requirement: Command mode SHALL search invokable commands
-In command mode, the palette SHALL search safe discoverable OpenMUX actions and supported safe-default `omux` CLI commands using explicit command metadata. The system SHALL hide argument-requiring actions or CLI commands unless they have safe focused/default targets.
+In command mode, the palette SHALL search safe discoverable OpenMUX actions and supported safe-default `omux` CLI commands using explicit command metadata. Built-in command metadata SHALL be loadable from bundled JSON command descriptor files that define presentation fields and a typed `command.kind` plus `command.target` identifier. The system SHALL hide argument-requiring actions or CLI commands unless they have safe focused/default targets.
 
 #### Scenario: Safe action command is selected
 - **WHEN** the user selects a safe OpenMUX action result from command mode
@@ -75,8 +75,16 @@ In command mode, the palette SHALL search safe discoverable OpenMUX actions and 
 - **WHEN** the palette opens in command mode with only the `>` prefix
 - **THEN** OpenMUX lists safe discoverable command results immediately
 
+#### Scenario: Descriptor-backed command is discovered
+- **WHEN** command mode loads bundled command descriptor files
+- **THEN** OpenMUX turns valid descriptors into command results using descriptor titles, categories, match text, aliases, argument requirements, enabled state, and typed command targets
+
+#### Scenario: Descriptor does not define shell execution
+- **WHEN** a descriptor defines `command.kind` and `command.target`
+- **THEN** OpenMUX treats the target as an identifier resolved by a typed registry rather than as bash, shell text, or an executable command string
+
 ### Requirement: Palette results SHALL expose inspectable metadata
-Palette results SHALL include a stable identifier, title, category, match text, enabled state, invocation target, and optional subtitle, shortcut label, aliases, and disabled reason.
+Palette results SHALL include a stable identifier, title, category, match text, enabled state, invocation target derived from a typed command descriptor or workspace target, and optional subtitle, shortcut label, aliases, and disabled reason.
 
 #### Scenario: Result displays shortcut metadata
 - **WHEN** a command result has an associated effective shortcut

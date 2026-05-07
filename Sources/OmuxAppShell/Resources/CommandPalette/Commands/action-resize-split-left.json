@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.resize-left",
+  "title": "Move Divider Left",
+  "subtitle": "Resize the focused split left",
+  "category": "action",
+  "matchText": "Move Divider Left Resize the focused split left resize left",
+  "aliases": ["resize left"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No divider can move left",
+  "command": { "kind": "action", "target": "pane.resize-left" }
+}

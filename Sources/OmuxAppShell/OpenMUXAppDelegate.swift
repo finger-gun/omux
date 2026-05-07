@@ -32,6 +32,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var resizeSplitLeftMenuItem: NSMenuItem?
     private weak var resizeSplitRightMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
+    private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
+    private weak var commandPaletteCommandMenuItem: NSMenuItem?
     private weak var installCLIMenuItem: NSMenuItem?
     private weak var previousWorkspaceMenuItem: NSMenuItem?
     private weak var moveWorkspaceUpMenuItem: NSMenuItem?
@@ -315,6 +317,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     @objc private func toggleSidebarFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.toggleSidebarVisibility()
+    }
+
+    @objc private func openWorkspaceCommandPaletteFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.presentCommandPalette(initialQuery: "", keyBindings: keyBindingRegistry)
+    }
+
+    @objc private func openCommandPaletteFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.presentCommandPalette(initialQuery: ">", keyBindings: keyBindingRegistry)
     }
 
     @objc private func focusPreviousWorkspaceFromMenu(_ sender: Any?) {
@@ -614,6 +626,24 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         toggleSidebarMenuItem.target = self
         viewMenu.addItem(toggleSidebarMenuItem)
 
+        viewMenu.addItem(.separator())
+
+        let commandPaletteWorkspaceMenuItem = NSMenuItem(
+            title: "Command Palette",
+            action: #selector(openWorkspaceCommandPaletteFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        commandPaletteWorkspaceMenuItem.target = self
+        viewMenu.addItem(commandPaletteWorkspaceMenuItem)
+
+        let commandPaletteCommandMenuItem = NSMenuItem(
+            title: "Command Palette Commands",
+            action: #selector(openCommandPaletteFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        commandPaletteCommandMenuItem.target = self
+        viewMenu.addItem(commandPaletteCommandMenuItem)
+
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
@@ -624,6 +654,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
+        self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
+        self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
         self.installCLIMenuItem = installCLIMenuItem
         self.previousWorkspaceMenuItem = previousWorkspaceMenuItem
         self.moveWorkspaceUpMenuItem = moveWorkspaceUpMenuItem
@@ -665,6 +697,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLIMenuItem?.isEnabled = cliInstallStatus.isActionable
         let hasWorkspace = workspaceController.activeWorkspace() != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
+        commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
+        commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
         moveWorkspaceUpMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceUp()
         moveWorkspaceDownMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceDown()
@@ -692,6 +726,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: newWorkspaceMenuItem, action: .workspaceCreate)
         setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
+        setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)
+        setShortcut(for: commandPaletteCommandMenuItem, action: .commandPaletteCommand)
         setShortcut(for: previousWorkspaceMenuItem, action: .workspacePrevious)
         setShortcut(for: moveWorkspaceUpMenuItem, action: .workspaceMoveUp)
         setShortcut(for: moveWorkspaceDownMenuItem, action: .workspaceMoveDown)

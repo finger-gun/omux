@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.resize-equalize",
+  "title": "Equalize Splits",
+  "subtitle": "Reset focused split sizes",
+  "category": "action",
+  "matchText": "Equalize Splits Reset focused split sizes equalize panes",
+  "aliases": ["equalize panes"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No split to equalize",
+  "command": { "kind": "action", "target": "pane.resize-equalize" }
+}

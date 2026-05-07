@@ -1,11 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Action dispatch SHALL expose palette-visible action metadata
-Terminal action dispatch SHALL expose metadata for supported safe OpenMUX actions that are discoverable and invokable from the command palette, regardless of whether an action currently has an effective shortcut, without exposing terminal-engine implementation types.
+Terminal action dispatch SHALL expose metadata for supported safe OpenMUX actions that are discoverable and invokable from the command palette, regardless of whether an action currently has an effective shortcut, without exposing terminal-engine implementation types. Built-in action command metadata MAY be declared in bundled JSON descriptors, but descriptor `command.target` values SHALL resolve to OpenMUX-native action identifiers before dispatch.
 
 #### Scenario: Palette discovers safe action
 - **WHEN** command mode requests available safe actions
 - **THEN** action dispatch returns OpenMUX-native action identifiers, titles, categories, enabled state, match aliases, and shortcut labels where available
+
+#### Scenario: Descriptor action target resolves to native action
+- **WHEN** a bundled descriptor declares `command.kind` as `action`
+- **THEN** OpenMUX validates `command.target` as a supported OpenMUX action identifier before exposing or invoking the result
 
 #### Scenario: Palette metadata avoids Ghostty leakage
 - **WHEN** the palette receives action metadata

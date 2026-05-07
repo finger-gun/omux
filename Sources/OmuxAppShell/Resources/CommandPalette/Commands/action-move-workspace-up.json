@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.move-up",
+  "title": "Move Workspace Up",
+  "subtitle": "Move the active workspace earlier",
+  "category": "action",
+  "matchText": "Move Workspace Up Move the active workspace earlier reorder workspace up",
+  "aliases": ["reorder workspace up"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "Workspace is already first",
+  "command": { "kind": "action", "target": "workspace.move-up" }
+}

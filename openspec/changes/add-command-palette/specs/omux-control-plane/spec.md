@@ -1,11 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Control plane SHALL expose palette-discoverable CLI command metadata
-The control plane and `omux` CLI SHALL expose explicit metadata for supported CLI commands that are safe to discover and invoke from command palette command mode without collecting additional arguments.
+The control plane and `omux` CLI SHALL expose explicit metadata for supported CLI commands that are safe to discover and invoke from command palette command mode without collecting additional arguments. Built-in safe-default CLI command metadata MAY be declared in bundled JSON descriptors with typed `command.kind` and `command.target` fields.
 
 #### Scenario: Palette discovers supported CLI commands
 - **WHEN** command mode requests supported `omux` CLI commands
 - **THEN** OpenMUX returns command identifiers, titles, categories, descriptions, aliases, argument requirements, enabled state, and invocation targets for commands that are palette-invokable with no arguments or safe focused/default targets
+
+#### Scenario: Descriptor CLI target is allowlisted
+- **WHEN** a bundled descriptor declares `command.kind` as `builtin`
+- **THEN** OpenMUX exposes the command only if `command.target` maps to a supported typed control operation
 
 #### Scenario: Unsupported CLI command is hidden
 - **WHEN** an `omux` CLI command lacks an explicit palette-invokable metadata contract
@@ -29,3 +33,7 @@ CLI-backed command palette selections SHALL invoke supported behavior through th
 #### Scenario: Palette does not execute arbitrary shell text
 - **WHEN** a palette query resembles an unsupported shell command or arbitrary `omux` command string
 - **THEN** OpenMUX treats it as search text and does not execute it as shell input or a subprocess
+
+#### Scenario: Descriptor command field is not bash
+- **WHEN** a descriptor contains a `command` object
+- **THEN** OpenMUX interprets it as typed metadata and does not pass its fields to a shell interpreter

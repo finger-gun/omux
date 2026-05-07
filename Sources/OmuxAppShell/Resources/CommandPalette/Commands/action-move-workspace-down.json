@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.move-down",
+  "title": "Move Workspace Down",
+  "subtitle": "Move the active workspace later",
+  "category": "action",
+  "matchText": "Move Workspace Down Move the active workspace later reorder workspace down",
+  "aliases": ["reorder workspace down"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "Workspace is already last",
+  "command": { "kind": "action", "target": "workspace.move-down" }
+}
