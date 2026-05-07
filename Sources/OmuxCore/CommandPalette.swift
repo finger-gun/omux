@@ -32,6 +32,7 @@ public enum CommandPaletteInvocationTarget: Equatable, Sendable {
     case workspace(WorkspaceID)
     case action(OpenMUXKeyBindingAction)
     case cliCommand(String)
+    case themeSwitch
 }
 
 public struct CommandPaletteResult: Equatable, Sendable {
@@ -43,6 +44,7 @@ public struct CommandPaletteResult: Equatable, Sendable {
     public let aliases: [String]
     public let shortcutLabel: String?
     public let isEnabled: Bool
+    public let isActive: Bool
     public let disabledReason: String?
     public let invocationTarget: CommandPaletteInvocationTarget
 
@@ -55,6 +57,7 @@ public struct CommandPaletteResult: Equatable, Sendable {
         aliases: [String] = [],
         shortcutLabel: String? = nil,
         isEnabled: Bool = true,
+        isActive: Bool = false,
         disabledReason: String? = nil,
         invocationTarget: CommandPaletteInvocationTarget
     ) {
@@ -66,6 +69,7 @@ public struct CommandPaletteResult: Equatable, Sendable {
         self.aliases = aliases
         self.shortcutLabel = shortcutLabel
         self.isEnabled = isEnabled
+        self.isActive = isActive
         self.disabledReason = disabledReason
         self.invocationTarget = invocationTarget
     }

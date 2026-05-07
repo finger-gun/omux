@@ -52,10 +52,15 @@ struct CommandPaletteCommandCatalog {
             }
             return .action(action)
         case .builtin:
-            guard supportedBuiltinTargets.contains(command.target) else {
-                return nil
+            switch command.target {
+            case "theme.switch":
+                return .themeSwitch
+            default:
+                guard supportedBuiltinTargets.contains(command.target) else {
+                    return nil
+                }
+                return .cliCommand(command.target)
             }
-            return .cliCommand(command.target)
         }
     }
 
@@ -81,6 +86,8 @@ struct CommandPaletteCommandCatalog {
             switch command.target {
             case "workspace.create", "pane.split-right", "pane.split-down":
                 return controller.activeWorkspace() != nil
+            case "theme.switch":
+                return true
             default:
                 return false
             }
@@ -151,6 +158,8 @@ extension WorkspaceController {
             return invokePaletteAction(action)
         case .cliCommand(let commandID):
             return invokePaletteCLICommand(commandID)
+        case .themeSwitch:
+            return .inert
         }
     }
 
@@ -220,6 +229,45 @@ extension WorkspaceController {
             return invokePaletteAction(.paneSplitDown)
         default:
             return .failed("Unsupported palette CLI command")
+        }
+    }
+}
+
+extension CommandPaletteSearch {
+    static func themeResults(query: String, activeIdentifier: String?) -> [CommandPaletteResult] {
+        let themes = WorkspaceShellTheme.availableThemes
+        let items = themes.map { theme in
+            (theme: theme, searchText: "\(theme.displayName) \(theme.identifier)")
+        }
+
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+
+        let filtered: [(theme: WorkspaceShellTheme, score: Int, index: Int)] = items.enumerated().compactMap { index, item in
+            if normalizedQuery.isEmpty {
+                return (item.theme, 0, index)
+            }
+            let candidate = item.searchText.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+            if candidate == normalizedQuery { return (item.theme, 0, index) }
+            if candidate.hasPrefix(normalizedQuery) { return (item.theme, 10, index) }
+            if candidate.contains(normalizedQuery) { return (item.theme, 20, index) }
+            let parts = normalizedQuery.split(separator: " ")
+            if parts.allSatisfy({ candidate.contains($0) }) { return (item.theme, 30, index) }
+            return nil
+        }
+        .sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score < rhs.score }
+            return lhs.index < rhs.index
+        }
+
+        return filtered.map { entry in
+            CommandPaletteResult(
+                id: entry.theme.identifier,
+                title: entry.theme.displayName,
+                category: .action,
+                matchText: "\(entry.theme.displayName) \(entry.theme.identifier)",
+                isActive: entry.theme.identifier == activeIdentifier,
+                invocationTarget: .themeSwitch
+            )
         }
     }
 }

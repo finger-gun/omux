@@ -3,9 +3,31 @@ import OmuxCore
 
 @MainActor
 final class CommandPaletteView: NSView, NSTextFieldDelegate {
+    // MARK: - Sub-palette mode
+
+    enum SubPaletteMode {
+        case none
+        case theme(originalTheme: WorkspaceShellTheme)
+
+        var isActive: Bool {
+            if case .none = self { return false }
+            return true
+        }
+    }
+
     var resultProvider: ((String) -> [CommandPaletteResult])?
     var invokeResult: ((CommandPaletteResult) -> CommandPaletteInvocationResult)?
     var dismissHandler: (() -> Void)?
+
+    /// Called with a theme identifier whenever the highlighted theme changes during sub-palette navigation.
+    var subPalettePreviewHandler: ((String) -> Void)?
+    /// Called with the selected theme identifier when the user commits in the sub-palette.
+    var subPaletteCommitHandler: ((String) -> Void)?
+    /// Called when sub-palette exits without commit — allows caller to revert preview.
+    var subPaletteRevertHandler: (() -> Void)?
+
+    private var subPaletteMode: SubPaletteMode = .none
+    private var topLevelResultProvider: ((String) -> [CommandPaletteResult])?
 
     private var currentTheme: WorkspaceShellTheme = .defaultTheme
 
@@ -204,6 +226,28 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
     }
 
+    // MARK: - Sub-palette
+
+    func enterThemeSubPalette(originalTheme: WorkspaceShellTheme) {
+        subPaletteMode = .theme(originalTheme: originalTheme)
+        topLevelResultProvider = resultProvider
+        resultProvider = { [weak self] query in
+            guard let self else { return [] }
+            return CommandPaletteSearch.themeResults(query: query, activeIdentifier: self.currentTheme.identifier)
+        }
+        searchField.stringValue = ""
+        sectionLabel.stringValue = "Themes"
+        refreshResults()
+    }
+
+    func exitSubPalette() {
+        resultProvider = topLevelResultProvider
+        topLevelResultProvider = nil
+        subPaletteMode = .none
+        searchField.stringValue = ""
+        refreshResults()
+    }
+
     // MARK: - NSTextFieldDelegate
 
     func controlTextDidChange(_ notification: Notification) {
@@ -215,7 +259,16 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         switch commandSelector {
         case #selector(NSResponder.cancelOperation(_:)):
             if textView.hasMarkedText() { return false }
-            dismissAndRestoreFocus()
+            if subPaletteMode.isActive {
+                let modeSnapshot = subPaletteMode
+                exitSubPalette()
+                if case .theme(let originalTheme) = modeSnapshot {
+                    subPaletteRevertHandler?()
+                    _ = originalTheme // captured for caller use via handler
+                }
+            } else {
+                dismissAndRestoreFocus()
+            }
             return true
         case #selector(NSResponder.moveUp(_:)):
             handle(.moveUp)
@@ -246,11 +299,15 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
 
         let parsed = CommandPaletteParsedQuery(rawText: searchField.stringValue)
-        switch parsed.mode {
-        case .command:
-            sectionLabel.stringValue = "Commands"
-        case .workspace:
-            sectionLabel.stringValue = searchField.stringValue.isEmpty ? "Workspaces" : "Results"
+        if subPaletteMode.isActive {
+            // Section label set by enterThemeSubPalette; don't override
+        } else {
+            switch parsed.mode {
+            case .command:
+                sectionLabel.stringValue = "Commands"
+            case .workspace:
+                sectionLabel.stringValue = searchField.stringValue.isEmpty ? "Workspaces" : "Results"
+            }
         }
 
         guard results.isEmpty == false else {
@@ -297,6 +354,9 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
             new.setSelected(true, theme: currentTheme)
             DispatchQueue.main.async { new.scrollToVisible(new.bounds) }
         }
+        if subPaletteMode.isActive, let result = results[safe: newIndex] {
+            subPalettePreviewHandler?(result.id)
+        }
     }
 
     @objc private func resultRowClicked(_ sender: CommandPaletteResultRow) {
@@ -322,10 +382,19 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     private func invokeSelectedResult() {
         guard results.indices.contains(selectedIndex) else { return }
         let result = results[selectedIndex]
+
+        if subPaletteMode.isActive {
+            subPaletteCommitHandler?(result.id)
+            dismissAndRestoreFocus()
+            return
+        }
+
         let invocation = invokeResult?(result) ?? .failed("No palette invocation handler")
         switch invocation {
-        case .invoked, .inert:
+        case .invoked:
             dismissAndRestoreFocus()
+        case .inert:
+            break
         case .disabled(let reason):
             searchField.placeholderAttributedString = NSAttributedString(
                 string: reason ?? "Command is disabled",
@@ -407,6 +476,7 @@ final class CommandPaletteResultRow: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let reasonLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
+    private let checkmarkView = NSImageView()
     private let clickTarget = NSButton(frame: .zero)
 
     private static let rowHeightNormal: CGFloat = 38
@@ -482,6 +552,16 @@ final class CommandPaletteResultRow: NSView {
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(shortcutLabel)
 
+        let checkmarkCfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        checkmarkView.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+            .withSymbolConfiguration(checkmarkCfg)
+        checkmarkView.imageScaling = .scaleProportionallyDown
+        checkmarkView.translatesAutoresizingMaskIntoConstraints = false
+        checkmarkView.setContentHuggingPriority(.required, for: .horizontal)
+        checkmarkView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        checkmarkView.isHidden = !result.isActive
+        addSubview(checkmarkView)
+
         if result.disabledReason != nil {
             // Two-line layout: title + reason stacked, icon centered on title
             NSLayoutConstraint.activate([
@@ -503,8 +583,13 @@ final class CommandPaletteResultRow: NSView {
                 reasonLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
                 reasonLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -12),
 
-                shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
+                shortcutLabel.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
                 shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+                checkmarkView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
+                checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
+                checkmarkView.widthAnchor.constraint(equalToConstant: 14),
+                checkmarkView.heightAnchor.constraint(equalToConstant: 14),
             ])
         } else {
             // Single-line layout: everything centered
@@ -523,8 +608,13 @@ final class CommandPaletteResultRow: NSView {
                 titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
                 titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -12),
 
-                shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
+                shortcutLabel.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
                 shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+                checkmarkView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
+                checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
+                checkmarkView.widthAnchor.constraint(equalToConstant: 14),
+                checkmarkView.heightAnchor.constraint(equalToConstant: 14),
             ])
         }
 
@@ -582,6 +672,10 @@ final class CommandPaletteResultRow: NSView {
         shortcutLabel.stringValue = result.shortcutLabel ?? ""
         shortcutLabel.textColor = colors.textMuted
         shortcutLabel.isHidden = result.shortcutLabel == nil
+
+        // Active checkmark
+        checkmarkView.contentTintColor = colors.accent
+        checkmarkView.isHidden = !result.isActive
 
         setAccessibilityLabel("\(result.title), \(result.category.rawValue)")
     }

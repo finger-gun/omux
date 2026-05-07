@@ -115,6 +115,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             configurationCoordinator.onThemeChange = { [weak self] theme in
                 self?.windowController?.updateTheme(theme)
             }
+            windowController.themeCommitHandler = { [weak self] identifier in
+                self?.configurationCoordinator.setTheme(identifier: identifier)
+            }
             configurationCoordinator.onWorkspaceDefaultRootChange = { [weak self] path in
                 self?.workspaceController.updateDefaultWorkspaceRootPath(path)
             }
