@@ -196,7 +196,10 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         searchField.textColor = colors.textPrimary
         searchField.placeholderAttributedString = NSAttributedString(
             string: "Search commands or workspaces…",
-            attributes: [.foregroundColor: colors.textMuted]
+            attributes: [
+                .foregroundColor: colors.textMuted,
+                .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            ]
         )
         sectionLabel.textColor = colors.textMuted
         for row in resultStack.arrangedSubviews.compactMap({ $0 as? CommandPaletteResultRow }) {
@@ -329,12 +332,18 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         case .disabled(let reason):
             searchField.placeholderAttributedString = NSAttributedString(
                 string: reason ?? "Command is disabled",
-                attributes: [.foregroundColor: currentTheme.shell.accent]
+                attributes: [
+                    .foregroundColor: currentTheme.shell.accent,
+                    .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+                ]
             )
         case .failed(let message):
             searchField.placeholderAttributedString = NSAttributedString(
                 string: message,
-                attributes: [.foregroundColor: currentTheme.shell.accent]
+                attributes: [
+                    .foregroundColor: currentTheme.shell.accent,
+                    .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+                ]
             )
         }
     }
