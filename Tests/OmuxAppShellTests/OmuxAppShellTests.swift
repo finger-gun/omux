@@ -345,7 +345,7 @@ final class OmuxAppShellTests: XCTestCase {
         let results = CommandPaletteSearch.commandResults(query: "split right", commands: commands)
         let splitRight = try XCTUnwrap(results.first { $0.invocationTarget == .action(.paneSplitRight) })
 
-        XCTAssertEqual(splitRight.shortcutLabel, "Command-D")
+        XCTAssertEqual(splitRight.shortcutLabel, "⌘D")
         XCTAssertEqual(splitRight.category, .action)
         XCTAssertEqual(controller.invokeCommandPaletteResult(splitRight), .invoked)
         XCTAssertEqual(controller.activeWorkspace()?.focusedTab?.panes.count, 2)
