@@ -2664,7 +2664,7 @@ private final class PaneTabButton: NSControl {
                 guard delta >= 4 else { continue }
                 if !didStartDragging {
                     guard canStartDrag?() ?? true else {
-                        return
+                        continue
                     }
                     didStartDragging = true
                     onDragStarted?(self, nextEvent)
