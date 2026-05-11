@@ -13,17 +13,19 @@ struct CommandPaletteCommandCatalog {
     static func commands(
         controller: WorkspaceController,
         keyBindings: OpenMUXKeyBindingRegistry,
-        descriptors: [CommandPaletteCommandDescriptor] = CommandPaletteCommandDescriptorCatalog.bundledDescriptors()
+        descriptors: [CommandPaletteCommandDescriptor] = CommandPaletteCommandDescriptorCatalog.bundledDescriptors(),
+        subtitleOverrides: [String: String] = [:]
     ) -> [CommandPaletteCommand] {
         descriptors.compactMap { descriptor in
-            command(from: descriptor, controller: controller, keyBindings: keyBindings)
+            command(from: descriptor, controller: controller, keyBindings: keyBindings, subtitleOverrides: subtitleOverrides)
         }
     }
 
     private static func command(
         from descriptor: CommandPaletteCommandDescriptor,
         controller: WorkspaceController,
-        keyBindings: OpenMUXKeyBindingRegistry
+        keyBindings: OpenMUXKeyBindingRegistry,
+        subtitleOverrides: [String: String] = [:]
     ) -> CommandPaletteCommand? {
         guard let target = invocationTarget(for: descriptor.command) else {
             return nil
@@ -32,7 +34,7 @@ struct CommandPaletteCommandCatalog {
         return CommandPaletteCommand(
             id: descriptor.id,
             title: descriptor.title,
-            subtitle: descriptor.subtitle,
+            subtitle: subtitleOverrides[descriptor.id] ?? descriptor.subtitle,
             category: descriptor.category.paletteCategory,
             matchText: descriptor.matchText,
             aliases: descriptor.aliases,
@@ -57,8 +59,11 @@ struct CommandPaletteCommandCatalog {
             case "theme.switch":
                 return .themeSwitch
             default:
-                guard OpenMUXCLICommandCatalog.command(id: command.target) != nil else {
+                guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else {
                     return nil
+                }
+                if spec.paletteExecution == .configOpen {
+                    return .configOpen
                 }
                 return .cliCommand(command.target)
             }
@@ -89,6 +94,9 @@ struct CommandPaletteCommandCatalog {
                 return true
             default:
                 guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else { return false }
+                if spec.paletteExecution == .configOpen {
+                    return true
+                }
                 return isEnabled(cliCommand: spec, controller: controller)
             }
         }
@@ -172,6 +180,8 @@ extension WorkspaceController {
         case .cliCommand(let commandID):
             return invokePaletteCLICommand(commandID)
         case .themeSwitch:
+            return .inert
+        case .configOpen:
             return .inert
         }
     }

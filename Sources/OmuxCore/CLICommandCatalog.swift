@@ -3,6 +3,7 @@ import Foundation
 public enum OpenMUXCLIPaletteExecution: Equatable, Sendable {
     case keyBindingAction(OpenMUXKeyBindingAction)
     case createWorkspaceTab
+    case configOpen
     case unavailable(String)
 }
 
@@ -110,6 +111,14 @@ public enum OpenMUXCLICommandCatalog {
             summary: "Write a starter OpenMUX configuration file",
             aliases: ["configuration init", "starter config"],
             paletteExecution: .unavailable("Run from a terminal to create the config file")
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.config.open",
+            usage: "omux config open",
+            title: "omux: Open Config",
+            summary: "Open the OpenMUX configuration file in the default editor",
+            aliases: ["configuration open", "edit config", "open settings"],
+            paletteExecution: .configOpen
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.inactive-opacity",

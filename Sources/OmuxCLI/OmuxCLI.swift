@@ -1165,7 +1165,7 @@ public struct OmuxCLICommand {
 
     private func runConfigCommand(arguments: [String]) -> Int32 {
         guard let subcommand = arguments.first else {
-            writeLine("usage: omux config <doctor|reload|init|inactive-opacity>")
+            writeLine("usage: omux config <doctor|reload|init|open|inactive-opacity>")
             return 1
         }
 
@@ -1189,16 +1189,41 @@ public struct OmuxCLICommand {
                 try OmuxConfigTemplate.starter().write(to: configURL, atomically: true, encoding: .utf8)
                 writeLine("Wrote \(configURL.path)")
                 return 0
+            case "open":
+                return try runConfigOpen()
             case "inactive-opacity":
                 return try runConfigInactiveOpacity(arguments: Array(arguments.dropFirst()))
             default:
-                writeLine("usage: omux config <doctor|reload|init|inactive-opacity>")
+                writeLine("usage: omux config <doctor|reload|init|open|inactive-opacity>")
                 return 1
             }
         } catch {
             writeLine("omux error: \(error)")
             return 1
         }
+    }
+
+    private func runConfigOpen() throws -> Int32 {
+        let configURL = OmuxConfigPaths.configFileURL
+        guard FileManager.default.fileExists(atPath: configURL.path) else {
+            writeLine("omux error: config file not found at \(configURL.path). Run 'omux config init' to create one.")
+            return 1
+        }
+
+        let env = environment()
+        let process = Process()
+
+        if let editor = env["VISUAL"] ?? env["EDITOR"], !editor.isEmpty {
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", "\(editor) \(configURL.path.shellEscaped)"]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-t", configURL.path]
+        }
+
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
     }
 
     private func runConfigInactiveOpacity(arguments: [String]) throws -> Int32 {
@@ -2385,5 +2410,11 @@ private extension OmuxConfigDiagnostic {
         let filePath = object["filePath"]?.stringValue
         let line = object["line"]?.intValue
         self.init(severity: severity, message: message, filePath: filePath, line: line)
+    }
+}
+
+private extension String {
+    var shellEscaped: String {
+        "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
