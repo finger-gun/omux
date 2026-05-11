@@ -61,6 +61,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             hookRunner: hookRunner,
             defaultWorkspaceRootPath: preparedConfiguration.defaultWorkspaceRootPath,
             persistedScrollback: preparedConfiguration.persistedScrollback,
+            paneConfiguration: preparedConfiguration.panes,
             markdownPreviewConfiguration: preparedConfiguration.markdownPreview,
             scrollbackReplayStore: ScrollbackReplayStore(directoryURL: Self.appReplayDirectory()),
             scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
@@ -125,6 +126,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 self?.workspaceController.updatePersistedScrollback(persistedScrollback)
             }
             configurationCoordinator.onPaneConfigurationChange = { [weak self] panes in
+                self?.workspaceController.updatePaneConfiguration(panes)
                 self?.windowController?.updatePanes(panes)
             }
             configurationCoordinator.onIconConfigurationChange = { [weak self] icons in

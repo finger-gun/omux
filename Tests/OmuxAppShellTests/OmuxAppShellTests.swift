@@ -1441,6 +1441,7 @@ final class OmuxAppShellTests: XCTestCase {
         let controller = WorkspaceController(
             bridge: bridge,
             hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
             progressIdleClearDelay: 0.01
         )
 
@@ -2668,6 +2669,61 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testIdleStatusOrbsClearOnFocusByDefault() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(updatedWorkspace.focusedPane)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(firstPane.id),
+                state: .idle,
+                source: "test"
+            )
+        )
+
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first { $0.id == firstPane.id }?.terminalState.progress?.state,
+            .paused
+        )
+
+        controller.focus(paneID: firstPane.id)
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, firstPane.id)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+    }
+
+    @MainActor
+    func testIdleStatusOrbsCanUseDelayPolicy() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
+            progressIdleClearDelay: 60
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(pane.id),
+                state: .idle,
+                source: "test"
+            )
+        )
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    @MainActor
     func testWorkspaceWindowSuppressesCwdOnlyPaneStatusRow() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -2780,6 +2836,56 @@ final class OmuxAppShellTests: XCTestCase {
     func testWorkspaceSidebarDragRegionsDoNotMoveWindow() {
         XCTAssertFalse(WorkspaceSidebarView().mouseDownCanMoveWindow)
         XCTAssertFalse(SidebarItemButton().mouseDownCanMoveWindow)
+    }
+
+    @MainActor
+    func testSidebarStatusOrbDoesNotShiftTerminalMetadata() throws {
+        let theme = WorkspaceShellTheme.defaultTheme
+        let icon = OmuxRenderedIcon(
+            text: "T",
+            font: .systemFont(ofSize: 11, weight: .medium),
+            accessibilityLabel: "Terminal",
+            symbolName: nil,
+            prefersSymbol: false,
+            colorToken: .ansiCyan,
+            colorsEnabled: true
+        )
+        let baseItem = SidebarItem(
+            kind: .terminal,
+            identifier: "pane",
+            icon: icon,
+            progress: nil,
+            title: "build",
+            subtitle: "~/project",
+            isActive: false,
+            action: .pane(PaneID()),
+            contextMenuProvider: nil
+        )
+        let progressItem = SidebarItem(
+            kind: .terminal,
+            identifier: "pane",
+            icon: icon,
+            progress: PaneProgress(state: .paused),
+            title: "build",
+            subtitle: "~/project",
+            isActive: false,
+            action: .pane(PaneID()),
+            contextMenuProvider: nil
+        )
+        let baseButton = SidebarItemButton(frame: NSRect(x: 0, y: 0, width: 200, height: baseItem.rowHeight))
+        let progressButton = SidebarItemButton(frame: NSRect(x: 0, y: 0, width: 200, height: progressItem.rowHeight))
+
+        baseButton.configure(item: baseItem, theme: theme)
+        progressButton.configure(item: progressItem, theme: theme)
+        baseButton.layoutSubtreeIfNeeded()
+        progressButton.layoutSubtreeIfNeeded()
+
+        let baseTitle = try XCTUnwrap(findLabelView(withString: "build", in: baseButton))
+        let progressTitle = try XCTUnwrap(findLabelView(withString: "build", in: progressButton))
+        let progressOrb = try XCTUnwrap(findView(ofType: PaneProgressOrbView.self, in: progressButton))
+
+        XCTAssertEqual(baseTitle.frame.minX, progressTitle.frame.minX, accuracy: 0.001)
+        XCTAssertLessThan(progressOrb.frame.maxX, progressTitle.frame.minX)
     }
 
     @MainActor

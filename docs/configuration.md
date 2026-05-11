@@ -29,6 +29,7 @@ default_root_path = "~"
 
 [ui.panes]
 # inactive_opacity = 0.5
+# idle_status_clear = "on-focus"
 
 [ui.icons]
 # enabled = true
@@ -301,6 +302,7 @@ The path must resolve to an existing directory. `~` and `~/...` expand to the cu
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `inactive_opacity` | number from `0.0` to `1.0` | Opacity for inactive pane cards. Defaults to `0.5`; set to `1.0` to disable dimming. |
+| `idle_status_clear` | `"on-focus"`, `"after-delay"`, or `"never"` | Controls when an idle status orb is removed after a pane reports idle/completed status. Defaults to `"on-focus"` so background panes keep their orb until you focus them. |
 
 Set it from the CLI with:
 

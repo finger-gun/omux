@@ -38,6 +38,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let hookRunner: ExternalHookRunner
     private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
+    private var paneConfiguration: OmuxConfigUI.Panes
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
@@ -72,6 +73,7 @@ public final class WorkspaceController: @unchecked Sendable {
         hookRunner: ExternalHookRunner,
         defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        paneConfiguration: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
@@ -80,6 +82,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.bridge = bridge
         self.hookRunner = hookRunner
         self.persistedScrollback = persistedScrollback
+        self.paneConfiguration = paneConfiguration
         self.markdownPreviewConfiguration = markdownPreviewConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
@@ -594,6 +597,40 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         markdownPreviewConfiguration = configuration
         lock.unlock()
+    }
+
+    public func updatePaneConfiguration(_ configuration: OmuxConfigUI.Panes) {
+        var pendingSchedules: [(PaneID, UUID)] = []
+        lock.lock()
+        paneConfiguration = configuration
+        progressIdleClearTokens.removeAll()
+
+        switch configuration.idleStatusClear {
+        case .onFocus:
+            if let activeWorkspaceIndex,
+               let focusedPaneID = workspaces[activeWorkspaceIndex].focusedPane?.id,
+               clearIdleProgressLocked(for: focusedPaneID, workspaceIndex: activeWorkspaceIndex) {
+                let updatedWorkspace = workspaces[activeWorkspaceIndex]
+                lock.unlock()
+                onChange?(updatedWorkspace)
+                return
+            }
+        case .afterDelay:
+            for workspace in workspaces {
+                for pane in workspace.tabs.flatMap(\.panes) where pane.terminalState.progress?.state == .paused {
+                    let token = UUID()
+                    progressIdleClearTokens[pane.id] = token
+                    pendingSchedules.append((pane.id, token))
+                }
+            }
+        case .never:
+            break
+        }
+        lock.unlock()
+
+        for (paneID, token) in pendingSchedules {
+            scheduleProgressIdleClear(for: paneID, token: token)
+        }
     }
 
     @discardableResult
@@ -1396,6 +1433,9 @@ public final class WorkspaceController: @unchecked Sendable {
         if let index = activeWorkspaceIndex,
            workspaces[index].focusedTabID != tabID,
            workspaces[index].focus(tabID: tabID) {
+            if let focusedPaneID = workspaces[index].focusedPane?.id {
+                _ = clearIdleProgressOnFocusLocked(for: focusedPaneID, workspaceIndex: index)
+            }
             updatedWorkspace = workspaces[index]
         }
         lock.unlock()
@@ -1423,6 +1463,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
             if workspaces[index].focus(paneID: paneID) {
                 setActiveWorkspaceID(workspaces[index].id)
+                _ = clearIdleProgressOnFocusLocked(for: paneID, workspaceIndex: index)
                 updatedWorkspace = workspaces[index]
             }
             break
@@ -1631,9 +1672,7 @@ public final class WorkspaceController: @unchecked Sendable {
             }
 
             if request.state == .idle {
-                let token = UUID()
-                progressIdleClearTokens[context.paneID] = token
-                scheduleProgressIdleClear(for: context.paneID, token: token)
+                handleIdleProgressSetLocked(for: context.paneID, workspaceIndex: workspaceIndex)
             } else {
                 progressIdleClearTokens.removeValue(forKey: context.paneID)
             }
@@ -1837,6 +1876,9 @@ public final class WorkspaceController: @unchecked Sendable {
         var updatedWorkspace: Workspace?
         lock.lock()
         if let index = activeWorkspaceIndex, transform(&workspaces[index]) {
+            if let focusedPaneID = workspaces[index].focusedPane?.id {
+                _ = clearIdleProgressOnFocusLocked(for: focusedPaneID, workspaceIndex: index)
+            }
             updatedWorkspace = workspaces[index]
         }
         lock.unlock()
@@ -2323,10 +2365,7 @@ public final class WorkspaceController: @unchecked Sendable {
                     _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                         switch state {
                         case .removed:
-                            let token = UUID()
-                            progressIdleClearTokens[event.paneID] = token
                             pane.terminalState.progress = PaneProgress(state: .paused)
-                            scheduleProgressIdleClear(for: event.paneID, token: token)
                         case .active:
                             progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .active, value: progress)
@@ -2340,6 +2379,9 @@ public final class WorkspaceController: @unchecked Sendable {
                             progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
                         }
+                    }
+                    if state == .removed {
+                        handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
                     }
                     updatedWorkspace = workspaces[workspaceIndex]
                 case .childExited(let exitCode, let elapsedMilliseconds):
@@ -2376,6 +2418,43 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
+    private func handleIdleProgressSetLocked(for paneID: PaneID, workspaceIndex: Int) {
+        switch paneConfiguration.idleStatusClear {
+        case .onFocus:
+            progressIdleClearTokens.removeValue(forKey: paneID)
+            if isFocusedInActiveWorkspaceLocked(paneID: paneID, workspaceIndex: workspaceIndex) {
+                _ = clearIdleProgressLocked(for: paneID, workspaceIndex: workspaceIndex)
+            }
+        case .afterDelay:
+            let token = UUID()
+            progressIdleClearTokens[paneID] = token
+            scheduleProgressIdleClear(for: paneID, token: token)
+        case .never:
+            progressIdleClearTokens.removeValue(forKey: paneID)
+        }
+    }
+
+    private func clearIdleProgressOnFocusLocked(for paneID: PaneID, workspaceIndex: Int) -> Bool {
+        guard paneConfiguration.idleStatusClear == .onFocus else {
+            return false
+        }
+        progressIdleClearTokens.removeValue(forKey: paneID)
+        return clearIdleProgressLocked(for: paneID, workspaceIndex: workspaceIndex)
+    }
+
+    private func clearIdleProgressLocked(for paneID: PaneID, workspaceIndex: Int) -> Bool {
+        workspaces[workspaceIndex].updatePane(paneID) { pane in
+            guard pane.terminalState.progress?.state == .paused else {
+                return
+            }
+            pane.terminalState.progress = nil
+        }
+    }
+
+    private func isFocusedInActiveWorkspaceLocked(paneID: PaneID, workspaceIndex: Int) -> Bool {
+        activeWorkspaceID == workspaces[workspaceIndex].id && workspaces[workspaceIndex].focusedPane?.id == paneID
+    }
+
     private func clearProgressIdleState(for paneID: PaneID, token: UUID) {
         var updatedWorkspace: Workspace?
 
@@ -2383,6 +2462,10 @@ public final class WorkspaceController: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard progressIdleClearTokens[paneID] == token else {
+            return
+        }
+        guard paneConfiguration.idleStatusClear == .afterDelay else {
+            progressIdleClearTokens.removeValue(forKey: paneID)
             return
         }
 

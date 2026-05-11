@@ -357,6 +357,7 @@ struct OmuxConfigTests {
 
             [ui.panes]
             inactive_opacity = 0.72
+            idle_status_clear = "never"
             """,
             to: home.appendingPathComponent("config.toml")
         )
@@ -364,6 +365,7 @@ struct OmuxConfigTests {
         let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
         #expect(result.hasErrors == false)
         #expect(result.config.ui.panes.inactiveOpacity == 0.72)
+        #expect(result.config.ui.panes.idleStatusClear == .never)
     }
 
     @Test
@@ -372,6 +374,8 @@ struct OmuxConfigTests {
             ("inactive_opacity = \"dim\"", "ui.panes.inactive_opacity must be a number"),
             ("inactive_opacity = -0.1", "ui.panes.inactive_opacity must be between 0.0 and 1.0"),
             ("inactive_opacity = 1.1", "ui.panes.inactive_opacity must be between 0.0 and 1.0"),
+            ("idle_status_clear = true", "ui.panes.idle_status_clear must be"),
+            ("idle_status_clear = \"soon\"", "ui.panes.idle_status_clear must be"),
             ("unknown = true", "Unknown [ui.panes] key"),
         ]
 
@@ -576,6 +580,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("default_root_path = \"~\""))
         #expect(contents.contains("[ui.panes]"))
         #expect(contents.contains("# inactive_opacity = 0.5"))
+        #expect(contents.contains("# idle_status_clear = \"on-focus\""))
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))

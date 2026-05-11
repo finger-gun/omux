@@ -221,12 +221,24 @@ public struct OmuxConfigWorkspace: Equatable, Sendable {
 
 public struct OmuxConfigUI: Equatable, Sendable {
     public struct Panes: Equatable, Sendable {
+        public enum IdleStatusClear: String, Equatable, Sendable {
+            case onFocus = "on-focus"
+            case afterDelay = "after-delay"
+            case never
+        }
+
         public static let defaultInactiveOpacity = 0.5
+        public static let defaultIdleStatusClear = IdleStatusClear.onFocus
 
         public let inactiveOpacity: Double
+        public let idleStatusClear: IdleStatusClear
 
-        public init(inactiveOpacity: Double = Self.defaultInactiveOpacity) {
+        public init(
+            inactiveOpacity: Double = Self.defaultInactiveOpacity,
+            idleStatusClear: IdleStatusClear = Self.defaultIdleStatusClear
+        ) {
             self.inactiveOpacity = inactiveOpacity
+            self.idleStatusClear = idleStatusClear
         }
     }
 
@@ -453,6 +465,7 @@ public enum OmuxConfigTemplate {
 
         [ui.panes]
         # inactive_opacity = 0.5
+        # idle_status_clear = "on-focus" # "on-focus", "after-delay", or "never"
 
         [ui.icons]
         # enabled = true
@@ -1161,8 +1174,9 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let paneUIAllowedKeys: Set<String> = ["inactive_opacity"]
+        let paneUIAllowedKeys: Set<String> = ["inactive_opacity", "idle_status_clear"]
         var paneInactiveOpacity = config.ui.panes.inactiveOpacity
+        var paneIdleStatusClear = config.ui.panes.idleStatusClear
         for entry in document.entries(in: "ui.panes") {
             guard paneUIAllowedKeys.contains(entry.key) else {
                 diagnostics.append(
@@ -1201,6 +1215,21 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 paneInactiveOpacity = value
+            case "idle_status_clear":
+                guard case .string(let rawValue) = entry.value,
+                      let value = OmuxConfigUI.Panes.IdleStatusClear(rawValue: rawValue)
+                else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "ui.panes.idle_status_clear must be \"on-focus\", \"after-delay\", or \"never\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                paneIdleStatusClear = value
             default:
                 break
             }
@@ -1425,7 +1454,10 @@ public struct OmuxConfigLoader {
             ),
             workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
             ui: OmuxConfigUI(
-                panes: OmuxConfigUI.Panes(inactiveOpacity: paneInactiveOpacity),
+                panes: OmuxConfigUI.Panes(
+                    inactiveOpacity: paneInactiveOpacity,
+                    idleStatusClear: paneIdleStatusClear
+                ),
                 icons: OmuxConfigUI.Icons(
                     enabled: iconsEnabled,
                     provider: iconsProvider,

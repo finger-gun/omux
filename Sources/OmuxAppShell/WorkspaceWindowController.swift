@@ -3209,16 +3209,15 @@ final class SidebarItemButton: NSView {
         super.layout()
         let trailingInset: CGFloat = 12
         let iconSpacing: CGFloat = renderedIcon == nil ? 0 : 6
-        let progressSpacing: CGFloat = 6
         var textX = leadingInset
         if progress != nil {
+            let progressX = max(0, leadingInset - PaneProgressOrbView.side - 5)
             progressOrb.frame = NSRect(
-                x: leadingInset,
+                x: progressX,
                 y: round((bounds.height - PaneProgressOrbView.side) / 2),
                 width: PaneProgressOrbView.side,
                 height: PaneProgressOrbView.side
             )
-            textX = progressOrb.frame.maxX + progressSpacing
         } else {
             progressOrb.frame = .zero
         }

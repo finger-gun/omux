@@ -1224,7 +1224,10 @@ public struct OmuxCLICommand {
             terminal: current.terminal,
             workspace: current.workspace,
             ui: OmuxConfigUI(
-                panes: OmuxConfigUI.Panes(inactiveOpacity: opacity),
+                panes: OmuxConfigUI.Panes(
+                    inactiveOpacity: opacity,
+                    idleStatusClear: current.ui.panes.idleStatusClear
+                ),
                 icons: current.ui.icons
             ),
             plugins: current.plugins,
@@ -1481,6 +1484,7 @@ public struct OmuxCLICommand {
         lines.append("")
         lines.append("[ui.panes]")
         lines.append("inactive_opacity = \(renderOpacity(config.ui.panes.inactiveOpacity))")
+        lines.append("idle_status_clear = \(render(.string(config.ui.panes.idleStatusClear.rawValue)))")
 
         lines.append("")
         lines.append("[plugins.markdown-preview]")
