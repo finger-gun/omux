@@ -140,7 +140,7 @@ public struct CommandPaletteCommand: Equatable, Sendable {
     }
 
     public var isPaletteVisible: Bool {
-        requiresArguments == false || hasSafeDefaultTarget
+        category == .cli || requiresArguments == false || hasSafeDefaultTarget
     }
 }
 

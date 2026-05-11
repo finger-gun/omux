@@ -19,11 +19,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     var invokeResult: ((CommandPaletteResult) -> CommandPaletteInvocationResult)?
     var dismissHandler: (() -> Void)?
 
-    /// Called with a theme identifier whenever the highlighted theme changes during sub-palette navigation.
     var subPalettePreviewHandler: ((String) -> Void)?
-    /// Called with the selected theme identifier when the user commits in the sub-palette.
     var subPaletteCommitHandler: ((String) -> Void)?
-    /// Called when sub-palette exits without commit — allows caller to revert preview.
     var subPaletteRevertHandler: (() -> Void)?
 
     private var subPaletteMode: SubPaletteMode = .none
@@ -263,12 +260,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         case #selector(NSResponder.cancelOperation(_:)):
             if textView.hasMarkedText() { return false }
             if subPaletteMode.isActive {
-                let modeSnapshot = subPaletteMode
                 exitSubPalette()
-                if case .theme(let originalTheme) = modeSnapshot {
-                    subPaletteRevertHandler?()
-                    _ = originalTheme // captured for caller use via handler
-                }
+                subPaletteRevertHandler?()
             } else {
                 dismissAndRestoreFocus()
             }
@@ -301,10 +294,10 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
             v.removeFromSuperview()
         }
 
-        let parsed = CommandPaletteParsedQuery(rawText: searchField.stringValue)
         if subPaletteMode.isActive {
-            // Section label set by enterThemeSubPalette; don't override
+            sectionLabel.stringValue = "Themes"
         } else {
+            let parsed = CommandPaletteParsedQuery(rawText: searchField.stringValue)
             switch parsed.mode {
             case .command:
                 sectionLabel.stringValue = "Commands"
@@ -684,7 +677,6 @@ final class CommandPaletteResultRow: NSView {
         shortcutLabel.textColor = colors.textMuted
         shortcutLabel.isHidden = result.shortcutLabel == nil
 
-        // Active checkmark
         checkmarkView.contentTintColor = colors.accent
         checkmarkView.isHidden = !result.isActive
 

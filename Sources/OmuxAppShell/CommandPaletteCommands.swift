@@ -1,4 +1,5 @@
 import Foundation
+import OmuxControlPlane
 import OmuxCore
 
 enum CommandPaletteInvocationResult: Equatable {
@@ -39,7 +40,7 @@ struct CommandPaletteCommandCatalog {
             requiresArguments: descriptor.requiresArguments,
             hasSafeDefaultTarget: descriptor.hasSafeDefaultTarget,
             isEnabled: enabled,
-            disabledReason: enabled ? nil : descriptor.disabledReason,
+            disabledReason: enabled ? nil : disabledReason(for: descriptor.command, descriptor: descriptor),
             invocationTarget: target
         )
     }
@@ -56,7 +57,7 @@ struct CommandPaletteCommandCatalog {
             case "theme.switch":
                 return .themeSwitch
             default:
-                guard supportedBuiltinTargets.contains(command.target) else {
+                guard OpenMUXCLICommandCatalog.command(id: command.target) != nil else {
                     return nil
                 }
                 return .cliCommand(command.target)
@@ -84,13 +85,31 @@ struct CommandPaletteCommandCatalog {
             return isEnabled(action: action, controller: controller)
         case .builtin:
             switch command.target {
-            case "workspace.create", "pane.split-right", "pane.split-down":
-                return controller.activeWorkspace() != nil
             case "theme.switch":
                 return true
             default:
-                return false
+                guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else { return false }
+                return isEnabled(cliCommand: spec, controller: controller)
             }
+        }
+    }
+
+    private static func isEnabled(cliCommand _: OpenMUXCLICommandSpec, controller: WorkspaceController) -> Bool {
+        return controller.resolveTerminalTarget(.focused) != nil
+    }
+
+    private static func disabledReason(
+        for command: CommandPaletteCommandDescriptor.Command,
+        descriptor: CommandPaletteCommandDescriptor
+    ) -> String? {
+        switch command.kind {
+        case .action:
+            return descriptor.disabledReason
+        case .builtin:
+            if command.target == "theme.switch" {
+                return descriptor.disabledReason
+            }
+            return "No focused terminal"
         }
     }
 
@@ -128,12 +147,6 @@ struct CommandPaletteCommandCatalog {
             return controller.canFocusPaneTab()
         }
     }
-
-    private static let supportedBuiltinTargets: Set<String> = [
-        "workspace.create",
-        "pane.split-right",
-        "pane.split-down",
-    ]
 }
 
 extension WorkspaceController {
@@ -220,15 +233,23 @@ extension WorkspaceController {
 
     @discardableResult
     private func invokePaletteCLICommand(_ commandID: String) -> CommandPaletteInvocationResult {
-        switch commandID {
-        case "workspace.create":
-            return invokePaletteAction(.workspaceCreate)
-        case "pane.split-right":
-            return invokePaletteAction(.paneSplitRight)
-        case "pane.split-down":
-            return invokePaletteAction(.paneSplitDown)
-        default:
+        guard let spec = OpenMUXCLICommandCatalog.command(id: commandID) else {
             return .failed("Unsupported palette CLI command")
+        }
+
+        do {
+            let result: ControlPlaneActionResult?
+            if spec.submitsFromPalette {
+                result = try runCommand(target: .focused, command: spec.paletteTerminalCommand)
+            } else {
+                result = try sendText(target: .focused, text: spec.paletteTerminalCommand)
+            }
+            guard result != nil else {
+                return .failed("No focused terminal")
+            }
+            return .invoked
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 }

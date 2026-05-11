@@ -127,7 +127,7 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
             title: "Command Palette",
-            key: "p",
+            key: "k",
             modifiers: [.command]
         ) ?? false)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
@@ -335,8 +335,9 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     func testCommandPaletteCommandMetadataAndInvocation() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
         let controller = WorkspaceController(
-            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            bridge: GhosttyTerminalBridge(runtime: runtime),
             hookRunner: ExternalHookRunner()
         )
         _ = try controller.openWorkspace(at: "/tmp")
@@ -361,11 +362,42 @@ final class OmuxAppShellTests: XCTestCase {
         )
         XCTAssertEqual(controller.invokeCommandPaletteResult(disabled), .disabled("No context"))
 
-        let cliSplit = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "omux split down", commands: commands).first {
-            $0.invocationTarget == .cliCommand("pane.split-down")
+        let cliCommands = commands.filter { $0.category == .cli }
+        XCTAssertEqual(cliCommands.count, OpenMUXCLICommandCatalog.commands.count)
+        XCTAssertTrue(cliCommands.allSatisfy(\.isEnabled))
+
+        let cliVersion = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "omux version", commands: commands).first {
+            $0.invocationTarget == .cliCommand("omux.version")
         })
-        XCTAssertEqual(controller.invokeCommandPaletteResult(cliSplit), .invoked)
-        XCTAssertEqual(controller.activeWorkspace()?.focusedTab?.panes.count, 3)
+        XCTAssertEqual(controller.invokeCommandPaletteResult(cliVersion), .invoked)
+        XCTAssertEqual(runtime.executedCommands, ["omux version"])
+
+        let cliWithArguments = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "inactive opacity", commands: commands).first {
+            $0.invocationTarget == .cliCommand("omux.config.inactive-opacity")
+        })
+        XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
+        XCTAssertEqual(runtime.executedCommands, ["omux version"])
+        XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+    }
+
+    func testCommandPaletteShortcutLabelsUseConfiguredBindings() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let keyBindings = OpenMUXKeyBindingRegistry.effective(overrides: [
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+d"), action: nil),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+d"), action: .paneSplitRight),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+w"), action: nil),
+        ])
+
+        let commands = CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: keyBindings)
+        let splitRight = try XCTUnwrap(commands.first { $0.invocationTarget == .action(.paneSplitRight) })
+        let removePane = try XCTUnwrap(commands.first { $0.invocationTarget == .action(.paneRemove) })
+
+        XCTAssertEqual(splitRight.shortcutLabel, "⌘⇧D")
+        XCTAssertNil(removePane.shortcutLabel)
     }
 
     func testCommandPaletteCommandsLoadFromBundledDescriptors() throws {
@@ -377,9 +409,18 @@ final class OmuxAppShellTests: XCTestCase {
                 && descriptor.command.target == "pane.split-right"
         })
         XCTAssertTrue(descriptors.contains { descriptor in
-            descriptor.id == "cli:omux-pane-split-down"
+            descriptor.id == "cli:omux.split"
                 && descriptor.command.kind == .builtin
-                && descriptor.command.target == "pane.split-down"
+                && descriptor.command.target == "omux.split"
+        })
+        let cliTargets = Set(descriptors.compactMap { descriptor in
+            descriptor.category == .cli && descriptor.command.kind == .builtin ? descriptor.command.target : nil
+        })
+        XCTAssertEqual(cliTargets, Set(OpenMUXCLICommandCatalog.commands.map(\.id)))
+        XCTAssertTrue(descriptors.contains { descriptor in
+            descriptor.id == "builtin:switch-theme"
+                && descriptor.command.kind == .builtin
+                && descriptor.command.target == "theme.switch"
         })
         XCTAssertEqual(Set(descriptors.map(\.id)).count, descriptors.count)
     }
@@ -799,6 +840,49 @@ final class OmuxAppShellTests: XCTestCase {
         guard case .paneStack = nestedChildren[1] else {
             return XCTFail("expected nested children to be pane stacks")
         }
+    }
+
+    func testPaneTabSplitAgainstFullWidthBottomPaneSplitsTargetRegion() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let topPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let splitDown = try XCTUnwrap(controller.splitFocusedPane(axis: .rows))
+        let bottomPaneID = try XCTUnwrap(splitDown.focusedPane?.id)
+        _ = controller.focus(paneID: topPaneID)
+        let topStackID = try XCTUnwrap(controller.activeWorkspace()?.focusedPaneStack?.id)
+        let withPaneTab = try XCTUnwrap(controller.createPaneTab(in: topStackID))
+        let movedPaneID = try XCTUnwrap(withPaneTab.focusedPane?.id)
+        let bottomStackID = try XCTUnwrap(
+            withPaneTab.focusedTab?.rootLayout.paneStack(containingPaneID: bottomPaneID)?.id
+        )
+
+        let moved = try XCTUnwrap(controller.movePaneTabToSplit(
+            paneID: movedPaneID,
+            sourceStackID: topStackID,
+            targetStackID: bottomStackID,
+            direction: .right
+        ))
+
+        guard case .split(axis: .rows, proportions: _, children: let rootChildren)? = moved.focusedTab?.rootLayout else {
+            return XCTFail("expected root layout to remain a row split")
+        }
+
+        XCTAssertEqual(rootChildren.count, 2)
+        guard case .paneStack(let topStack) = rootChildren[0] else {
+            return XCTFail("expected top region to remain a pane stack")
+        }
+        guard case .split(axis: .columns, proportions: _, children: let bottomChildren) = rootChildren[1] else {
+            return XCTFail("expected bottom region to split into columns")
+        }
+
+        XCTAssertEqual(topStack.panes.map(\.id), [topPaneID])
+        XCTAssertEqual(bottomChildren.count, 2)
+        XCTAssertTrue(bottomChildren[0].containsPane(id: bottomPaneID))
+        XCTAssertTrue(bottomChildren[1].containsPane(id: movedPaneID))
     }
 
     func testWorkspaceControllerCyclesPanesInVisibleLayoutOrder() throws {
@@ -3661,6 +3745,96 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
     }
 
+    func testPaneTabDragRequiresInitializedTerminalPane() throws {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        var secondPane = Pane(
+            title: "two",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let uninitializedStack = PaneStack(panes: [firstPane, secondPane], focusedPaneID: firstPane.id)
+        let uninitializedTab = Tab(title: "Main", rootLayout: .paneStack(uninitializedStack), focusedPaneID: firstPane.id)
+
+        secondPane.terminalState.reportedTitle = "zsh"
+        let initializedStack = PaneStack(panes: [firstPane, secondPane], focusedPaneID: firstPane.id)
+        let initializedTab = Tab(title: "Main", rootLayout: .paneStack(initializedStack), focusedPaneID: firstPane.id)
+        let stackID = initializedStack.id
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: uninitializedStack.id,
+                in: uninitializedTab,
+                attachedSessionExists: false
+            )
+        )
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: uninitializedStack.id,
+                in: uninitializedTab,
+                attachedSessionExists: true
+            )
+        )
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: stackID,
+                in: initializedTab,
+                attachedSessionExists: false
+            )
+        )
+        XCTAssertTrue(
+            PaneTabDragReadiness.canStart(
+                paneID: secondPane.id,
+                sourceStackID: stackID,
+                in: initializedTab,
+                attachedSessionExists: true
+            )
+        )
+    }
+
+    func testPaneTabDragRequiresReadyExtensionPane() throws {
+        let firstPane = Pane(
+            title: "one",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
+        )
+        let disabledPane = Pane(
+            title: "extension",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "test", status: .disabled)
+        )
+        let readyPane = Pane(
+            title: "extension",
+            extensionPane: ExtensionPaneDescriptor(pluginID: "test", status: .ready)
+        )
+        let disabledStack = PaneStack(panes: [firstPane, disabledPane], focusedPaneID: firstPane.id)
+        let readyStack = PaneStack(panes: [firstPane, readyPane], focusedPaneID: firstPane.id)
+        let disabledTab = Tab(title: "Main", rootLayout: .paneStack(disabledStack), focusedPaneID: firstPane.id)
+        let readyTab = Tab(title: "Main", rootLayout: .paneStack(readyStack), focusedPaneID: firstPane.id)
+        let disabledStackID = disabledStack.id
+        let readyStackID = readyStack.id
+
+        XCTAssertFalse(
+            PaneTabDragReadiness.canStart(
+                paneID: disabledPane.id,
+                sourceStackID: disabledStackID,
+                in: disabledTab,
+                attachedSessionExists: true
+            )
+        )
+        XCTAssertTrue(
+            PaneTabDragReadiness.canStart(
+                paneID: readyPane.id,
+                sourceStackID: readyStackID,
+                in: readyTab,
+                attachedSessionExists: false
+            )
+        )
+    }
+
     func testWorkspaceIconResolverDetectsProjectMarkersAndAITitles() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceIconResolverTests-\(UUID().uuidString)", isDirectory: true)
@@ -4071,6 +4245,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    private(set) var executedCommands: [String] = []
     private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
@@ -4119,6 +4294,10 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
         inputBySurface[runtimeSurfaceID, default: ""].append(text)
     }
 
+    func currentInputText() -> String {
+        inputBySurface.values.joined()
+    }
+
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         guard sessions[runtimeSurfaceID] != nil else {
             throw TerminalBridgeError.runtimeAttachFailed(runtimeSurfaceID)
@@ -4130,6 +4309,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
 
         let command = inputBySurface[runtimeSurfaceID, default: ""]
         inputBySurface[runtimeSurfaceID] = ""
+        executedCommands.append(command.trimmingCharacters(in: .whitespacesAndNewlines))
         execute(command: command, on: runtimeSurfaceID)
     }
 

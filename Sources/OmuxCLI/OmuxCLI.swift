@@ -316,52 +316,7 @@ public struct OmuxCLICommand {
         return 0
     }
 
-    public static let usage = """
-    OpenMUX CLI
-
-    Commands:
-      omux config doctor
-      omux config reload
-      omux config init
-      omux config inactive-opacity <0.0-1.0>
-      omux version
-      omux update
-      omux theme
-      omux theme <name>
-      omux theme list
-      omux plugins
-      omux plugin list
-      omux plugin path
-      omux list [--full]
-      omux sessions
-      omux panes
-      omux events
-      omux history [--json] [--max-lines <count>] [--max-bytes <count>] [<pane-id>|all]
-      omux history clear [--json] [--all|--session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused]
-      omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]
-      omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]
-      omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]
-      omux extension-pane close --pane <id>
-      omux open [path]
-      omux workspace-close [workspace-id]
-      omux tab
-      omux split [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused] [left|right|up|down]
-      omux pane-remove [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused]
-      omux pane-tab
-      omux pane-tab-next
-      omux pane-tab-prev
-      omux pane-tab-focus <pane-id>
-      omux pane-tab-close [pane-id]
-      omux pane-next
-      omux pane-prev
-      omux focus <session-id>|--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused
-      omux run <session-id> <command>
-      omux run --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <command>
-      omux send-text --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <text>
-      omux notify <title> [body]
-      omux restore <workspace-id>
-      omux install-cli [destination]
-    """
+    public static let usage = OpenMUXCLICommandCatalog.usage
 
     private func resolveCLIPath(_ path: String) -> String {
         if let resolved = OmuxWorkspacePathResolver.resolve(path) {
