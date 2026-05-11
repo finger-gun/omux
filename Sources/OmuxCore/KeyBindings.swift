@@ -185,7 +185,7 @@ public struct OpenMUXKeyBindingOverride: Equatable, Sendable {
 
 public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
     public static let defaultBindingPairs: [(OpenMUXKeyChord, OpenMUXKeyBindingAction)] = [
-        (try! OpenMUXKeyChord(parsing: "cmd+p"), .commandPaletteWorkspace),
+        (try! OpenMUXKeyChord(parsing: "cmd+k"), .commandPaletteWorkspace),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+p"), .commandPaletteCommand),
         (try! OpenMUXKeyChord(parsing: "cmd+n"), .workspaceCreate),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+n"), .workspaceClose),

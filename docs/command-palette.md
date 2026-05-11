@@ -6,7 +6,7 @@ The command palette is a fuzzy-search overlay for quickly invoking workspace act
 
 | Shortcut | Mode | Pre-fill |
 | --- | --- | --- |
-| `Cmd+P` | Workspace switcher | empty |
+| `Cmd+K` | Workspace switcher | empty |
 | `Cmd+Shift+P` | Command search | `>` |
 
 You can also open it from the **View** menu.
@@ -40,7 +40,7 @@ An empty query shows all results in their default order.
 
 ## Adding a new command
 
-Commands are data-driven. In most cases you only need to add a JSON file — no Swift changes required.
+Workspace actions are data-driven. In most cases you only need to add a JSON file — no Swift changes required. CLI commands are generated from the shared `OpenMUXCLICommandCatalog` so the palette stays aligned with `omux help`.
 
 ### Step 1 — create a descriptor file
 
@@ -54,7 +54,6 @@ The filename is used for deterministic sort order (alphabetical). Name it descri
 
 ```
 action-<verb>-<noun>.json   # for key-binding actions
-cli-<verb>-<noun>.json      # for CLI / builtin operations
 ```
 
 ### Step 2 — fill in the descriptor
@@ -98,23 +97,19 @@ cli-<verb>-<noun>.json      # for CLI / builtin operations
 **`"action"`** — maps to an `OpenMUXKeyBindingAction` by its raw string value. The full list of available targets is defined in `Sources/OmuxCore/KeyBindings.swift`. Examples:
 
 ```
-workspace.create         workspace.delete
+workspace.create         workspace.close
 workspace.move-up        workspace.move-down
 pane.split-right         pane.split-down
 pane.remove              pane.next        pane.previous
 pane.resize-up           pane.resize-down pane.resize-left pane.resize-right
-pane.equalize-splits     pane.toggle-column
-pane-tab.new             pane-tab.close
+pane.resize-equalize     sidebar.toggle
+pane-tab.create          pane-tab.close
 pane-tab.next            pane-tab.previous
 ```
 
-**`"builtin"`** — a named built-in operation dispatched through the CLI layer. Current supported targets:
+**`"builtin"`** — a generated `omux` CLI command from `OpenMUXCLICommandCatalog`. Add CLI commands there instead of creating a JSON descriptor or local allow-list.
 
-```
-workspace.create
-pane.split-right
-pane.split-down
-```
+Commands that map safely to the current workspace can be invoked from the palette. Commands that require arguments, stream output, or print terminal output are still searchable, but disabled with a reason.
 
 ### `category` and icons
 
@@ -152,36 +147,25 @@ If the action you want does not exist in `OpenMUXKeyBindingAction` yet, you need
 
 ---
 
-## Adding a new builtin target (Swift)
+## Adding a new CLI command (Swift)
 
-Builtin targets go through the CLI dispatch path. Use this when the operation is backed by `omux` CLI semantics rather than a pure in-process action.
+CLI commands go through the shared CLI catalog. Use this when the operation is backed by `omux` CLI semantics rather than a pure in-process action.
 
-1. **Add the target string** to `supportedBuiltinTargets` in `CommandPaletteCommands.swift`:
-   ```swift
-   static let supportedBuiltinTargets: Set<String> = [
-       "workspace.create",
-       "pane.split-right",
-       "pane.split-down",
-       "my.builtin-target",   // add here
-   ]
-   ```
+1. **Add a command spec** to `OpenMUXCLICommandCatalog.commands` in `Sources/OmuxCore/CLICommandCatalog.swift`.
 
-2. **Add a dispatch branch** in `invokePaletteCLICommand(_:)` in the same file.
+2. **Set `requiresArguments` accurately**. Commands without required arguments are submitted to the focused terminal. Commands with required arguments insert an editable command template into the focused terminal instead of pressing Return.
 
-3. **Add an `isEnabled` branch** in `isEnabled(command:controller:)`.
-
-4. **Create the JSON descriptor** with `"kind": "builtin"` and `"target": "my.builtin-target"`.
+3. **Update the CLI switch** in `OmuxCLICommand.run(arguments:)` if this is a new executable command.
 
 ---
 
 ## How the palette decides what is visible
 
-A command appears in the results only when:
+A non-CLI action appears in the results only when:
 
 - `isPaletteVisible` is `true`: either `requiresArguments == false`, or `hasSafeDefaultTarget == true`
-- `isEnabled` is `true`: all runtime preconditions pass (active workspace, active pane, etc.)
 
-Disabled commands are shown greyed-out with the `disabledReason` text. If the user tries to invoke a disabled command, the reason is shown in the search field and the palette stays open.
+CLI commands are always searchable so the palette covers the full `omux` surface. They are enabled when a focused terminal is available. Commands without required arguments are sent and submitted there; commands with required arguments are inserted as editable text so the user can fill placeholders before running them.
 
 ---
 
@@ -190,8 +174,9 @@ Disabled commands are shown greyed-out with the `disabledReason` text. If the us
 | File | Role |
 | --- | --- |
 | `Sources/OmuxCore/CommandPalette.swift` | Core data types, query parsing, search and ranking |
+| `Sources/OmuxCore/CLICommandCatalog.swift` | Shared `omux` command metadata used by CLI help and the palette |
 | `Sources/OmuxAppShell/CommandPaletteCommandDescriptor.swift` | JSON descriptor model and bundle loading |
 | `Sources/OmuxAppShell/CommandPaletteCommands.swift` | Catalog builder, `isEnabled` logic, invocation dispatcher |
 | `Sources/OmuxAppShell/CommandPaletteView.swift` | AppKit overlay UI, result rows, keyboard navigation |
 | `Sources/OmuxAppShell/WorkspaceWindowController.swift` | Palette presentation wired into the window |
-| `Sources/OmuxAppShell/Resources/CommandPalette/Commands/` | JSON descriptor files (one per command) |
+| `Sources/OmuxAppShell/Resources/CommandPalette/Commands/` | JSON descriptor files for workspace actions |

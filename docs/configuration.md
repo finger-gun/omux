@@ -42,7 +42,7 @@ renderer = "builtin"
 theme = "auto"
 
 [keys]
-"cmd+p" = "command-palette.workspace"
+"cmd+k" = "command-palette.workspace"
 "cmd+shift+p" = "command-palette.command"
 "cmd+n" = "workspace.create"
 "cmd+shift+n" = "workspace.close"
@@ -335,9 +335,9 @@ colors_enabled = true
 
 `[keys]` maps a single key chord to an OpenMUX shell action. Use it to resolve conflicts with terminal applications such as Helix, Vim, tmux, or remote SSH sessions: bind the action elsewhere, or map the chord to `"none"` so OpenMUX leaves it to the terminal.
 
-The command palette is the keyboard-first shell entrypoint. `Cmd+P` opens workspace search with all open workspaces listed. `Cmd+Shift+P` opens the same palette with `>` prefilled for safe OpenMUX actions and supported safe-default `omux` commands. While the palette is open, query text stays in the palette and is not sent to the focused terminal.
+The command palette is the keyboard-first shell entrypoint. `Cmd+K` opens workspace search with all open workspaces listed. `Cmd+Shift+P` opens the same palette with `>` prefilled for OpenMUX actions and the full `omux` command catalog. While the palette is open, query text stays in the palette and is not sent to the focused terminal until a command is invoked.
 
-Command-mode entries are backed by bundled JSON descriptors with a typed `command.kind` and `command.target`. Those targets are resolved by OpenMUX code and are not bash strings, so palette commands remain inspectable and do not execute arbitrary shell text.
+Command-mode action entries are backed by bundled JSON descriptors with a typed `command.kind` and `command.target`; CLI entries are generated from the shared CLI command catalog. Invoking a CLI entry routes its `omux ...` command through the focused terminal, submitting commands without required arguments and inserting editable templates for commands that need arguments.
 
 Example:
 

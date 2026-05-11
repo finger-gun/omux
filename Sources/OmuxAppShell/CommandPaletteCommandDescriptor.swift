@@ -47,7 +47,7 @@ enum CommandPaletteCommandDescriptorCatalog {
         mainExecutableURL: URL? = Bundle.main.executableURL
     ) -> [CommandPaletteCommandDescriptor] {
         guard mainBundleURL.pathExtension == "app" else {
-            return loadDescriptors(from: .module)
+            return appShellDescriptors(from: .module)
         }
         let bundle = packagedResourceBundle(
             fileManager: fileManager,
@@ -55,7 +55,7 @@ enum CommandPaletteCommandDescriptorCatalog {
             mainResourceURL: mainResourceURL,
             mainExecutableURL: mainExecutableURL
         ) ?? .module
-        return loadDescriptors(from: bundle)
+        return appShellDescriptors(from: bundle)
     }
 
     static func loadDescriptors(from bundle: Bundle) -> [CommandPaletteCommandDescriptor] {
@@ -66,6 +66,10 @@ enum CommandPaletteCommandDescriptorCatalog {
             return []
         }
         return loadDescriptors(from: urls)
+    }
+
+    private static func appShellDescriptors(from bundle: Bundle) -> [CommandPaletteCommandDescriptor] {
+        loadDescriptors(from: bundle).filter { $0.category != .cli } + cliCommandDescriptors()
     }
 
     private static func nonEmpty(_ urls: [URL]?) -> [URL]? {
@@ -108,6 +112,23 @@ enum CommandPaletteCommandDescriptorCatalog {
                 fputs("warning: failed to load command palette descriptor \(url.lastPathComponent): \(error)\n", stderr)
                 return nil
             }
+        }
+    }
+
+    private static func cliCommandDescriptors() -> [CommandPaletteCommandDescriptor] {
+        OpenMUXCLICommandCatalog.commands.map { spec in
+            CommandPaletteCommandDescriptor(
+                id: "cli:\(spec.id)",
+                title: spec.title,
+                subtitle: spec.usage,
+                category: .cli,
+                matchText: spec.matchText,
+                aliases: spec.aliases,
+                requiresArguments: spec.requiresArguments,
+                hasSafeDefaultTarget: spec.hasSafeDefaultTarget,
+                disabledReason: spec.disabledReason,
+                command: CommandPaletteCommandDescriptor.Command(kind: .builtin, target: spec.id)
+            )
         }
     }
 

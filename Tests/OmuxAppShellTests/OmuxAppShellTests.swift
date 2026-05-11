@@ -127,7 +127,7 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
             title: "Command Palette",
-            key: "p",
+            key: "k",
             modifiers: [.command]
         ) ?? false)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
@@ -335,8 +335,9 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     func testCommandPaletteCommandMetadataAndInvocation() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
         let controller = WorkspaceController(
-            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            bridge: GhosttyTerminalBridge(runtime: runtime),
             hookRunner: ExternalHookRunner()
         )
         _ = try controller.openWorkspace(at: "/tmp")
@@ -361,11 +362,42 @@ final class OmuxAppShellTests: XCTestCase {
         )
         XCTAssertEqual(controller.invokeCommandPaletteResult(disabled), .disabled("No context"))
 
-        let cliSplit = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "omux split down", commands: commands).first {
-            $0.invocationTarget == .cliCommand("pane.split-down")
+        let cliCommands = commands.filter { $0.category == .cli }
+        XCTAssertEqual(cliCommands.count, OpenMUXCLICommandCatalog.commands.count)
+        XCTAssertTrue(cliCommands.allSatisfy(\.isEnabled))
+
+        let cliVersion = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "omux version", commands: commands).first {
+            $0.invocationTarget == .cliCommand("omux.version")
         })
-        XCTAssertEqual(controller.invokeCommandPaletteResult(cliSplit), .invoked)
-        XCTAssertEqual(controller.activeWorkspace()?.focusedTab?.panes.count, 3)
+        XCTAssertEqual(controller.invokeCommandPaletteResult(cliVersion), .invoked)
+        XCTAssertEqual(runtime.executedCommands, ["omux version"])
+
+        let cliWithArguments = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "inactive opacity", commands: commands).first {
+            $0.invocationTarget == .cliCommand("omux.config.inactive-opacity")
+        })
+        XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
+        XCTAssertEqual(runtime.executedCommands, ["omux version"])
+        XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+    }
+
+    func testCommandPaletteShortcutLabelsUseConfiguredBindings() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let keyBindings = OpenMUXKeyBindingRegistry.effective(overrides: [
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+d"), action: nil),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+d"), action: .paneSplitRight),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+w"), action: nil),
+        ])
+
+        let commands = CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: keyBindings)
+        let splitRight = try XCTUnwrap(commands.first { $0.invocationTarget == .action(.paneSplitRight) })
+        let removePane = try XCTUnwrap(commands.first { $0.invocationTarget == .action(.paneRemove) })
+
+        XCTAssertEqual(splitRight.shortcutLabel, "⌘⇧D")
+        XCTAssertNil(removePane.shortcutLabel)
     }
 
     func testCommandPaletteCommandsLoadFromBundledDescriptors() throws {
@@ -377,10 +409,14 @@ final class OmuxAppShellTests: XCTestCase {
                 && descriptor.command.target == "pane.split-right"
         })
         XCTAssertTrue(descriptors.contains { descriptor in
-            descriptor.id == "cli:omux-pane-split-down"
+            descriptor.id == "cli:omux.split"
                 && descriptor.command.kind == .builtin
-                && descriptor.command.target == "pane.split-down"
+                && descriptor.command.target == "omux.split"
         })
+        let cliTargets = Set(descriptors.compactMap { descriptor in
+            descriptor.command.kind == .builtin ? descriptor.command.target : nil
+        })
+        XCTAssertEqual(cliTargets, Set(OpenMUXCLICommandCatalog.commands.map(\.id)))
         XCTAssertEqual(Set(descriptors.map(\.id)).count, descriptors.count)
     }
 
@@ -4204,6 +4240,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
+    private(set) var executedCommands: [String] = []
     private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
@@ -4252,6 +4289,10 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
         inputBySurface[runtimeSurfaceID, default: ""].append(text)
     }
 
+    func currentInputText() -> String {
+        inputBySurface.values.joined()
+    }
+
     func handle(_ event: NormalizedKeyEvent, on runtimeSurfaceID: String) throws {
         guard sessions[runtimeSurfaceID] != nil else {
             throw TerminalBridgeError.runtimeAttachFailed(runtimeSurfaceID)
@@ -4263,6 +4304,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
 
         let command = inputBySurface[runtimeSurfaceID, default: ""]
         inputBySurface[runtimeSurfaceID] = ""
+        executedCommands.append(command.trimmingCharacters(in: .whitespacesAndNewlines))
         execute(command: command, on: runtimeSurfaceID)
     }
 

@@ -360,11 +360,11 @@ final class OmuxCoreTests: XCTestCase {
 
     func testCommandPaletteDefaultShortcutsRouteToShortcutAndCanBeUnbound() throws {
         let normalizer = DefaultKeyEventNormalizer(keyBindingRegistry: .defaults)
-        let commandP = normalizer.normalize(
+        let commandK = normalizer.normalize(
             RawKeyInput(
-                keyCode: 35,
-                characters: "p",
-                charactersIgnoringModifiers: "p",
+                keyCode: 40,
+                characters: "k",
+                charactersIgnoringModifiers: "k",
                 modifiers: [.leftCommand]
             )
         )
@@ -376,27 +376,27 @@ final class OmuxCoreTests: XCTestCase {
                 modifiers: [.leftCommand, .leftShift]
             )
         )
-        let optionCommandP = normalizer.normalize(
+        let optionCommandK = normalizer.normalize(
             RawKeyInput(
-                keyCode: 35,
-                characters: "π",
-                charactersIgnoringModifiers: "p",
+                keyCode: 40,
+                characters: "˚",
+                charactersIgnoringModifiers: "k",
                 modifiers: [.leftCommand, .leftOption]
             )
         )
 
-        XCTAssertEqual(commandP.route, .shortcut)
+        XCTAssertEqual(commandK.route, .shortcut)
         XCTAssertEqual(commandShiftP.route, .shortcut)
-        XCTAssertEqual(optionCommandP.route, .terminal)
+        XCTAssertEqual(optionCommandK.route, .terminal)
 
         let unbound = DefaultKeyEventNormalizer(keyBindingRegistry: .effective(overrides: [
-            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+p"), action: nil),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+k"), action: nil),
             OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+p"), action: nil),
         ]))
         XCTAssertEqual(unbound.normalize(RawKeyInput(
-            keyCode: 35,
-            characters: "p",
-            charactersIgnoringModifiers: "p",
+            keyCode: 40,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
             modifiers: [.leftCommand]
         )).route, .terminal)
         XCTAssertEqual(unbound.normalize(RawKeyInput(
@@ -450,9 +450,10 @@ final class OmuxCoreTests: XCTestCase {
             ),
         ])
 
-        XCTAssertEqual(commandResults.map(\.id), ["disabled"])
+        XCTAssertEqual(commandResults.map(\.id), ["disabled", "hidden"])
         XCTAssertFalse(commandResults[0].isEnabled)
         XCTAssertEqual(commandResults[0].disabledReason, "No pane")
+        XCTAssertEqual(commandResults[1].invocationTarget, .cliCommand("hidden"))
     }
 
     func testPaletteRoutingDoesNotClaimCompositionOrRightOptionText() {
