@@ -10,6 +10,7 @@ If you are new to OpenMUX, start with [Getting started](./getting-started.md). I
 | --- | --- | --- |
 | Use OpenMUX as your daily terminal workspace | [Getting started](./getting-started.md) | [Configuration and themes](./configuration.md) |
 | Customize themes, fonts, scrollback, or Option-key behavior | [Configuration and themes](./configuration.md) | [Getting started](./getting-started.md#customize-the-terminal) |
+| Search and run commands from the keyboard | [Command palette](./command-palette.md) | [Configuration and themes](./configuration.md) |
 | Automate your workspace with scripts | [Hooks](./hooks.md) | [Configuration and themes](./configuration.md#cli) |
 | Use bundled plugins | [Plugin index](./plugins/index.md) | [Configuration and themes](./configuration.md#plugins-settings) |
 | Create a plugin or extension pane | [Plugin ecosystem](./plugins.md) | [Hooks](./hooks.md) |
@@ -23,6 +24,7 @@ These docs describe OpenMUX from the outside: what you can run, configure, and a
 
 - [Getting started](./getting-started.md) - first launch, CLI setup, workspaces, panes, themes, plugins, and simple automation.
 - [Configuration and themes](./configuration.md) - `~/.omux/config.toml`, built-in themes, custom theme tokens, and config commands.
+- [Command palette](./command-palette.md) - opening modes, keyboard navigation, and how to add new commands.
 - [Plugin index](./plugins/index.md) - bundled plugins and plugin management.
 - [Plugin ecosystem](./plugins.md) - external plugin commands, extension-pane CLI contracts, and plugin events.
 - [Hooks](./hooks.md) - executable user hooks in `~/.omux/hooks/`, invocation JSON, current hook names, and examples.

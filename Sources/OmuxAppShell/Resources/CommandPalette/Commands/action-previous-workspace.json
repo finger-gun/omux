@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.previous",
+  "title": "Previous Workspace",
+  "subtitle": "Return to the previously active workspace",
+  "category": "action",
+  "matchText": "Previous Workspace Return to the previously active workspace last workspace",
+  "aliases": ["last workspace"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No previous workspace",
+  "command": { "kind": "action", "target": "workspace.previous" }
+}

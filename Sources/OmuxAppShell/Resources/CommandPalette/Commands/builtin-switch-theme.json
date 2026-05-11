@@ -1,0 +1,11 @@
+{
+  "id": "builtin:switch-theme",
+  "title": "Switch Theme",
+  "subtitle": "Choose a color theme for the workspace",
+  "category": "action",
+  "matchText": "switch theme color appearance",
+  "aliases": ["change theme", "set theme"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "command": { "kind": "builtin", "target": "theme.switch" }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "action:sidebar.toggle",
+  "title": "Toggle Workspace Column",
+  "subtitle": "Show or hide the workspace column",
+  "category": "action",
+  "matchText": "Toggle Workspace Column Show or hide the workspace column sidebar workspace column",
+  "aliases": ["sidebar", "workspace column"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No active workspace",
+  "command": { "kind": "action", "target": "sidebar.toggle" }
+}

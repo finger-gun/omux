@@ -1,0 +1,12 @@
+{
+  "id": "action:pane-tab.previous",
+  "title": "Previous Pane Tab",
+  "subtitle": "Focus the previous pane tab",
+  "category": "action",
+  "matchText": "Previous Pane Tab Focus the previous pane tab previous tab",
+  "aliases": ["previous tab"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No alternate pane tab",
+  "command": { "kind": "action", "target": "pane-tab.previous" }
+}

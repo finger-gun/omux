@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.create",
+  "title": "New Workspace",
+  "subtitle": "Create a workspace",
+  "category": "action",
+  "matchText": "New Workspace Create a workspace create workspace new",
+  "aliases": ["create workspace", "new"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No active workspace",
+  "command": { "kind": "action", "target": "workspace.create" }
+}

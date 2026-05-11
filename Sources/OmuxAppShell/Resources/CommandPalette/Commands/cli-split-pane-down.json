@@ -1,0 +1,12 @@
+{
+  "id": "cli:omux-pane-split-down",
+  "title": "omux: Split Pane Down",
+  "subtitle": "Split the focused pane through the typed control API",
+  "category": "cli",
+  "matchText": "omux pane split down",
+  "aliases": ["split down"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused pane",
+  "command": { "kind": "builtin", "target": "pane.split-down" }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.split-down",
+  "title": "Split Pane Down",
+  "subtitle": "Create a lower split from the focused pane",
+  "category": "action",
+  "matchText": "Split Pane Down Create a lower split from the focused pane split down horizontal split",
+  "aliases": ["split down", "horizontal split"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused pane",
+  "command": { "kind": "action", "target": "pane.split-down" }
+}

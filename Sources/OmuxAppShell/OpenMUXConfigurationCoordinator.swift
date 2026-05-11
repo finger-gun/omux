@@ -186,6 +186,104 @@ final class OpenMUXConfigurationCoordinator {
         return currentPanes
     }
 
+    /// Persists a new theme to the config file and fires `onThemeChange`.
+    /// Returns `false` if the identifier is unknown or the write fails.
+    @discardableResult
+    func setTheme(identifier: String) -> Bool {
+        // Validate the theme exists
+        guard WorkspaceShellTheme.named(identifier) != nil else { return false }
+
+        let configURL = OmuxConfigPaths.configFileURL
+        let raw: String
+        if FileManager.default.fileExists(atPath: configURL.path),
+           let existing = try? String(contentsOf: configURL, encoding: .utf8) {
+            raw = existing
+        } else {
+            // No config file — create a minimal one
+            raw = OmuxConfigTemplate.starter(themeName: identifier)
+            do {
+                try FileManager.default.createDirectory(
+                    at: configURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try raw.write(to: configURL, atomically: true, encoding: .utf8)
+            } catch {
+                return false
+            }
+            reload()
+            return true
+        }
+
+        // Replace `name = "..."` inside [theme] section
+        let updated = Self.setThemeName(in: raw, to: identifier)
+        do {
+            try FileManager.default.createDirectory(
+                at: configURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try updated.write(to: configURL, atomically: true, encoding: .utf8)
+        } catch {
+            return false
+        }
+        reload()
+        return true
+    }
+
+    /// Replaces `name = "..."` under the `[theme]` table in raw TOML text.
+    /// If no `[theme]` section or `name` key exists, appends/inserts them.
+    private static func setThemeName(in toml: String, to identifier: String) -> String {
+        let escaped = identifier
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let newNameLine = "name = \"\(escaped)\""
+
+        var lines = toml.components(separatedBy: "\n")
+        var inThemeSection = false
+        var themeNameLineIndex: Int? = nil
+        var themeSectionStartIndex: Int? = nil
+
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "[theme]" {
+                inThemeSection = true
+                themeSectionStartIndex = i
+                continue
+            }
+            if inThemeSection {
+                if trimmed.hasPrefix("[") {
+                    break
+                }
+                if trimmed.hasPrefix("name") {
+                    let afterName = trimmed.dropFirst(4).trimmingCharacters(in: .whitespaces)
+                    if afterName.hasPrefix("=") {
+                        themeNameLineIndex = i
+                    }
+                }
+            }
+        }
+
+        if let idx = themeNameLineIndex {
+            // Replace existing name line
+            lines[idx] = newNameLine
+            return lines.joined(separator: "\n")
+        }
+
+        if let sectionStart = themeSectionStartIndex {
+            // Insert name after [theme] header
+            let insertAt = sectionStart + 1
+            lines.insert(newNameLine, at: insertAt)
+            return lines.joined(separator: "\n")
+        }
+
+        // No [theme] section — append it
+        if lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == false {
+            lines.append("")
+        }
+        lines.append("[theme]")
+        lines.append(newNameLine)
+        return lines.joined(separator: "\n")
+    }
+
     @discardableResult
     func reload() -> OpenMUXConfigurationReloadResult {
         reloadLock.lock()

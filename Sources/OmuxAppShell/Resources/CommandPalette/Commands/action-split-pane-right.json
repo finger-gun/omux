@@ -1,0 +1,12 @@
+{
+  "id": "action:pane.split-right",
+  "title": "Split Pane Right",
+  "subtitle": "Create a right split from the focused pane",
+  "category": "action",
+  "matchText": "Split Pane Right Create a right split from the focused pane split right vertical split",
+  "aliases": ["split right", "vertical split"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused pane",
+  "command": { "kind": "action", "target": "pane.split-right" }
+}

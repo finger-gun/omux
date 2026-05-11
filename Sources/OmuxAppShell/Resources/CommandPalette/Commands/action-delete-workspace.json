@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.close",
+  "title": "Delete Workspace",
+  "subtitle": "Close the active workspace",
+  "category": "action",
+  "matchText": "Delete Workspace Close the active workspace close workspace delete",
+  "aliases": ["close workspace", "delete"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "Only one workspace is open",
+  "command": { "kind": "action", "target": "workspace.close" }
+}

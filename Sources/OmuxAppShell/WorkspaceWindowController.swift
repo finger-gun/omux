@@ -122,6 +122,15 @@ final class WorkspaceWindowController: NSWindowController {
     func presentRenameWorkspacePrompt(workspaceID: WorkspaceID? = nil) {
         rootViewController.presentRenameWorkspacePrompt(workspaceID: workspaceID)
     }
+
+    func presentCommandPalette(initialQuery: String, keyBindings: OpenMUXKeyBindingRegistry) {
+        rootViewController.presentCommandPalette(initialQuery: initialQuery, keyBindings: keyBindings)
+    }
+
+    var themeCommitHandler: ((String) -> Void)? {
+        get { rootViewController.themeCommitHandler }
+        set { rootViewController.themeCommitHandler = newValue }
+    }
 }
 
 @MainActor
@@ -143,6 +152,9 @@ final class WorkspaceShellViewController: NSViewController {
     private var focusRestoreGeneration: UInt = 0
     private var terminalIconRefreshTimer: Timer?
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
+    private var commandPaletteView: CommandPaletteView?
+
+    var themeCommitHandler: ((String) -> Void)?
 
     init(
         controller: WorkspaceController,
@@ -374,6 +386,7 @@ final class WorkspaceShellViewController: NSViewController {
         view.window?.backgroundColor = theme.shell.windowBackground
         sidebarView.apply(theme: theme)
         canvasView.apply(theme: theme)
+        commandPaletteView?.apply(theme: theme)
     }
 
     private func shouldRestoreFocus(
@@ -594,6 +607,85 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    func presentCommandPalette(initialQuery: String, keyBindings: OpenMUXKeyBindingRegistry) {
+        let previousResponder = view.window?.firstResponder
+        let paletteView: CommandPaletteView
+        if let existing = commandPaletteView {
+            paletteView = existing
+        } else {
+            paletteView = CommandPaletteView()
+            commandPaletteView = paletteView
+            view.addSubview(paletteView)
+            NSLayoutConstraint.activate([
+                paletteView.topAnchor.constraint(equalTo: view.topAnchor),
+                paletteView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                paletteView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                paletteView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+        }
+        paletteView.apply(theme: currentTheme)
+
+        paletteView.resultProvider = { [weak self] query in
+            guard let self else { return [] }
+            let parsed = CommandPaletteParsedQuery(rawText: query)
+            switch parsed.mode {
+            case .workspace:
+                return CommandPaletteSearch.workspaceResults(
+                    query: parsed.matchingText,
+                    workspaces: controller.commandPaletteWorkspaces()
+                )
+            case .command:
+                return CommandPaletteSearch.commandResults(
+                    query: parsed.matchingText,
+                    commands: CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: keyBindings)
+                )
+            }
+        }
+
+        var themeBeforeSubPalette: WorkspaceShellTheme? = nil
+
+        paletteView.invokeResult = { [weak self] result in
+            guard let self else { return .failed("Window is unavailable") }
+            if result.invocationTarget == .action(.sidebarToggle) {
+                toggleSidebarVisibility()
+                return .invoked
+            }
+            if result.invocationTarget == .themeSwitch {
+                themeBeforeSubPalette = currentTheme
+                paletteView.enterThemeSubPalette(originalTheme: currentTheme)
+                return .inert
+            }
+            return controller.invokeCommandPaletteResult(result)
+        }
+
+        paletteView.subPalettePreviewHandler = { [weak self] identifier in
+            guard let self else { return }
+            if let theme = WorkspaceShellTheme.named(identifier) {
+                updateTheme(theme)
+            }
+        }
+
+        paletteView.subPaletteCommitHandler = { [weak self] identifier in
+            themeBeforeSubPalette = nil
+            self?.themeCommitHandler?(identifier)
+        }
+
+        paletteView.subPaletteRevertHandler = { [weak self] in
+            guard let self else { return }
+            if let saved = themeBeforeSubPalette {
+                updateTheme(saved)
+                themeBeforeSubPalette = nil
+            }
+        }
+
+        paletteView.dismissHandler = { [weak self, weak paletteView] in
+            if self?.commandPaletteView === paletteView {
+                self?.commandPaletteView = nil
+            }
+        }
+        paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
+    }
+
     private func presentRenamePanePrompt(paneID: PaneID, currentTitle: String) {
         let alert = NSAlert()
         alert.messageText = "Rename Tab"
@@ -739,6 +831,9 @@ final class WorkspaceShellViewController: NSViewController {
                 onFocus: { [weak self] paneID in
                     _ = self?.controller.focus(paneID: paneID)
                 },
+                canStartPaneTabDrag: { [weak self] paneID in
+                    self?.canStartPaneTabDrag(paneID: paneID, sourceStackID: paneStack.id) ?? false
+                },
                 onPaneTabDragStarted: { [weak self] button, paneID, stackID, _ in
                     self?.beginPaneTabDrag(button: button, paneID: paneID, sourceStackID: stackID)
                 },
@@ -821,13 +916,21 @@ final class WorkspaceShellViewController: NSViewController {
     }
     private var paneTabDragState: PaneTabDragState?
 
+    private func canStartPaneTabDrag(paneID: PaneID, sourceStackID: PaneStackID) -> Bool {
+        guard let tab = currentWorkspace?.focusedTab else {
+            return false
+        }
+        return PaneTabDragReadiness.canStart(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            in: tab,
+            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
+        )
+    }
+
     private func beginPaneTabDrag(button: NSView, paneID: PaneID, sourceStackID: PaneStackID) {
-        // Don't drag if this is the only tab in the only pane stack — nothing to split into.
-        if let tab = currentWorkspace?.focusedTab {
-            let sourceStack = tab.rootLayout.paneStack(id: sourceStackID)
-            if sourceStack?.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
-                return
-            }
+        guard canStartPaneTabDrag(paneID: paneID, sourceStackID: sourceStackID) else {
+            return
         }
         clearPaneTabSplitPreview()
         let ghost = makePaneTabDragGhost(for: button)
@@ -1033,6 +1136,32 @@ private struct PaneSplitDropIntentResolver {
         if point.x <= bounds.minX + t { return .left }
         if point.x >= bounds.maxX - t { return .right }
         return nil
+    }
+}
+
+enum PaneTabDragReadiness {
+    static func canStart(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        in tab: Tab,
+        attachedSessionExists: Bool
+    ) -> Bool {
+        guard let sourceStack = tab.rootLayout.paneStack(id: sourceStackID),
+              let pane = sourceStack.panes.first(where: { $0.id == paneID })
+        else {
+            return false
+        }
+
+        // Don't drag if this is the only tab in the only pane stack — nothing to split into.
+        if sourceStack.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
+            return false
+        }
+
+        if let extensionPane = pane.extensionPane {
+            return extensionPane.status == .ready
+        }
+
+        return pane.isTerminal && attachedSessionExists && pane.terminalState.reportedTitle != nil
     }
 }
 
@@ -2007,6 +2136,7 @@ final class PaneStackView: NSView {
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
         onFocus: @escaping @MainActor (PaneID) -> Void,
+        canStartPaneTabDrag: @escaping @MainActor (PaneID) -> Bool,
         onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
@@ -2058,6 +2188,7 @@ final class PaneStackView: NSView {
             canCloseSinglePaneStack: canCloseSinglePaneStack,
             onClosePane: onClosePane,
             contextMenuProvider: contextMenuProvider,
+            canStartPaneTabDrag: canStartPaneTabDrag,
             onPaneTabDragStarted: onPaneTabDragStarted,
             onPaneTabDragMoved: onPaneTabDragMoved,
             onPaneTabDragEnded: onPaneTabDragEnded,
@@ -2284,6 +2415,7 @@ final class PaneHeaderView: NSView {
         canCloseSinglePaneStack: Bool,
         onClosePane: @escaping @MainActor (PaneID) throws -> Void,
         contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
+        canStartPaneTabDrag: @escaping @MainActor (PaneID) -> Bool,
         onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
@@ -2326,6 +2458,7 @@ final class PaneHeaderView: NSView {
             button.onPress = { onSelectPaneTab(pane.id) }
             button.contextMenuProvider = { contextMenuProvider(pane) }
             if onPaneTabDragStarted != nil {
+                button.canStartDrag = { canStartPaneTabDrag(pane.id) }
                 button.onDragStarted = { [weak button] _, event in
                     guard let button else { return }
                     onPaneTabDragStarted?(button, pane.id, paneStack.id, event)
@@ -2515,6 +2648,7 @@ private final class PaneTabButton: NSControl {
     var onDragMoved: ((PaneTabButton, NSEvent) -> Void)?
     var onDragEnded: ((PaneTabButton, NSEvent) -> Void)?
     var onDragCancelled: ((PaneTabButton) -> Void)?
+    var canStartDrag: (() -> Bool)?
     var contextMenuProvider: (() -> NSMenu)? {
         didSet {
             menu = contextMenuProvider?()
@@ -2561,7 +2695,7 @@ private final class PaneTabButton: NSControl {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(pane.title)" } ?? pane.title)
         toolTip = pane.title
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
         progressOrb.configure(progress: progress, theme: theme)
@@ -2589,7 +2723,7 @@ private final class PaneTabButton: NSControl {
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
-        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.lineBreakMode = .byClipping
         titleLabel.stringValue = PaneTabTitleFormatter.displayTitle(pane.title)
         titleLabel.toolTip = pane.title
         titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
@@ -2743,6 +2877,9 @@ private final class PaneTabButton: NSControl {
                 let delta = hypot(location.x - initialLocation.x, location.y - initialLocation.y)
                 guard delta >= 4 else { continue }
                 if !didStartDragging {
+                    guard canStartDrag?() ?? true else {
+                        continue
+                    }
                     didStartDragging = true
                     onDragStarted?(self, nextEvent)
                 }

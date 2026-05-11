@@ -358,6 +358,128 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertEqual(composing.route, .composition)
     }
 
+    func testCommandPaletteDefaultShortcutsRouteToShortcutAndCanBeUnbound() throws {
+        let normalizer = DefaultKeyEventNormalizer(keyBindingRegistry: .defaults)
+        let commandK = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 40,
+                characters: "k",
+                charactersIgnoringModifiers: "k",
+                modifiers: [.leftCommand]
+            )
+        )
+        let commandShiftP = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 35,
+                characters: "P",
+                charactersIgnoringModifiers: "p",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        let optionCommandK = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 40,
+                characters: "˚",
+                charactersIgnoringModifiers: "k",
+                modifiers: [.leftCommand, .leftOption]
+            )
+        )
+
+        XCTAssertEqual(commandK.route, .shortcut)
+        XCTAssertEqual(commandShiftP.route, .shortcut)
+        XCTAssertEqual(optionCommandK.route, .terminal)
+
+        let unbound = DefaultKeyEventNormalizer(keyBindingRegistry: .effective(overrides: [
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+k"), action: nil),
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+p"), action: nil),
+        ]))
+        XCTAssertEqual(unbound.normalize(RawKeyInput(
+            keyCode: 40,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            modifiers: [.leftCommand]
+        )).route, .terminal)
+        XCTAssertEqual(unbound.normalize(RawKeyInput(
+            keyCode: 35,
+            characters: "P",
+            charactersIgnoringModifiers: "p",
+            modifiers: [.leftCommand, .leftShift]
+        )).route, .terminal)
+    }
+
+    func testCommandPaletteParsingAndRanking() {
+        let workspaceQuery = CommandPaletteParsedQuery(rawText: " project")
+        let commandQuery = CommandPaletteParsedQuery(rawText: ">split")
+        let whitespacePrefixQuery = CommandPaletteParsedQuery(rawText: " >split")
+
+        XCTAssertEqual(workspaceQuery.mode, .workspace)
+        XCTAssertEqual(workspaceQuery.matchingText, " project")
+        XCTAssertEqual(commandQuery.mode, .command)
+        XCTAssertEqual(commandQuery.matchingText, "split")
+        XCTAssertEqual(whitespacePrefixQuery.mode, .workspace)
+
+        let first = WorkspaceID(rawValue: "first")
+        let second = WorkspaceID(rawValue: "second")
+        let workspaces = [
+            CommandPaletteWorkspace(id: first, displayName: "API", path: "/tmp/project-api", visibleOrder: 0, isActive: true),
+            CommandPaletteWorkspace(id: second, displayName: "Project", path: "/tmp/api", visibleOrder: 1, isActive: false),
+        ]
+
+        let workspaceResults = CommandPaletteSearch.workspaceResults(query: "project", workspaces: workspaces)
+
+        XCTAssertEqual(workspaceResults.map(\.invocationTarget), [.workspace(second), .workspace(first)])
+
+        let commandResults = CommandPaletteSearch.commandResults(query: "split", commands: [
+            CommandPaletteCommand(
+                id: "disabled",
+                title: "Split Disabled",
+                category: .action,
+                matchText: "split disabled",
+                isEnabled: false,
+                disabledReason: "No pane",
+                invocationTarget: .action(.paneSplitRight)
+            ),
+            CommandPaletteCommand(
+                id: "hidden",
+                title: "Split With Path",
+                category: .cli,
+                matchText: "split path",
+                requiresArguments: true,
+                hasSafeDefaultTarget: false,
+                invocationTarget: .cliCommand("hidden")
+            ),
+        ])
+
+        XCTAssertEqual(commandResults.map(\.id), ["disabled", "hidden"])
+        XCTAssertFalse(commandResults[0].isEnabled)
+        XCTAssertEqual(commandResults[0].disabledReason, "No pane")
+        XCTAssertEqual(commandResults[1].invocationTarget, .cliCommand("hidden"))
+    }
+
+    func testPaletteRoutingDoesNotClaimCompositionOrRightOptionText() {
+        let composingCommandP = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 35,
+                characters: "",
+                charactersIgnoringModifiers: "p",
+                modifiers: [.leftCommand],
+                isComposing: true
+            )
+        )
+        let rightOptionP = DefaultKeyEventNormalizer().normalize(
+            RawKeyInput(
+                keyCode: 35,
+                characters: "π",
+                charactersIgnoringModifiers: "p",
+                modifiers: [.rightOption]
+            )
+        )
+
+        XCTAssertEqual(composingCommandP.route, .composition)
+        XCTAssertEqual(rightOptionP.route, .terminal)
+        XCTAssertEqual(rightOptionP.text, "π")
+    }
+
     func testControlChordRemainsTerminalInput() {
         let raw = RawKeyInput(
             keyCode: 8,

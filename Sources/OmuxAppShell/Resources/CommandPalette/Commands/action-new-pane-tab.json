@@ -1,0 +1,12 @@
+{
+  "id": "action:pane-tab.create",
+  "title": "New Pane Tab",
+  "subtitle": "Create a tab in the focused pane stack",
+  "category": "action",
+  "matchText": "New Pane Tab Create a tab in the focused pane stack new tab pane tab",
+  "aliases": ["new tab", "pane tab"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused pane",
+  "command": { "kind": "action", "target": "pane-tab.create" }
+}

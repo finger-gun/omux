@@ -1,0 +1,12 @@
+{
+  "id": "cli:omux-workspace-new",
+  "title": "omux: New Workspace",
+  "subtitle": "Create a workspace using the configured default root",
+  "category": "cli",
+  "matchText": "omux workspace new create",
+  "aliases": ["new workspace", "create workspace"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No active workspace",
+  "command": { "kind": "builtin", "target": "workspace.create" }
+}

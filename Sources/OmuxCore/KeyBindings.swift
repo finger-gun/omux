@@ -1,6 +1,8 @@
 import Foundation
 
 public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
+    case commandPaletteWorkspace = "command-palette.workspace"
+    case commandPaletteCommand = "command-palette.command"
     case workspaceCreate = "workspace.create"
     case workspaceClose = "workspace.close"
     case workspacePrevious = "workspace.previous"
@@ -183,6 +185,8 @@ public struct OpenMUXKeyBindingOverride: Equatable, Sendable {
 
 public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
     public static let defaultBindingPairs: [(OpenMUXKeyChord, OpenMUXKeyBindingAction)] = [
+        (try! OpenMUXKeyChord(parsing: "cmd+k"), .commandPaletteWorkspace),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+p"), .commandPaletteCommand),
         (try! OpenMUXKeyChord(parsing: "cmd+n"), .workspaceCreate),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+n"), .workspaceClose),
         (try! OpenMUXKeyChord(parsing: "cmd+0"), .workspacePrevious),

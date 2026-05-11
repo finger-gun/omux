@@ -111,6 +111,8 @@ swift run OpenMUXApp
 
 `swift run omux plugins` opens the interactive plugin picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback. Bundled plugin behavior is documented in [Plugin index](./plugins/index.md), and the external plugin/extension-pane contract is documented in [Plugin ecosystem](./plugins.md).
 
+Command-palette action entries are described by bundled JSON files under `Sources/OmuxAppShell/Resources/CommandPalette/Commands/`. Each descriptor uses a `command` object with a `kind` and target identifier resolved by app code, not a shell string. CLI entries are generated from `OpenMUXCLICommandCatalog`, which also feeds `omux help`, so command-mode search covers the full typed CLI surface without maintaining a separate allow-list.
+
 For local cleanup while developing, run `Scripts/uninstall-local.sh --dry-run` to inspect what would be removed, then `make uninstall-local` to remove local app bundles, CLI links, `~/.omux`, OpenMUX Application Support state, preferences, caches, saved app state, and update staging leftovers.
 
 If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, `make verify`, or `make smoke`. Use `make import-themes` when refreshing the selected imported iTerm2 Color Schemes presets from the pinned upstream ref.
@@ -141,7 +143,7 @@ The current shell baseline adds:
 - shared workspace/session actions used by both the UI and `omux`
 - command injection routed into ongoing live pane sessions
 - pane resize propagation into the live terminal runtime
-- keyboard-first workspace controls including `Cmd+T`/`Cmd+W` pane-tab create/close, `Cmd+D`/`Cmd+Shift+D` pane split right/down, `Cmd+Shift+W` pane remove, `Cmd+N`/`Cmd+Shift+N` workspace create/close, `Cmd+B` workspace-column toggle, `Cmd+1` through `Cmd+9` ordered workspace jumps, and `Cmd+0` previous-workspace recall
+- keyboard-first workspace controls including `Cmd+K` workspace search, `Cmd+Shift+P` command search with a leading `>` prefix, `Cmd+T`/`Cmd+W` pane-tab create/close, `Cmd+D`/`Cmd+Shift+D` pane split right/down, `Cmd+Shift+W` pane remove, `Cmd+N`/`Cmd+Shift+N` workspace create/close, `Cmd+B` workspace-column toggle, `Cmd+1` through `Cmd+9` ordered workspace jumps, and `Cmd+0` previous-workspace recall
 
 ## Pane stack model
 
