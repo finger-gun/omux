@@ -1058,8 +1058,14 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
                         self = Self.makeSplit(axis: axis, proportions: [], children: children)
                         return .inserted
                     } else {
-                        // Wrong axis — bubble further up.
-                        return .wrapRequested
+                        // Wrong axis: split the matched child region itself. Bubbling to the root
+                        // would make a full-height/full-width pane instead of splitting the target pane.
+                        let newNode = TabLayoutNode.paneStack(newStack)
+                        children[index] = direction.insertsAfterTarget
+                            ? Self.makeSplit(axis: direction.axis, proportions: [], children: [children[index], newNode])
+                            : Self.makeSplit(axis: direction.axis, proportions: [], children: [newNode, children[index]])
+                        self = Self.makeSplit(axis: axis, proportions: proportions, children: children)
+                        return .inserted
                     }
                 }
             }
