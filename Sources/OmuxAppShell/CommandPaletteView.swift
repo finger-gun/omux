@@ -186,6 +186,18 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard panel.frame.contains(point) else {
+            dismissAndRestoreFocus()
+            return
+        }
+
+        window?.makeFirstResponder(searchField)
+        super.mouseDown(with: event)
+    }
 
     func present(initialQuery: String, restoring responder: NSResponder?) {
         focusRestoreResponder = responder

@@ -372,12 +372,36 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.invokeCommandPaletteResult(cliVersion), .invoked)
         XCTAssertEqual(runtime.executedCommands, ["omux version"])
 
+        let openConfigInTerminal = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "terminal editor", commands: commands).first {
+            $0.invocationTarget == .cliCommand("omux.config.open-terminal")
+        })
+        XCTAssertEqual(openConfigInTerminal.title, "omux: Open Config in Terminal Editor")
+        XCTAssertEqual(controller.invokeCommandPaletteResult(openConfigInTerminal), .invoked)
+        XCTAssertEqual(runtime.executedCommands, ["omux version", "omux config open"])
+
         let cliWithArguments = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "inactive opacity", commands: commands).first {
             $0.invocationTarget == .cliCommand("omux.config.inactive-opacity")
         })
         XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
-        XCTAssertEqual(runtime.executedCommands, ["omux version"])
+        XCTAssertEqual(runtime.executedCommands, ["omux version", "omux config open"])
         XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+    }
+
+    func testCommandPaletteConfigOpenCommandsReflectTerminalRequirement() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let commands = CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: .defaults)
+        let openConfig = try XCTUnwrap(commands.first { $0.id == "cli:omux.config.open" })
+        let openConfigInTerminal = try XCTUnwrap(commands.first { $0.id == "cli:omux.config.open-terminal" })
+
+        XCTAssertTrue(openConfig.isEnabled)
+        XCTAssertEqual(openConfig.invocationTarget, .configOpen)
+        XCTAssertFalse(openConfigInTerminal.isEnabled)
+        XCTAssertEqual(openConfigInTerminal.disabledReason, "No focused terminal")
+        XCTAssertEqual(openConfigInTerminal.invocationTarget, .cliCommand("omux.config.open-terminal"))
     }
 
     func testCommandPaletteShortcutLabelsUseConfiguredBindings() throws {
