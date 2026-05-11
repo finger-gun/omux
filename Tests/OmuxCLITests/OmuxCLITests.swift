@@ -539,6 +539,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "run", "session-1", "pwd"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "run", "--pane", "pane-1", "--", "echo", "hello"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "send-text", "--session", "session-1", "--", "hello", "world"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "working"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "sessions"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "session"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "panes"]), 0)
@@ -562,6 +563,7 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.runCommand.rawValue):none",
             "\(ControlMethod.sendText.rawValue):none",
+            "\(ControlMethod.paneStatus.rawValue):none",
             "\(ControlMethod.listSessions.rawValue):none",
             "\(ControlMethod.listSessions.rawValue):none",
             "\(ControlMethod.listPanes.rawValue):none",
@@ -596,6 +598,81 @@ final class OmuxCLITests: XCTestCase {
 
         XCTAssertEqual(command.run(arguments: ["omux", "list", "--full"]), 0)
         XCTAssertEqual(output, ["\(ControlMethod.listWorkspaces.rawValue):true"])
+    }
+
+    func testCLISendsPaneStatusRequestForHooksAndPlugins() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pane-status.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "pane-status",
+                "--pane", "pane-1",
+                "--state", "working",
+                "--value", "42",
+                "--label", "Codex",
+                "--message", "running tests",
+                "--source", "hook.codex",
+            ]),
+            0
+        )
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--focused", "clear"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--focused", "--state", "needs-input"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--state", "working"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.paneStatus.rawValue,
+            ControlMethod.paneStatus.rawValue,
+            ControlMethod.paneStatus.rawValue,
+        ])
+
+        guard case .object(let firstParams)? = requests.value[0].params,
+              case .object(let target)? = firstParams["target"],
+              case .string("pane")? = target["type"],
+              case .string("pane-1")? = target["id"],
+              case .string("working")? = firstParams["state"],
+              case .number(42)? = firstParams["value"],
+              case .string("Codex")? = firstParams["label"],
+              case .string("running tests")? = firstParams["message"],
+              case .string("hook.codex")? = firstParams["source"] else {
+            return XCTFail("expected pane status params")
+        }
+
+        guard case .object(let secondParams)? = requests.value[1].params,
+              case .object(let secondTarget)? = secondParams["target"],
+              case .string("focused")? = secondTarget["type"],
+              case .string("clear")? = secondParams["state"] else {
+            return XCTFail("expected focused clear params")
+        }
+
+        guard case .object(let thirdParams)? = requests.value[2].params,
+              case .object(let thirdTarget)? = thirdParams["target"],
+              case .string("focused")? = thirdTarget["type"],
+              case .string("needs-input")? = thirdParams["state"] else {
+            return XCTFail("expected focused needs-input params")
+        }
+
+        XCTAssertEqual(output, [
+            "ok",
+            "ok",
+            "ok",
+            "usage: omux pane-status --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused --state working|indeterminate|error|needs-input|idle|clear [--value <0-100>] [--label <text>] [--message <text>] [--source <name>]",
+        ])
     }
 
     func testCLIMarkdownPreviewCreatesExtensionPaneWhenEnabled() throws {

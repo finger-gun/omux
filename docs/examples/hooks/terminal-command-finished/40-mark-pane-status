@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Mark the pane with a subtle status orb when a command finishes.
+# Nonzero exits show a red error orb; successful commands show a brief blue idle orb.
+
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+event="$(cat)"
+pane_id="$(printf '%s' "$event" | jq -r '.paneID // empty')"
+
+if [ -z "$pane_id" ]; then
+  exit 0
+fi
+
+exit_code="$(printf '%s' "$event" | jq -r '.payload.exitCode // empty')"
+command_text="$(printf '%s' "$event" | jq -r '.payload.command // "command"')"
+
+short_command="$command_text"
+if [ "${#short_command}" -gt 90 ]; then
+  short_command="${short_command:0:87}..."
+fi
+
+if [ -n "$exit_code" ] && [ "$exit_code" != "0" ]; then
+  omux pane-status \
+    --pane "$pane_id" \
+    --state error \
+    --label command \
+    --message "exit ${exit_code}: ${short_command}" \
+    --source hook.terminal-command-finished >/dev/null
+else
+  omux pane-status \
+    --pane "$pane_id" \
+    --state idle \
+    --label command \
+    --message "$short_command" \
+    --source hook.terminal-command-finished >/dev/null
+fi

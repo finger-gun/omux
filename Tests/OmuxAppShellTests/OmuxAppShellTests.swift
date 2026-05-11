@@ -1181,6 +1181,33 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(restoredController.activeWorkspace()?.id, secondWorkspace.id)
     }
 
+    func testTerminalProgressRemovedShowsBriefIdleStateThenClears() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            progressIdleClearDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let idleCleared = expectation(description: "idle state cleared")
+        controller.onChange = { workspace in
+            if workspace.focusedPane?.terminalState.progress == nil {
+                idleCleared.fulfill()
+            }
+        }
+
+        runtime.emit(.progressReported(state: .active, progress: 42), on: runtimeSurfaceID)
+        runtime.emit(.progressReported(state: .removed, progress: nil), on: runtimeSurfaceID)
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+        wait(for: [idleCleared], timeout: 1)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+    }
+
     func testWorkspaceControllerPersistsDistinctPaneWorkingDirectoriesAcrossWorkspaces() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -2329,7 +2356,7 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkspaceWindowShowsPaneStatusForTerminalProgressEvents() throws {
+    func testWorkspaceWindowShowsPaneStatusOrbsForTerminalProgressEvents() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let controller = WorkspaceController(
@@ -2347,7 +2374,43 @@ final class OmuxAppShellTests: XCTestCase {
         windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
         rootView.layoutSubtreeIfNeeded()
 
-        XCTAssertTrue(findLabel(withString: "Progress 42%", in: rootView))
+        let visibleActiveOrbs = findViews(ofType: PaneProgressOrbView.self, in: rootView)
+            .filter { $0.isHidden == false && $0.progressStateForTesting == .active }
+        XCTAssertGreaterThanOrEqual(visibleActiveOrbs.count, 2)
+        XCTAssertFalse(findLabel(withString: "Progress 42%", in: rootView))
+    }
+
+    @MainActor
+    func testWorkspaceWindowShowsYellowStatusOrbsWhenPaneNeedsInput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(pane.id),
+                state: .needsInput,
+                label: "Codex",
+                message: "choose an option",
+                source: "hook.codex"
+            )
+        )
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let visibleInputOrbs = findViews(ofType: PaneProgressOrbView.self, in: rootView)
+            .filter { $0.isHidden == false && $0.progressStateForTesting == .needsInput }
+        XCTAssertGreaterThanOrEqual(visibleInputOrbs.count, 2)
+        XCTAssertTrue(visibleInputOrbs.allSatisfy { $0.progressColorForTesting?.isEqual(NSColor.systemYellow) == true })
+        XCTAssertTrue(visibleInputOrbs.contains { $0.accessibilityLabel() == "Pane needs user input" })
     }
 
     @MainActor
@@ -3201,6 +3264,70 @@ final class OmuxAppShellTests: XCTestCase {
             params: .object(["target": ControlPlaneTerminalTarget.pane(PaneID(rawValue: "missing")).rpcValue])
         )
         XCTAssertEqual(invalidPaneResponse.error?.code, 404)
+    }
+
+    @MainActor
+    func testControlPlanePaneStatusUpdatesProgressOrbStateAndPublishesEvent() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pane-status.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        var publishedEvent: ControlPlaneEvent?
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneStatusChanged.rawValue {
+                publishedEvent = event
+            }
+        }
+        try service.start()
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let response = try requestControlMethod(
+            .paneStatus,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: ControlPlanePaneStatusRequest(
+                target: .pane(pane.id),
+                state: .error,
+                label: "Codex",
+                message: "tests failed",
+                source: "hook.codex"
+            ).rpcValue
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .error)
+        XCTAssertEqual(publishedEvent?.paneID, pane.id)
+        XCTAssertEqual(publishedEvent?.payload.objectValue?["state"], .string("error"))
+        XCTAssertEqual(publishedEvent?.payload.objectValue?["label"], .string("Codex"))
+        XCTAssertEqual(publishedEvent?.payload.objectValue?["message"], .string("tests failed"))
+        XCTAssertEqual(publishedEvent?.payload.objectValue?["source"], .string("hook.codex"))
     }
 
     @MainActor

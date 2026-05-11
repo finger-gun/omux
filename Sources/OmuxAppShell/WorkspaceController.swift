@@ -48,6 +48,8 @@ public final class WorkspaceController: @unchecked Sendable {
     private var updateAvailability: OpenMUXUpdateAvailability?
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
+    private var progressIdleClearTokens: [PaneID: UUID] = [:]
+    private let progressIdleClearDelay: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
@@ -72,7 +74,8 @@ public final class WorkspaceController: @unchecked Sendable {
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
-        scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil
+        scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
+        progressIdleClearDelay: TimeInterval = 3
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
@@ -81,6 +84,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
+        self.progressIdleClearDelay = progressIdleClearDelay
         _ = terminalActionCoordinator
     }
 
@@ -1591,6 +1595,86 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    @discardableResult
+    public func setPaneStatus(
+        _ request: ControlPlanePaneStatusRequest
+    ) -> ControlPlaneActionResult? {
+        guard let context = resolveTerminalTarget(request.target) else {
+            return nil
+        }
+
+        let progress: PaneProgress?
+        switch request.state {
+        case .working:
+            progress = PaneProgress(state: .active, value: request.value)
+        case .indeterminate:
+            progress = PaneProgress(state: .indeterminate, value: request.value)
+        case .error:
+            progress = PaneProgress(state: .error, value: request.value)
+        case .needsInput:
+            progress = PaneProgress(state: .needsInput, value: request.value)
+        case .idle:
+            progress = PaneProgress(state: .paused, value: request.value)
+        case .clear:
+            progress = nil
+        }
+
+        var updatedWorkspace: Workspace?
+        lock.lock()
+        for workspaceIndex in workspaces.indices {
+            guard workspaces[workspaceIndex].tabs.contains(where: { $0.panes.contains(where: { $0.id == context.paneID }) }) else {
+                continue
+            }
+
+            _ = workspaces[workspaceIndex].updatePane(context.paneID) { pane in
+                pane.terminalState.progress = progress
+            }
+
+            if request.state == .idle {
+                let token = UUID()
+                progressIdleClearTokens[context.paneID] = token
+                scheduleProgressIdleClear(for: context.paneID, token: token)
+            } else {
+                progressIdleClearTokens.removeValue(forKey: context.paneID)
+            }
+
+            updatedWorkspace = workspaces[workspaceIndex]
+            break
+        }
+        lock.unlock()
+
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+
+        let source = request.source ?? "pane.status"
+        let payload = paneStatusPayload(
+            state: request.state,
+            value: request.value,
+            label: request.label,
+            message: request.message,
+            source: source
+        )
+
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .paneStatusChanged,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                paneID: context.paneID,
+                sessionID: context.sessionID,
+                payload: payload
+            )
+        )
+
+        return ControlPlaneActionResult(
+            target: context,
+            extra: [
+                "status": RPCValue(payload),
+            ]
+        )
+    }
+
     public func handleInput(_ event: NormalizedKeyEvent, in paneID: PaneID) throws {
         try bridge.handle(event, inPane: paneID)
     }
@@ -2239,14 +2323,21 @@ public final class WorkspaceController: @unchecked Sendable {
                     _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                         switch state {
                         case .removed:
-                            pane.terminalState.progress = nil
+                            let token = UUID()
+                            progressIdleClearTokens[event.paneID] = token
+                            pane.terminalState.progress = PaneProgress(state: .paused)
+                            scheduleProgressIdleClear(for: event.paneID, token: token)
                         case .active:
+                            progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .active, value: progress)
                         case .error:
+                            progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .error, value: progress)
                         case .indeterminate:
+                            progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .indeterminate, value: progress)
                         case .paused:
+                            progressIdleClearTokens.removeValue(forKey: event.paneID)
                             pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
                         }
                     }
@@ -2277,6 +2368,61 @@ public final class WorkspaceController: @unchecked Sendable {
         }
         lock.unlock()
         return nil
+    }
+
+    private func scheduleProgressIdleClear(for paneID: PaneID, token: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + progressIdleClearDelay) { [weak self] in
+            self?.clearProgressIdleState(for: paneID, token: token)
+        }
+    }
+
+    private func clearProgressIdleState(for paneID: PaneID, token: UUID) {
+        var updatedWorkspace: Workspace?
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard progressIdleClearTokens[paneID] == token else {
+            return
+        }
+
+        for workspaceIndex in workspaces.indices {
+            guard workspaces[workspaceIndex].tabs.contains(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
+                continue
+            }
+
+            _ = workspaces[workspaceIndex].updatePane(paneID) { pane in
+                guard pane.terminalState.progress?.state == .paused else {
+                    return
+                }
+                pane.terminalState.progress = nil
+            }
+            progressIdleClearTokens.removeValue(forKey: paneID)
+            updatedWorkspace = workspaces[workspaceIndex]
+            break
+        }
+
+        if let updatedWorkspace {
+            DispatchQueue.main.async { [weak self] in
+                self?.onChange?(updatedWorkspace)
+            }
+        }
+    }
+
+    private func paneStatusPayload(
+        state: ControlPlanePaneStatusState,
+        value: Int?,
+        label: String?,
+        message: String?,
+        source: String
+    ) -> OmuxValue {
+        .object([
+            "state": .string(state.rawValue),
+            "value": value.map(OmuxValue.integer) ?? .null,
+            "label": label.map(OmuxValue.string) ?? .null,
+            "message": message.map(OmuxValue.string) ?? .null,
+            "source": .string(source),
+        ])
     }
 
     private func uniqueWorkspaceDisplayName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {

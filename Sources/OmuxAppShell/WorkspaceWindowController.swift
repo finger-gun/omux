@@ -2,6 +2,7 @@ import AppKit
 import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
+import QuartzCore
 import WebKit
 
 private enum ShellLayoutMetrics {
@@ -458,6 +459,7 @@ final class WorkspaceShellViewController: NSViewController {
                     pointSize: 13,
                     weight: .semibold
                 ),
+                progress: nil,
                 title: workspace.name,
                 subtitle: nil,
                 isActive: workspace.id == activeWorkspace.id,
@@ -478,6 +480,7 @@ final class WorkspaceShellViewController: NSViewController {
                             kind: .terminal,
                             identifier: pane.id.rawValue,
                             icon: renderedIcon(for: metadata.icon, pointSize: 11, weight: .medium),
+                            progress: pane.terminalState.progress,
                             title: metadata.title,
                             subtitle: metadata.subtitle,
                             isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
@@ -1047,6 +1050,7 @@ struct SidebarItem {
     let kind: Kind
     let identifier: String
     let icon: OmuxRenderedIcon?
+    let progress: PaneProgress?
     let title: String
     let subtitle: String?
     let isActive: Bool
@@ -2313,6 +2317,7 @@ final class PaneHeaderView: NSView {
                     pointSize: 11,
                     weight: pane.id == paneStack.focusedPaneID ? .semibold : .medium
                 ).render(iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))),
+                progress: pane.terminalState.progress,
                 showsClose: paneStack.panes.count > 1 || canCloseSinglePaneStack,
                 onClose: {
                     try? onClosePane(pane.id)
@@ -2355,6 +2360,102 @@ final class PaneHeaderView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+}
+
+@MainActor
+final class PaneProgressOrbView: NSView {
+    static let side = CGFloat(7)
+    private static let pulseAnimationKey = "omux.progress.orb.pulse"
+
+    private(set) var progressStateForTesting: PaneProgressState?
+    private(set) var progressColorForTesting: NSColor?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.cornerRadius = Self.side / 2
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: Self.side, height: Self.side)
+    }
+
+    func configure(progress: PaneProgress?, theme: WorkspaceShellTheme) {
+        progressStateForTesting = progress?.state
+        guard let progress else {
+            isHidden = true
+            progressColorForTesting = nil
+            layer?.removeAnimation(forKey: Self.pulseAnimationKey)
+            setAccessibilityLabel(nil)
+            return
+        }
+
+        isHidden = false
+        let progressColor = color(for: progress.state, theme: theme)
+        progressColorForTesting = progressColor
+        layer?.backgroundColor = progressColor.cgColor
+        setAccessibilityLabel(accessibilityLabel(for: progress.state))
+        updatePulse(for: progress.state)
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+    }
+
+    private func color(for state: PaneProgressState, theme: WorkspaceShellTheme) -> NSColor {
+        switch state {
+        case .active, .indeterminate:
+            return theme.shell.accent
+        case .error:
+            return .systemRed
+        case .needsInput:
+            return .systemYellow
+        case .paused:
+            return .systemBlue
+        }
+    }
+
+    private func accessibilityLabel(for state: PaneProgressState) -> String {
+        switch state {
+        case .active, .indeterminate:
+            return "Pane working"
+        case .error:
+            return "Pane progress error"
+        case .needsInput:
+            return "Pane needs user input"
+        case .paused:
+            return "Pane idle"
+        }
+    }
+
+    private func updatePulse(for state: PaneProgressState) {
+        layer?.removeAnimation(forKey: Self.pulseAnimationKey)
+        layer?.opacity = 1
+        guard state == .active || state == .indeterminate else {
+            return
+        }
+        guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion == false else {
+            return
+        }
+
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.35
+        pulse.toValue = 1
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer?.add(pulse, forKey: Self.pulseAnimationKey)
     }
 }
 
@@ -2423,6 +2524,7 @@ private final class PaneTabButton: NSControl {
     private let titleLabel = NSTextField(labelWithString: "")
     private let iconLabel = NSTextField(labelWithString: "")
     private let iconImageView = NSImageView()
+    private let progressOrb = PaneProgressOrbView()
     private let closeButton = ChromePillButton()
     private let contentInsets = NSEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
     private let interItemSpacing = CGFloat(4)
@@ -2433,12 +2535,14 @@ private final class PaneTabButton: NSControl {
     private let isActiveTab: Bool
     private let renderedIcon: OmuxRenderedIcon?
     private let iconSymbolImage: NSImage?
+    private let progress: PaneProgress?
 
     init(
         pane: Pane,
         active: Bool,
         theme: WorkspaceShellTheme,
         icon: OmuxRenderedIcon?,
+        progress: PaneProgress?,
         showsClose: Bool,
         onClose: @escaping () -> Void
     ) {
@@ -2447,6 +2551,7 @@ private final class PaneTabButton: NSControl {
         self.isActiveTab = active
         self.renderedIcon = icon
         self.iconSymbolImage = icon?.symbolImage()
+        self.progress = progress
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -2457,6 +2562,10 @@ private final class PaneTabButton: NSControl {
         toolTip = pane.title
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
+        progressOrb.configure(progress: progress, theme: theme)
+        addSubview(progressOrb)
 
         iconLabel.translatesAutoresizingMaskIntoConstraints = false
         iconLabel.font = icon?.font ?? .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
@@ -2524,9 +2633,10 @@ private final class PaneTabButton: NSControl {
             : (iconSymbolImage == nil ? iconLabel.intrinsicContentSize : NSSize(width: symbolSide, height: symbolSide))
         let closeSize = showsClose ? closeButton.intrinsicContentSize : .zero
         let closeWidth = showsClose ? interItemSpacing + closeSize.width : 0
+        let progressWidth = progress == nil ? 0 : PaneProgressOrbView.side + iconSpacing
         let iconWidth = renderedIcon == nil ? 0 : iconSize.width + iconSpacing
         return NSSize(
-            width: iconWidth + titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
+            width: progressWidth + iconWidth + titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
             height: max(titleSize.height, iconSize.height, closeSize.height) + contentInsets.top + contentInsets.bottom
         )
     }
@@ -2539,11 +2649,23 @@ private final class PaneTabButton: NSControl {
         )
 
         var titleMinX = contentBounds.minX
+        if progress != nil {
+            progressOrb.frame = NSRect(
+                x: contentBounds.minX,
+                y: round((bounds.height - PaneProgressOrbView.side) / 2),
+                width: PaneProgressOrbView.side,
+                height: PaneProgressOrbView.side
+            )
+            titleMinX = progressOrb.frame.maxX + iconSpacing
+        } else {
+            progressOrb.frame = .zero
+        }
+
         if let renderedIcon {
             if iconSymbolImage == nil {
                 let iconSize = iconLabel.intrinsicContentSize
                 iconLabel.frame = NSRect(
-                    x: contentBounds.minX,
+                    x: titleMinX,
                     y: round((bounds.height - iconSize.height) / 2),
                     width: iconSize.width,
                     height: iconSize.height
@@ -2553,7 +2675,7 @@ private final class PaneTabButton: NSControl {
                 titleMinX = iconLabel.frame.maxX + iconSpacing
             } else {
                 iconImageView.frame = NSRect(
-                    x: contentBounds.minX,
+                    x: titleMinX,
                     y: round((bounds.height - symbolSide) / 2),
                     width: symbolSide,
                     height: symbolSide
@@ -2839,16 +2961,21 @@ final class SidebarItemButton: NSView {
     private let subtitleField = NSTextField(labelWithString: "")
     private let iconField = NSTextField(labelWithString: "")
     private let iconImageView = NSImageView()
+    private let progressOrb = PaneProgressOrbView()
     private var leadingInset: CGFloat = 12
     private var textLeadingInset: CGFloat = 12
     private var renderedIcon: OmuxRenderedIcon?
     private var iconSymbolImage: NSImage?
     private var iconSide = CGFloat(13)
+    private var progress: PaneProgress?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+
+        progressOrb.identifier = NSUserInterfaceItemIdentifier("sidebar-pane-progress")
+        addSubview(progressOrb)
 
         titleField.maximumNumberOfLines = 1
         titleField.lineBreakMode = .byTruncatingTail
@@ -2897,6 +3024,8 @@ final class SidebarItemButton: NSView {
         }
 
         titleField.stringValue = item.title
+        progress = item.progress
+        progressOrb.configure(progress: item.progress, theme: theme)
         renderedIcon = item.icon
         iconSymbolImage = item.icon?.symbolImage()
         iconSide = item.kind == .workspace ? 13 : 11
@@ -2943,12 +3072,24 @@ final class SidebarItemButton: NSView {
         super.layout()
         let trailingInset: CGFloat = 12
         let iconSpacing: CGFloat = renderedIcon == nil ? 0 : 6
+        let progressSpacing: CGFloat = 6
         var textX = leadingInset
+        if progress != nil {
+            progressOrb.frame = NSRect(
+                x: leadingInset,
+                y: round((bounds.height - PaneProgressOrbView.side) / 2),
+                width: PaneProgressOrbView.side,
+                height: PaneProgressOrbView.side
+            )
+            textX = progressOrb.frame.maxX + progressSpacing
+        } else {
+            progressOrb.frame = .zero
+        }
         if let renderedIcon {
             if iconSymbolImage == nil {
                 let iconSize = iconField.intrinsicContentSize
                 iconField.frame = NSRect(
-                    x: leadingInset,
+                    x: textX,
                     y: round((bounds.height - iconSize.height) / 2),
                     width: iconSize.width,
                     height: iconSize.height
@@ -2958,7 +3099,7 @@ final class SidebarItemButton: NSView {
                 textX = iconField.frame.maxX + iconSpacing
             } else {
                 iconImageView.frame = NSRect(
-                    x: leadingInset,
+                    x: textX,
                     y: round((bounds.height - iconSide) / 2),
                     width: iconSide,
                     height: iconSide

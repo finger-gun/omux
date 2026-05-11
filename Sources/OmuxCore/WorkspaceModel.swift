@@ -204,6 +204,7 @@ public enum PaneProgressState: String, Codable, Sendable {
     case active
     case error
     case indeterminate
+    case needsInput = "needs-input"
     case paused
 }
 
@@ -362,22 +363,6 @@ public struct PaneTerminalState: Equatable, Codable, Sendable {
 
     public var statusSummary: String? {
         var parts: [String] = []
-        if let progress {
-            switch progress.state {
-            case .active:
-                if let value = progress.value {
-                    parts.append("Progress \(value)%")
-                } else {
-                    parts.append("Progress")
-                }
-            case .error:
-                parts.append("Progress error")
-            case .indeterminate:
-                parts.append("Progress indeterminate")
-            case .paused:
-                parts.append("Progress paused")
-            }
-        }
         if let lastExit {
             parts.append("Exited \(lastExit.exitCode)")
         }

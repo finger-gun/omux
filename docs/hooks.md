@@ -159,6 +159,18 @@ omux history --json "$pane_id"
 
 `omux history` without a pane ID reads panes in the active workspace, `omux history <pane-id>` reads one pane/pane-tab, and `omux history all` reads every pane across workspaces and tabs. The command can include bounded per-pane history persisted with workspace state plus current live terminal text when available. The read command does not send text to the terminal, mutate pane state, or render history into pane UI. History may contain secrets, so hooks should request it only when needed and avoid writing it to shared logs. Use `omux history clear` to clear persisted history for all panes and live screen/scrollback for running panes when available, or scope it with `--pane`, `--pane-tab`, `--tab`, `--workspace`, `--session`, or `--focused`. If `history clear` is run inside an OpenMUX-launched pane, the CLI clears that pane's own terminal buffer locally after the control-plane clear succeeds.
 
+Hooks and plugins can also mark pane status directly. This drives the same subtle tab/sidebar orb as terminal-native progress reports:
+
+```bash
+omux pane-status --pane "$pane_id" --state working --label tests --source hook.test-runner
+omux pane-status --pane "$pane_id" --state error --message "tests failed" --source hook.test-runner
+omux pane-status --pane "$pane_id" --state needs-input --message "choose an option" --source hook.test-runner
+omux pane-status --pane "$pane_id" --state idle --source hook.test-runner
+omux pane-status --pane "$pane_id" --state clear
+```
+
+Status states are intentionally small: `working` and `indeterminate` show a pulsing orb, `error` shows a red orb, `needs-input` shows a yellow orb for prompts that require user action, `idle` shows a brief blue orb and then clears, and `clear` removes the status immediately. Aliases such as `running`, `active`, `input`, `done`, and `failed` are accepted by the CLI for script ergonomics.
+
 Use `run` when you want OpenMUX to submit a command, and `send-text` when you only want to insert text:
 
 ```bash

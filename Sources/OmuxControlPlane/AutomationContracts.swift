@@ -166,6 +166,90 @@ public struct ControlPlaneActionResult: Equatable, Sendable {
     }
 }
 
+public enum ControlPlanePaneStatusState: String, CaseIterable, Sendable {
+    case working
+    case indeterminate
+    case error
+    case needsInput = "needs-input"
+    case idle
+    case clear
+
+    public init?(cliValue: String) {
+        switch cliValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "working", "running", "loading", "active":
+            self = .working
+        case "indeterminate":
+            self = .indeterminate
+        case "error", "failed", "failure":
+            self = .error
+        case "needs-input", "needs_input", "needsinput", "input", "user-input", "user_input", "waiting-input", "waiting_input":
+            self = .needsInput
+        case "idle", "done", "finished", "complete", "completed", "paused":
+            self = .idle
+        case "clear", "remove", "removed", "none":
+            self = .clear
+        default:
+            return nil
+        }
+    }
+}
+
+public struct ControlPlanePaneStatusRequest: Equatable, Sendable {
+    public let target: ControlPlaneTerminalTarget
+    public let state: ControlPlanePaneStatusState
+    public let value: Int?
+    public let label: String?
+    public let message: String?
+    public let source: String?
+
+    public init(
+        target: ControlPlaneTerminalTarget,
+        state: ControlPlanePaneStatusState,
+        value: Int? = nil,
+        label: String? = nil,
+        message: String? = nil,
+        source: String? = nil
+    ) {
+        self.target = target
+        self.state = state
+        self.value = value
+        self.label = label
+        self.message = message
+        self.source = source
+    }
+
+    public init?(rpcValue: RPCValue?) {
+        guard case .object(let object)? = rpcValue,
+              let target = ControlPlaneTerminalTarget(rpcValue: rpcValue),
+              case .string(let stateValue)? = object["state"],
+              let state = ControlPlanePaneStatusState(cliValue: stateValue)
+        else {
+            return nil
+        }
+
+        self.init(
+            target: target,
+            state: state,
+            value: object["value"]?.integerValue ?? object["progress"]?.integerValue,
+            label: object["label"]?.stringValue,
+            message: object["message"]?.stringValue,
+            source: object["source"]?.stringValue
+        )
+    }
+
+    public var rpcValue: RPCValue {
+        var object: [String: RPCValue] = [
+            "target": target.rpcValue,
+            "state": .string(state.rawValue),
+        ]
+        object["value"] = value.map(RPCValue.integer) ?? .null
+        object["label"] = label.map(RPCValue.string) ?? .null
+        object["message"] = message.map(RPCValue.string) ?? .null
+        object["source"] = source.map(RPCValue.string) ?? .null
+        return .object(object)
+    }
+}
+
 public enum ControlPlaneHistoryScope: Equatable, Sendable {
     case activeWorkspace
     case pane(PaneID)
@@ -417,6 +501,15 @@ public struct ControlPlaneHistoryClearResponse: Equatable, Sendable {
 }
 
 private extension RPCValue {
+    var stringValue: String? {
+        switch self {
+        case .string(let value):
+            return value
+        default:
+            return nil
+        }
+    }
+
     var integerValue: Int? {
         switch self {
         case .number(let value):

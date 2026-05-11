@@ -52,6 +52,7 @@ public enum ControlMethod: String, Sendable {
     case closePaneTab = "paneStack.closeTab"
     case focusNextPane = "pane.focusNext"
     case focusPreviousPane = "pane.focusPrevious"
+    case paneStatus = "pane.status"
     case focusSession = "session.focus"
     case runCommand = "session.runCommand"
     case sendText = "session.sendText"

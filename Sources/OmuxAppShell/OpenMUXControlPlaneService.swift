@@ -309,6 +309,14 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 workspace: controller.focusPreviousPane(),
                 unavailableMessage: "previous pane unavailable"
             )
+        case .paneStatus:
+            guard let paneStatusRequest = ControlPlanePaneStatusRequest(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid pane status request"))
+            }
+            guard let result = controller.setPaneStatus(paneStatusRequest) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
         case .focusSession:
             guard let target = ControlPlaneTerminalTarget(rpcValue: request.params) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target"))
@@ -598,6 +606,7 @@ private extension Workspace {
                     "sessionID": .string(session.id.rawValue),
                     "workingDirectory": .string(session.workingDirectory),
                     "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+                    "progress": pane.terminalState.progress.rpcValue,
                     "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
             }
@@ -616,6 +625,7 @@ private extension Workspace {
                     "sessionID": pane.terminalSession.map { .string($0.id.rawValue) } ?? .null,
                     "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
                     "title": .string(pane.title),
+                    "progress": pane.terminalState.progress.rpcValue,
                     "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
             }
@@ -676,7 +686,20 @@ private extension Pane {
             "title": .string(title),
             "workingDirectory": terminalSession.map { .string($0.workingDirectory) } ?? .null,
             "reportedWorkingDirectory": terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+            "progress": terminalState.progress.rpcValue,
             "focused": .bool(focused),
         ]
+    }
+}
+
+private extension Optional where Wrapped == PaneProgress {
+    var rpcValue: RPCValue {
+        guard let progress = self else {
+            return .null
+        }
+        return .object([
+            "state": .string(progress.state.rawValue),
+            "value": progress.value.map(RPCValue.integer) ?? .null,
+        ])
     }
 }

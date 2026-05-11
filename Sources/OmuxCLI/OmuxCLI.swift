@@ -271,6 +271,17 @@ public struct OmuxCLICommand {
                     ])
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-status":
+                guard let request = parsePaneStatusRequest(Array(commandArguments.dropFirst())) else {
+                    writeLine("usage: omux pane-status --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused --state working|indeterminate|error|needs-input|idle|clear [--value <0-100>] [--label <text>] [--message <text>] [--source <name>]")
+                    return 1
+                }
+
+                let response = try client.request(
+                    method: .paneStatus,
+                    params: request.rpcValue
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
             case "notify":
                 guard commandArguments.count >= 2 else {
                     writeLine("usage: omux notify <title> [body]")
@@ -358,6 +369,7 @@ public struct OmuxCLICommand {
       omux run <session-id> <command>
       omux run --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <command>
       omux send-text --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused -- <text>
+      omux pane-status --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused --state working|indeterminate|error|needs-input|idle|clear [--value <0-100>] [--label <text>] [--message <text>] [--source <name>]
       omux notify <title> [body]
       omux restore <workspace-id>
       omux install-cli [destination]
@@ -831,6 +843,90 @@ public struct OmuxCLICommand {
         return (
             .session(SessionID(rawValue: arguments[0])),
             arguments.dropFirst().joined(separator: " ")
+        )
+    }
+
+    private func parsePaneStatusRequest(_ arguments: [String]) -> ControlPlanePaneStatusRequest? {
+        var index = 0
+        var target: ControlPlaneTerminalTarget?
+        var state: ControlPlanePaneStatusState?
+        var value: Int?
+        var label: String?
+        var message: String?
+        var source: String?
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--session":
+                guard index + 1 < arguments.count else { return nil }
+                target = .session(SessionID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--pane", "--pane-tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .pane(PaneID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .tab(TabID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--workspace":
+                guard index + 1 < arguments.count else { return nil }
+                target = .workspace(WorkspaceID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--focused":
+                target = .focused
+                index += 1
+            case "--state":
+                guard index + 1 < arguments.count,
+                      let parsedState = ControlPlanePaneStatusState(cliValue: arguments[index + 1])
+                else {
+                    return nil
+                }
+                state = parsedState
+                index += 2
+            case "--value", "--progress":
+                guard index + 1 < arguments.count,
+                      let parsedValue = Int(arguments[index + 1])
+                else {
+                    return nil
+                }
+                value = min(max(parsedValue, 0), 100)
+                index += 2
+            case "--label":
+                guard index + 1 < arguments.count else { return nil }
+                label = arguments[index + 1]
+                index += 2
+            case "--message":
+                guard index + 1 < arguments.count else { return nil }
+                message = arguments[index + 1]
+                index += 2
+            case "--source":
+                guard index + 1 < arguments.count else { return nil }
+                source = arguments[index + 1]
+                index += 2
+            default:
+                guard state == nil,
+                      let parsedState = ControlPlanePaneStatusState(cliValue: argument)
+                else {
+                    return nil
+                }
+                state = parsedState
+                index += 1
+            }
+        }
+
+        guard let target, let state else {
+            return nil
+        }
+
+        return ControlPlanePaneStatusRequest(
+            target: target,
+            state: state,
+            value: value,
+            label: label,
+            message: message,
+            source: source
         )
     }
 

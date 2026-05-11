@@ -10,6 +10,7 @@ Plugins can:
 
 - register top-level `omux` commands
 - create, update, and close extension panes
+- mark terminal pane status with `omux pane-status`
 - call any public `omux` command
 - react to hooks and terminal text activation events
 - use their own runtime through a shebang or native executable
@@ -60,7 +61,7 @@ When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchan
 | `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
 | `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
 
-Plugins can call back into `omux extension-pane`, `omux notify`, and other public commands to interact with the running app.
+Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app.
 
 ## Minimal plugin example
 
