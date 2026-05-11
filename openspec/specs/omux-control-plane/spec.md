@@ -259,3 +259,136 @@ The local JSON-RPC control plane and `omux` CLI SHALL expose additive commands f
 - **WHEN** users invoke existing creation commands including `omux open`, `omux split`, and `omux pane-tab`
 - **THEN** those commands continue to work without being replaced by the new close/remove commands
 
+### Requirement: Control plane SHALL expose extension-pane lifecycle operations
+The local JSON-RPC control plane SHALL expose OpenMUX-native operations for creating, updating, focusing, and closing extension panes.
+
+#### Scenario: Create extension pane returns identifiers
+- **WHEN** a client creates an extension pane through the control plane
+- **THEN** the response includes the workspace, tab, pane stack, pane, plugin ID, and content kind identifiers needed for later updates
+
+#### Scenario: Update extension pane targets exact pane
+- **WHEN** a client updates extension pane content by pane ID
+- **THEN** the update applies only to that extension pane or returns a structured failure if the pane is not an extension pane
+
+### Requirement: CLI SHALL expose extension-pane commands for scripts and plugins
+The `omux` CLI SHALL expose commands that let scripts and plugin processes create and update extension panes through the public control plane.
+
+#### Scenario: CLI creates extension pane
+- **WHEN** a plugin process invokes the documented `omux` extension-pane create command
+- **THEN** the CLI sends the corresponding JSON-RPC request and prints structured result data
+
+#### Scenario: CLI updates extension pane
+- **WHEN** a plugin process invokes the documented `omux` extension-pane update command with pane ID and content
+- **THEN** the CLI sends the corresponding JSON-RPC request and prints structured result data
+
+### Requirement: CLI SHALL discover registered plugin commands
+The `omux` CLI SHALL discover user-installed plugin executables from an OpenMUX-owned plugin directory and dispatch matching top-level commands to those executables.
+
+#### Scenario: Registered plugin command runs
+- **WHEN** a user installs an executable plugin command under `~/.omux/plugins/` and invokes `omux <plugin-command> [args...]`
+- **THEN** the CLI executes that plugin process with the remaining arguments and OpenMUX plugin environment variables
+
+#### Scenario: Built-in commands take precedence
+- **WHEN** a registered plugin command name conflicts with a built-in `omux` command
+- **THEN** the CLI executes the built-in command and does not shadow it with the plugin
+
+#### Scenario: Plugin list is inspectable
+- **WHEN** a user invokes the plugin listing command
+- **THEN** the CLI reports discovered plugin command names and executable paths
+
+#### Scenario: Bundled plugin uses registry path
+- **WHEN** a bundled plugin such as Markdown preview exposes a CLI command
+- **THEN** the command is registered through the plugin command registry rather than a core-only command switch
+
+### Requirement: Terminal-mutating control-plane actions SHALL reject extension panes
+Control-plane operations that require a live terminal session SHALL return structured errors when their target resolves to an extension pane.
+
+#### Scenario: Send text to extension pane fails
+- **WHEN** a client sends terminal text to an extension pane target
+- **THEN** the control plane returns a structured failure and does not send the text to a different terminal
+
+#### Scenario: Terminal history for extension pane is unavailable
+- **WHEN** a client requests terminal history for an extension pane
+- **THEN** the response reports explicit unavailability rather than empty terminal history as success
+
+### Requirement: Event stream SHALL report extension-pane lifecycle events
+The control-plane event stream SHALL report extension-pane lifecycle and update events using OpenMUX-native event names and identifiers.
+
+#### Scenario: Extension pane created event
+- **WHEN** an extension pane is created successfully
+- **THEN** subscribers receive an event with workspace, tab, pane stack, pane, plugin ID, and content kind metadata
+
+#### Scenario: Extension pane updated event
+- **WHEN** extension pane content is updated successfully
+- **THEN** subscribers receive an event identifying the updated pane and plugin
+
+### Requirement: Control plane SHALL expose palette-discoverable CLI command metadata
+The control plane and `omux` CLI SHALL expose explicit metadata for supported CLI commands that are safe to discover and invoke from command palette command mode without collecting additional arguments. Built-in safe-default CLI command metadata MAY be declared in bundled JSON descriptors with typed `command.kind` and `command.target` fields.
+
+#### Scenario: Palette discovers supported CLI commands
+- **WHEN** command mode requests supported `omux` CLI commands
+- **THEN** OpenMUX returns command identifiers, titles, categories, descriptions, aliases, argument requirements, enabled state, and invocation targets for commands that are palette-invokable with no arguments or safe focused/default targets
+
+#### Scenario: Descriptor CLI target is allowlisted
+- **WHEN** a bundled descriptor declares `command.kind` as `builtin`
+- **THEN** OpenMUX exposes the command only if `command.target` maps to a supported typed control operation
+
+#### Scenario: Unsupported CLI command is hidden
+- **WHEN** an `omux` CLI command lacks an explicit palette-invokable metadata contract
+- **THEN** the command palette does not show or execute that command
+
+#### Scenario: Argument-requiring CLI command is hidden
+- **WHEN** an `omux` CLI command requires freeform text, a file path, or an explicit selector with no safe default
+- **THEN** the command palette does not show or execute that command in v1
+
+### Requirement: Palette CLI invocations SHALL use the public control boundary
+CLI-backed command palette selections SHALL invoke supported behavior through the same typed action/control APIs behind the local control-plane contract rather than constructing arbitrary shell command strings, spawning the `omux` executable, or looping back through JSON-RPC from inside the app.
+
+#### Scenario: Palette invokes supported CLI operation
+- **WHEN** the user selects a CLI-backed command result from command mode
+- **THEN** OpenMUX invokes the corresponding typed control operation with explicit OpenMUX-native arguments
+
+#### Scenario: Palette does not spawn omux subprocess
+- **WHEN** the app invokes a CLI-backed palette command
+- **THEN** OpenMUX does not spawn the `omux` executable as a subprocess and does not call its own JSON-RPC socket as a loopback client
+
+#### Scenario: Palette does not execute arbitrary shell text
+- **WHEN** a palette query resembles an unsupported shell command or arbitrary `omux` command string
+- **THEN** OpenMUX treats it as search text and does not execute it as shell input or a subprocess
+
+#### Scenario: Descriptor command field is not bash
+- **WHEN** a descriptor contains a `command` object
+- **THEN** OpenMUX interprets it as typed metadata and does not pass its fields to a shell interpreter
+
+### Requirement: Control plane exposes pane status mutation
+The control plane SHALL expose a provider-neutral operation for setting and clearing transient pane status through existing OpenMUX terminal selectors.
+
+#### Scenario: Hook marks a pane working
+- **WHEN** a client calls pane status with a pane selector and state `working`
+- **THEN** OpenMUX records working progress for the resolved pane without sending text to the terminal
+
+#### Scenario: Hook clears a pane status
+- **WHEN** a client calls pane status with state `clear`
+- **THEN** OpenMUX removes progress/status from the resolved pane
+
+#### Scenario: Invalid target fails explicitly
+- **WHEN** a pane status request cannot resolve its selector
+- **THEN** OpenMUX returns a target-not-found error instead of choosing a different pane
+
+### Requirement: CLI exposes pane-status automation
+The `omux` CLI SHALL expose a `pane-status` command for hooks and plugins.
+
+#### Scenario: Plugin marks focused pane status
+- **WHEN** a plugin runs `omux pane-status --focused --state working --source plugin.example`
+- **THEN** the CLI sends a pane status control-plane request for the focused terminal target
+
+#### Scenario: Status metadata is accepted
+- **WHEN** a plugin provides label, message, source, or progress value metadata
+- **THEN** OpenMUX accepts the metadata for event payloads without requiring pane chrome to render it as text
+
+### Requirement: Pane status changes are streamed as events
+The control plane SHALL publish OpenMUX-native events when pane status changes.
+
+#### Scenario: Status update appears on event stream
+- **WHEN** pane status is set or cleared successfully
+- **THEN** `omux events` subscribers receive a `pane.statusChanged` event with workspace, tab, pane, session, state, value, label, message, and source fields when available

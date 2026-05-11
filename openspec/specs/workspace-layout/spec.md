@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change workspace-shell. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: The shell SHALL support tabs and split panes
 The system SHALL provide native workspace layout behavior for top-level workspace tabs, nested split panes, and pane-local tab stacks in the AppKit shell.
 
@@ -25,3 +23,45 @@ The system SHALL represent top-level tabs, pane stacks, local pane tabs, split-t
 #### Scenario: Layout changes remain app-level behavior
 - **WHEN** a top-level tab, local tab, or split-pane action changes workspace structure
 - **THEN** the resulting state is represented by OpenMUX-native workspace models rather than terminal-engine layout internals
+
+### Requirement: Workspace layout SHALL support non-terminal pane content
+Workspace layout SHALL allow split-tree leaves and pane-local tab stacks to contain panes whose content is not backed by a terminal session.
+
+#### Scenario: Split layout contains terminal and extension panes
+- **WHEN** an extension pane is created beside a terminal pane
+- **THEN** the workspace split tree preserves both panes in the same layout model without requiring the extension pane to own a terminal session
+
+#### Scenario: Pane-local stack contains extension pane
+- **WHEN** an extension pane is added to a pane-local tab stack
+- **THEN** the stack can focus that pane while preserving sibling terminal panes in the same stack
+
+### Requirement: Workspace layout operations SHALL preserve terminal-only target resolution
+Workspace layout SHALL distinguish pane focus from terminal target resolution so actions that require a live terminal session fail explicitly when aimed at extension panes.
+
+#### Scenario: Run command rejects extension pane target
+- **WHEN** a caller targets an extension pane with a command-running action
+- **THEN** OpenMUX returns a structured failure instead of silently choosing another terminal
+
+#### Scenario: Split from extension pane is valid
+- **WHEN** a caller requests a layout split from a focused extension pane
+- **THEN** OpenMUX creates a new pane in the requested split location without needing terminal session state from the source pane
+
+#### Scenario: Split pane containing extension content can be closed
+- **WHEN** a workspace contains terminal and extension panes in separate split-tree leaves
+- **THEN** pane close actions can remove either split pane and collapse the remaining layout without requiring pane-local tab siblings
+
+### Requirement: Workspace layout SHALL support directional pane-tab drag splits
+The system SHALL allow workspace split-tree changes to be initiated by dropping a dragged pane-local tab onto a valid pane stack with a resolved direction of left, right, up, or down.
+
+#### Scenario: Directional drop updates split tree
+- **WHEN** a dragged pane-local tab is dropped onto a valid target pane stack with a resolved split direction
+- **THEN** the workspace split tree SHALL insert a new pane stack on the requested side of the target pane stack
+
+#### Scenario: Direction maps to split axis
+- **WHEN** a drag-to-split drop resolves to left or right
+- **THEN** OpenMUX SHALL use a column split, and when it resolves to up or down OpenMUX SHALL use a row split
+
+#### Scenario: Drag split uses OpenMUX layout model
+- **WHEN** a drag-to-split drop changes workspace structure
+- **THEN** the resulting state SHALL be represented by OpenMUX workspace layout nodes rather than terminal-engine layout internals
+

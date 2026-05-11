@@ -2,9 +2,7 @@
 
 ## Purpose
 Define the OpenMUX-owned theme model, built-in theme catalog, and Ghostty compilation behavior.
-
 ## Requirements
-
 ### Requirement: Themes are expressed as a fixed token vocabulary
 The system SHALL define a fixed, documented set of design tokens that themes assign colors to. The token set SHALL include surface tokens (`bg.canvas`, `bg.surface`, `bg.elevated`), text tokens (`fg.primary`, `fg.secondary`, `fg.muted`), border tokens (`border.subtle`, `border.strong`), an `accent` token, terminal-only tokens (`cursor`, `cursor.text`, `selection.bg`, `selection.fg`), and the full ANSI 16-color palette (`ansi.black` through `ansi.brightWhite`). Both the AppKit shell renderer and the Ghostty configuration compiler SHALL consume the same tokens.
 
@@ -108,7 +106,7 @@ The system SHALL write every compiled Ghostty configuration file with a header c
 - **THEN** its first non-blank lines are comments declaring OpenMUX ownership and the metadata listed above
 
 ### Requirement: Theme changes apply live
-The system SHALL recompile and re-apply the theme without restarting terminal sessions when the active theme is changed via configuration edit, when the active theme file is edited, or when an explicit reload is requested.
+The system SHALL recompile and re-apply the theme without restarting terminal sessions when the active theme is changed via configuration edit, when the active theme file is edited, when an explicit reload is requested, **or when the user selects a theme from the command palette theme switcher**.
 
 #### Scenario: Switch theme by editing config
 - **WHEN** the user edits `~/.omux/config.toml` to change `[theme] name` from `monokai-soda` to `nord`
@@ -117,6 +115,18 @@ The system SHALL recompile and re-apply the theme without restarting terminal se
 #### Scenario: Edit active theme file
 - **WHEN** the user edits a token value in `~/.omux/themes/<active>.toml`
 - **THEN** the chrome and the engine reflect the new token value without any terminal session being killed
+
+#### Scenario: Switch theme from command palette
+- **WHEN** the user selects a theme from the command palette theme switcher and confirms
+- **THEN** `~/.omux/config.toml` is updated with the new theme name, the chrome and engine both reflect the new theme without any terminal session being killed, and the configuration coordinator fires `onThemeChange`
+
+#### Scenario: Preview theme from command palette
+- **WHEN** the user highlights a theme in the command palette theme switcher without confirming
+- **THEN** the chrome reflects the previewed theme immediately; `~/.omux/config.toml` is NOT modified
+
+#### Scenario: Cancel theme preview from command palette
+- **WHEN** the user presses ESC after previewing one or more themes in the command palette
+- **THEN** the chrome reverts to the theme that was active before the sub-palette was opened; `~/.omux/config.toml` is NOT modified
 
 ### Requirement: Stale generated artifacts are garbage-collected
 The system SHALL remove generated Ghostty configuration files that are not the current active artifact and that are older than a documented retention threshold or were produced by a different OpenMUX build. Garbage collection SHALL run at most once per OpenMUX launch and SHALL NOT block startup.
@@ -128,3 +138,15 @@ The system SHALL remove generated Ghostty configuration files that are not the c
 #### Scenario: Active artifact is never deleted
 - **WHEN** garbage collection runs
 - **THEN** the file currently in use by the running engine is preserved regardless of age
+
+### Requirement: Configuration coordinator exposes programmatic theme selection
+The `OpenMUXConfigurationCoordinator` SHALL expose a `setTheme(identifier:)` method that persists the given theme identifier to `~/.omux/config.toml` and triggers the `onThemeChange` callback with the newly loaded theme.
+
+#### Scenario: setTheme persists and notifies
+- **WHEN** `setTheme(identifier: "nord")` is called on the coordinator
+- **THEN** `~/.omux/config.toml` is updated to set `[theme] name = "nord"` and `onThemeChange` fires with the `nord` theme
+
+#### Scenario: setTheme with unknown identifier
+- **WHEN** `setTheme(identifier: "nonexistent-theme")` is called
+- **THEN** the method returns an error and `~/.omux/config.toml` is NOT modified
+
