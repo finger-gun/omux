@@ -6,17 +6,20 @@ import XCTest
 final class WorkspaceLayoutPersistenceCoordinatorTests: XCTestCase {
     func testScheduleLayoutSaveCoalescesMultipleRequests() async {
         var saveCount = 0
+        let persisted = expectation(description: "layout persisted once")
         let coordinator = WorkspaceLayoutPersistenceCoordinator(
             debounceNanoseconds: 20_000_000,
+            sleep: { _ in },
             persistLayout: {
                 saveCount += 1
+                persisted.fulfill()
             }
         )
 
         coordinator.scheduleLayoutSave()
         coordinator.scheduleLayoutSave()
         coordinator.scheduleLayoutSave()
-        try? await Task.sleep(nanoseconds: 60_000_000)
+        await fulfillment(of: [persisted], timeout: 1)
 
         XCTAssertEqual(saveCount, 1)
     }

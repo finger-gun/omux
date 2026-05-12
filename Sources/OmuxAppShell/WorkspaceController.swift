@@ -1854,17 +1854,23 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func moveActiveWorkspaceUp() -> Workspace? {
+        lock.lock()
         guard let activeWorkspaceID, let activeWorkspaceIndex else {
+            lock.unlock()
             return nil
         }
+        lock.unlock()
         return moveWorkspace(activeWorkspaceID, toDisplayIndex: activeWorkspaceIndex - 1)
     }
 
     @discardableResult
     public func moveActiveWorkspaceDown() -> Workspace? {
+        lock.lock()
         guard let activeWorkspaceID, let activeWorkspaceIndex else {
+            lock.unlock()
             return nil
         }
+        lock.unlock()
         return moveWorkspace(activeWorkspaceID, toDisplayIndex: activeWorkspaceIndex + 1)
     }
 
@@ -2040,6 +2046,7 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private var activeWorkspaceIndex: Int? {
+        // Lock must be held by caller.
         guard let activeWorkspaceID else {
             return nil
         }
