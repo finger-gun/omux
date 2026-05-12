@@ -107,6 +107,8 @@ public struct OmuxCLICommand {
                 return runConfigCommand(arguments: Array(commandArguments.dropFirst()))
             case "theme":
                 return runThemeCommand(arguments: Array(commandArguments.dropFirst()))
+            case "hook", "hooks":
+                return runHookRegistryCommand(arguments: Array(commandArguments.dropFirst()))
             case "plugin", "plugins":
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
             case "version", "--version":
@@ -348,6 +350,8 @@ public struct OmuxCLICommand {
         }
 
         switch subcommand {
+        case "discover", "install", "uninstall", "update":
+            return runExtensionRegistryCommand(kind: .plugin, arguments: arguments)
         case "list":
             guard arguments.count == 1 else {
                 writeLine("usage: omux plugin list")
@@ -372,6 +376,182 @@ public struct OmuxCLICommand {
         default:
             writeLine("usage: omux plugins OR omux plugin list|path")
             return 1
+        }
+    }
+
+    private func runHookRegistryCommand(arguments: [String]) -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux hooks discover|install|uninstall|update")
+            return 1
+        }
+        switch subcommand {
+        case "discover", "install", "uninstall", "update":
+            return runExtensionRegistryCommand(kind: .hook, arguments: arguments)
+        default:
+            writeLine("usage: omux hooks discover|install|uninstall|update")
+            return 1
+        }
+    }
+
+    private struct ExtensionRegistryCommandOptions {
+        var packageID: String?
+        var registryURLs: [String] = []
+        var json = false
+        var yes = false
+    }
+
+    private func runExtensionRegistryCommand(kind: OmuxExtensionPackageKind, arguments: [String]) -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine(extensionRegistryUsage(kind: kind))
+            return 1
+        }
+
+        do {
+            let options = try parseExtensionRegistryOptions(Array(arguments.dropFirst()), requiresPackageID: subcommand != "discover")
+            let installer = OmuxExtensionInstaller()
+            switch subcommand {
+            case "discover":
+                let packages = try installer.discover(kind: kind, registryURLs: registryURLs(kind: kind, overrides: options.registryURLs))
+                printExtensionPackages(packages, json: options.json)
+                return 0
+            case "install":
+                guard let packageID = options.packageID else {
+                    writeLine(extensionRegistryUsage(kind: kind))
+                    return 1
+                }
+                let registryURLs = try registryURLs(kind: kind, overrides: options.registryURLs)
+                let plan = try installer.planInstall(kind: kind, id: packageID, registryURLs: registryURLs)
+                try confirmExtensionInstall(package: plan.package, manifest: plan.manifest, targets: plan.plannedTargets, yes: options.yes)
+                let installed = try installer.install(kind: kind, id: packageID, registryURLs: registryURLs)
+                writeLine("Installed \(kind.rawValue) \(installed.package.id) \(installed.manifest.version).")
+                return 0
+            case "uninstall":
+                guard let packageID = options.packageID else {
+                    writeLine(extensionRegistryUsage(kind: kind))
+                    return 1
+                }
+                let receipt = try installer.uninstall(kind: kind, id: packageID)
+                writeLine("Uninstalled \(kind.rawValue) \(receipt.id) \(receipt.version).")
+                return 0
+            case "update":
+                guard let packageID = options.packageID else {
+                    writeLine(extensionRegistryUsage(kind: kind))
+                    return 1
+                }
+                let receipt = try installer.readReceipt(kind: kind, id: packageID)
+                let plan = try installer.planInstall(kind: kind, id: packageID, registryURLs: [receipt.registry])
+                try confirmExtensionInstall(package: plan.package, manifest: plan.manifest, targets: plan.plannedTargets, yes: options.yes)
+                let updated = try installer.update(kind: kind, id: packageID)
+                writeLine("Updated \(kind.rawValue) \(updated.package.id) to \(updated.manifest.version).")
+                return 0
+            default:
+                writeLine(extensionRegistryUsage(kind: kind))
+                return 1
+            }
+        } catch let error as OmuxExtensionRegistryError {
+            writeLine("omux error: \(error.description)")
+            return 1
+        } catch {
+            writeLine("omux error: \(error)")
+            return 1
+        }
+    }
+
+    private func parseExtensionRegistryOptions(_ arguments: [String], requiresPackageID: Bool) throws -> ExtensionRegistryCommandOptions {
+        var options = ExtensionRegistryCommandOptions()
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--registry":
+                guard index + 1 < arguments.count else {
+                    throw OmuxExtensionRegistryError.invalidRegistryURL("")
+                }
+                options.registryURLs.append(arguments[index + 1])
+                index += 2
+            case "--json":
+                options.json = true
+                index += 1
+            case "--yes", "-y":
+                options.yes = true
+                index += 1
+            default:
+                guard arguments[index].hasPrefix("--") == false, options.packageID == nil else {
+                    throw OmuxExtensionRegistryError.invalidManifest("unsupported arguments")
+                }
+                options.packageID = arguments[index]
+                index += 1
+            }
+        }
+        if requiresPackageID, options.packageID == nil {
+            throw OmuxExtensionRegistryError.packageNotFound("<id>")
+        }
+        return options
+    }
+
+    private func registryURLs(kind: OmuxExtensionPackageKind, overrides: [String]) throws -> [String] {
+        if overrides.isEmpty == false {
+            return overrides
+        }
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            _ = printDiagnosticsAndReturnCode(configResult.diagnostics)
+            throw OmuxExtensionRegistryError.invalidCatalog("configuration has errors")
+        }
+        switch kind {
+        case .hook:
+            return configResult.config.registries.hooks
+        case .plugin:
+            return configResult.config.registries.plugins
+        }
+    }
+
+    private func printExtensionPackages(_ packages: [OmuxExtensionCatalogPackage], json: Bool) {
+        if json {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(packages), let output = String(data: data, encoding: .utf8) {
+                writeLine(output)
+            }
+            return
+        }
+        guard packages.isEmpty == false else {
+            writeLine("No packages found.")
+            return
+        }
+        for package in packages {
+            writeLine("\(package.id)\t\(package.version)\t\(package.name)\t\(package.registry)")
+        }
+    }
+
+    private func confirmExtensionInstall(
+        package: OmuxExtensionCatalogPackage,
+        manifest: OmuxExtensionPackageManifest,
+        targets: [URL],
+        yes: Bool
+    ) throws {
+        writeLine("Package: \(package.id) \(manifest.version)")
+        writeLine("Source: \(package.registry)")
+        writeLine("Targets:")
+        for target in targets {
+            writeLine("  \(target.path)")
+        }
+        if yes {
+            return
+        }
+        writeLine("Install executable \(package.kind.rawValue) package? [y/N]")
+        guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["y", "yes"].contains(input)
+        else {
+            throw OmuxExtensionRegistryError.confirmationRequired
+        }
+    }
+
+    private func extensionRegistryUsage(kind: OmuxExtensionPackageKind) -> String {
+        switch kind {
+        case .hook:
+            return "usage: omux hooks discover|install|uninstall|update"
+        case .plugin:
+            return "usage: omux plugins discover|install|uninstall|update OR omux plugin list|path"
         }
     }
 
@@ -499,6 +679,7 @@ public struct OmuxCLICommand {
             workspace: current.workspace,
             ui: current.ui,
             plugins: plugins,
+            registries: current.registries,
             keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
@@ -1256,6 +1437,7 @@ public struct OmuxCLICommand {
                 icons: current.ui.icons
             ),
             plugins: current.plugins,
+            registries: current.registries,
             keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
@@ -1414,6 +1596,7 @@ public struct OmuxCLICommand {
             workspace: current.workspace,
             ui: current.ui,
             plugins: current.plugins,
+            registries: current.registries,
             keyBindings: current.keyBindings,
             ghostty: current.ghostty,
             sourceURL: configURL
@@ -1517,6 +1700,11 @@ public struct OmuxCLICommand {
         lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
         lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
         lines.append("theme = \(render(.string(markdownPreview.theme)))")
+
+        lines.append("")
+        lines.append("[registries]")
+        lines.append("hooks = \(render(.array(config.registries.hooks.map(OmuxTOMLValue.string))))")
+        lines.append("plugins = \(render(.array(config.registries.plugins.map(OmuxTOMLValue.string))))")
 
         lines.append("")
         lines.append("[keys]")
