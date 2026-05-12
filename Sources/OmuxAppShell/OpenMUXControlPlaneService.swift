@@ -85,16 +85,19 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
 
     private let controller: WorkspaceController
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
+    private let extensionPaneActionService: ExtensionPaneActionService
     private let server: LocalControlServer
     private let terminalEventBroadcaster = TerminalEventBroadcaster()
 
     init(
         controller: WorkspaceController,
         configurationCoordinator: OpenMUXConfigurationCoordinator,
+        extensionPaneActionService: ExtensionPaneActionService? = nil,
         socketPath: String = ControlPlaneSocket.defaultPath()
     ) {
         self.controller = controller
         self.configurationCoordinator = configurationCoordinator
+        self.extensionPaneActionService = extensionPaneActionService ?? ExtensionPaneActionService(controller: controller)
         self.server = LocalControlServer(socketPath: socketPath)
     }
 
@@ -394,6 +397,16 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "extension pane not found"))
             }
             return JSONRPCResponse(id: request.id, result: .object(result.rpcObject))
+        case .extensionPaneAction:
+            guard let actionRequest = extensionPaneActionRequest(params: request.params?.objectValue) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid extension pane action"))
+            }
+            do {
+                let response = try extensionPaneActionService.dispatch(actionRequest)
+                return JSONRPCResponse(id: request.id, result: .object(response.rpcObject))
+            } catch {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: String(describing: error)))
+            }
         case .closeExtensionPane:
             guard let paneID = request.params?.objectValue?["paneID"]?.stringValue.map(PaneID.init(rawValue:)) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing paneID"))
@@ -433,6 +446,23 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                     "diagnostics": .array(result.diagnostics.map(\.rpcValue)),
                 ])
             )
+        case .configGet:
+            return JSONRPCResponse(id: request.id, result: try rpcValue(for: OmuxConfigExporter().export()))
+        case .configApply:
+            guard let jsonFile = request.params?.objectValue?["jsonFile"]?.stringValue else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "jsonFile is required"))
+            }
+            let result = try OmuxConfigEditor().apply(jsonFileURL: URL(fileURLWithPath: jsonFile))
+            if result.diagnostics.contains(where: { $0.severity.isError }) {
+                return JSONRPCResponse(id: request.id, result: try rpcValue(for: result))
+            }
+            let reloadResult = configurationCoordinator.reload()
+            var value = try rpcValue(for: result).objectValue ?? [:]
+            value["reload"] = .object([
+                "applied": .bool(reloadResult.applied),
+                "diagnostics": .array(reloadResult.diagnostics.map(\.rpcValue)),
+            ])
+            return JSONRPCResponse(id: request.id, result: .object(value))
         case .terminalEvents:
             return JSONRPCResponse(
                 id: request.id,
@@ -506,8 +536,35 @@ private func extensionPaneDescriptor(pluginID: String, params: [String: RPCValue
         source: params["source"]?.stringValue,
         html: params["html"]?.stringValue,
         status: status,
-        message: params["message"]?.stringValue
+        message: params["message"]?.stringValue,
+        actionsEnabled: params["actionsEnabled"]?.boolValue == true
     )
+}
+
+private func extensionPaneActionRequest(params: [String: RPCValue]?) -> ExtensionPaneActionRequest? {
+    guard let params,
+          let paneID = params["paneID"]?.stringValue.map(PaneID.init(rawValue:)),
+          let pluginID = params["pluginID"]?.stringValue,
+          let action = params["action"]?.stringValue
+    else {
+        return nil
+    }
+    return ExtensionPaneActionRequest(
+        paneID: paneID,
+        pluginID: pluginID,
+        action: action,
+        payload: params["payload"]?.omuxValue ?? .object([:])
+    )
+}
+
+private extension ExtensionPaneActionResponse {
+    var rpcObject: [String: RPCValue] {
+        [
+            "success": .bool(success),
+            "message": message.map(RPCValue.string) ?? .null,
+            "payload": RPCValue(payload),
+        ]
+    }
 }
 
 private func mainActorSyncThrowing<T: Sendable>(_ body: @MainActor () throws -> T) throws -> T {
@@ -521,6 +578,11 @@ private func mainActorSyncThrowing<T: Sendable>(_ body: @MainActor () throws -> 
         }
     }
     return try result.get()
+}
+
+private func rpcValue<T: Encodable>(for value: T) throws -> RPCValue {
+    let data = try JSONEncoder().encode(value)
+    return try JSONDecoder().decode(RPCValue.self, from: data)
 }
 
 private extension RPCValue {

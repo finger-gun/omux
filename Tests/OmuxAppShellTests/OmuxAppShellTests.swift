@@ -59,6 +59,16 @@ final class OmuxAppShellTests: XCTestCase {
         return root
     }
 
+    private func temporaryDirectory() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func shellSingleQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
     private static func release(version: String) -> OpenMUXRelease {
         OpenMUXRelease(
             tagName: "v\(version)",
@@ -89,10 +99,12 @@ final class OmuxAppShellTests: XCTestCase {
         let workspaceMenu = menus.first { $0.title == "Workspace" }
         let paneMenu = menus.first { $0.title == "Pane" }
         let viewMenu = menus.first { $0.title == "View" }
+        let configurationMenu = menus.first { $0.title == "Configuration" }
         let resizeSplitMenu = paneMenu?.items.first { $0.title == "Resize Split" }?.submenu
         XCTAssertNotNil(workspaceMenu)
         XCTAssertNotNil(paneMenu)
         XCTAssertNotNil(viewMenu)
+        XCTAssertNotNil(configurationMenu)
         XCTAssertNotNil(resizeSplitMenu)
 
         XCTAssertTrue(workspaceMenu?.items.containsShortcut(
@@ -193,6 +205,105 @@ final class OmuxAppShellTests: XCTestCase {
             key: String(UnicodeScalar(NSRightArrowFunctionKey)!),
             modifiers: [.command, .control]
         ) ?? false)
+        XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Open" })
+        XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Reload" })
+    }
+
+    func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        try """
+        schema = 1
+        id = "settings-ui"
+        name = "Settings UI"
+        description = "Edit OpenMUX settings."
+        version = "0.1.0"
+        kind = "plugin"
+
+        [plugin]
+        command = "settings-ui"
+        entrypoint = "plugin"
+
+        [menu.configuration.open-settings]
+        location = "Configuration"
+        title = "Open Settings"
+        command = "settings-ui"
+        arguments = []
+
+        [menu.configuration.reload]
+        location = "Configuration"
+        title = "Reload Config"
+        builtin = "config.reload"
+        """.write(to: pluginDirectory.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+
+        let contributions = PluginMenuContributionRegistry(pluginsDirectoryURL: pluginsDirectory).contributions()
+
+        XCTAssertEqual(contributions.map(\.title), ["Open Settings", "Reload Config"])
+        XCTAssertEqual(contributions.map(\.location), ["Configuration", "Configuration"])
+        guard case .plugin(let command, let arguments, let executable)? = contributions.first?.target else {
+            return XCTFail("expected plugin contribution")
+        }
+        XCTAssertEqual(command, "settings-ui")
+        XCTAssertEqual(arguments, [])
+        XCTAssertEqual(executable.standardizedFileURL, executableURL.standardizedFileURL)
+        guard case .builtin("config.reload")? = contributions.last?.target else {
+            return XCTFail("expected builtin contribution")
+        }
+    }
+
+    func testPluginMenuContributionRegistryReportsInvalidTargetsAndRefreshesFromDisk() throws {
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        let manifestURL = pluginDirectory.appendingPathComponent("omux-plugin.toml")
+        try """
+        schema = 1
+        id = "settings-ui"
+        kind = "plugin"
+
+        [plugin]
+        command = "settings-ui"
+        entrypoint = "plugin"
+
+        [menu.configuration.bad]
+        location = "Configuration"
+        title = "Bad"
+        builtin = "terminal.run-shell"
+        """.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let registry = PluginMenuContributionRegistry(pluginsDirectoryURL: pluginsDirectory)
+        let invalid = registry.load()
+        XCTAssertTrue(invalid.contributions.isEmpty)
+        XCTAssertTrue(invalid.diagnostics.first?.message.contains("unsupported builtin target") ?? false)
+
+        try FileManager.default.removeItem(at: manifestURL)
+        try """
+        schema = 1
+        id = "settings-ui"
+        kind = "plugin"
+
+        [plugin]
+        command = "settings-ui"
+        entrypoint = "plugin"
+
+        [menu.configuration.open]
+        location = "Configuration"
+        title = "Open Settings"
+        command = "settings-ui"
+        """.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(registry.contributions().map(\.title), ["Open Settings"])
+        try FileManager.default.removeItem(at: pluginDirectory)
+        XCTAssertTrue(registry.contributions().isEmpty)
     }
 
     @MainActor
@@ -282,6 +393,168 @@ final class OmuxAppShellTests: XCTestCase {
         let withSplit = try XCTUnwrap(controller.splitFocusedPane())
         XCTAssertEqual(withSplit.focusedTab?.panes.count, 2)
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
+    }
+
+    func testExtensionPaneActionDispatchInvokesOwningPlugin() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        let captureURL = root.appendingPathComponent("action.json")
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try """
+        #!/bin/sh
+        test "$1" = "__omux_action" || exit 9
+        cat > \(shellSingleQuoted(captureURL.path))
+        printf '{"success":true,"message":"ok","payload":{"saved":true}}\\n'
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "Settings",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "settings-ui",
+                contentKind: .html,
+                html: "<button>Save</button>",
+                actionsEnabled: true
+            )
+        ))
+        let service = ExtensionPaneActionService(controller: controller, pluginsDirectoryURL: pluginsDirectory)
+
+        let response = try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "settings-ui",
+            action: "save",
+            payload: .object(["theme": .string("default")])
+        ))
+
+        XCTAssertTrue(response.success)
+        XCTAssertEqual(response.message, "ok")
+        let captured = try String(contentsOf: captureURL, encoding: .utf8)
+        XCTAssertTrue(captured.contains("\"action\":\"save\""))
+        XCTAssertTrue(captured.contains("\"pluginID\":\"settings-ui\""))
+        XCTAssertTrue(captured.contains("\"paneID\":\"\(result.pane.id.rawValue)\""))
+    }
+
+    func testExtensionPaneActionRejectsWrongPluginMalformedPayloadAndShellAction() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\nexit 0\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "Settings",
+            descriptor: ExtensionPaneDescriptor(pluginID: "settings-ui", contentKind: .html, html: "<p></p>", actionsEnabled: true)
+        ))
+        let service = ExtensionPaneActionService(controller: controller, pluginsDirectoryURL: pluginsDirectory)
+
+        XCTAssertThrowsError(try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "other-plugin",
+            action: "save",
+            payload: .object([:])
+        ))) { error in
+            XCTAssertTrue(String(describing: error).contains("settings-ui"))
+        }
+
+        XCTAssertThrowsError(try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "settings-ui",
+            action: "save",
+            payload: .string("not-json-object")
+        ))) { error in
+            XCTAssertTrue(String(describing: error).contains("payload must be a JSON object"))
+        }
+
+        XCTAssertThrowsError(try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "settings-ui",
+            action: "run-shell",
+            payload: .object(["command": .string("echo should-not-run")])
+        ))) { error in
+            XCTAssertTrue(String(describing: error).contains("unsupported extension pane action"))
+        }
+    }
+
+    func testExtensionPaneActionReportsPluginFailure() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\necho nope >&2\nexit 12\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "Settings",
+            descriptor: ExtensionPaneDescriptor(pluginID: "settings-ui", contentKind: .html, html: "<p></p>", actionsEnabled: true)
+        ))
+        let service = ExtensionPaneActionService(controller: controller, pluginsDirectoryURL: pluginsDirectory)
+
+        XCTAssertThrowsError(try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "settings-ui",
+            action: "save",
+            payload: .object([:])
+        ))) { error in
+            XCTAssertTrue(String(describing: error).contains("status 12"))
+            XCTAssertTrue(String(describing: error).contains("nope"))
+        }
+    }
+
+    func testExtensionPaneActionsDoNotAlterTerminalTextRouting() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        try controller.sendText(target: .pane(terminalPaneID), text: "å´Ω")
+
+        let root = try temporaryDirectory()
+        let pluginsDirectory = root.appendingPathComponent("plugins", isDirectory: true)
+        let pluginDirectory = pluginsDirectory.appendingPathComponent("settings-ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        try "#!/bin/sh\ncat >/dev/null\nprintf '{\"success\":true}\\n'\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "Settings",
+            descriptor: ExtensionPaneDescriptor(pluginID: "settings-ui", contentKind: .html, html: "<input>", actionsEnabled: true)
+        ))
+        let service = ExtensionPaneActionService(controller: controller, pluginsDirectoryURL: pluginsDirectory)
+
+        _ = try service.dispatch(ExtensionPaneActionRequest(
+            paneID: result.pane.id,
+            pluginID: "settings-ui",
+            action: "save",
+            payload: .object(["value": .string("Option/dead-key text stays in pane")])
+        ))
+        XCTAssertEqual(runtime.currentInputText(), "å´Ω")
+
+        try controller.sendText(target: .pane(terminalPaneID), text: "β")
+        XCTAssertEqual(runtime.currentInputText(), "å´Ωβ")
     }
 
     func testCommandPaletteWorkspaceInvocationAndSearchAreReadOnly() throws {
