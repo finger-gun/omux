@@ -18,6 +18,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     var resultProvider: ((String) -> [CommandPaletteResult])?
     var invokeResult: ((CommandPaletteResult) -> CommandPaletteInvocationResult)?
     var dismissHandler: (() -> Void)?
+    var iconProvider: ((String) -> NSImage?)?
 
     var subPalettePreviewHandler: ((String) -> Void)?
     var subPaletteCommitHandler: ((String) -> Void)?
@@ -187,6 +188,17 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     override var acceptsFirstResponder: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard panel.frame.contains(point) else {
+            dismissAndRestoreFocus()
+            return
+        }
+
+        window?.makeFirstResponder(searchField)
+        super.mouseDown(with: event)
+    }
+
     func present(initialQuery: String, restoring responder: NSResponder?) {
         focusRestoreResponder = responder
         searchField.stringValue = initialQuery
@@ -326,7 +338,17 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
 
         for (index, result) in results.enumerated() {
+<<<<<<< HEAD
             let row = CommandPaletteResultRow(result: result, isSelected: index == selectedIndex, theme: currentTheme)
+            row.clickHandler = { [weak self] clickedRow in
+                self?.resultRowClicked(clickedRow)
+            }
+            row.hoverHandler = { [weak self] hoveredRow in
+                self?.updateSelection(to: hoveredRow.rowIndex)
+            }
+            row.rowIndex = index
+=======
+            let row = CommandPaletteResultRow(result: result, isSelected: index == selectedIndex, theme: currentTheme, iconProvider: iconProvider)
             row.clickHandler = { [weak self] clickedRow in
                 self?.resultRowClicked(clickedRow)
             }
@@ -480,10 +502,13 @@ final class CommandPaletteResultRow: NSView {
     private let result: CommandPaletteResult
     private var selected: Bool
     private var theme: WorkspaceShellTheme
+    private let iconProvider: ((String) -> NSImage?)?
 
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let reasonLabel = NSTextField(labelWithString: "")
+    private let rightStack = NSStackView()
+    private let appIconView = NSImageView()
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let checkmarkView = NSImageView()
 
@@ -497,10 +522,11 @@ final class CommandPaletteResultRow: NSView {
     var hoverHandler: ((CommandPaletteResultRow) -> Void)?
     var rowIndex: Int = 0
 
-    init(result: CommandPaletteResult, isSelected: Bool, theme: WorkspaceShellTheme) {
+    init(result: CommandPaletteResult, isSelected: Bool, theme: WorkspaceShellTheme, iconProvider: ((String) -> NSImage?)?) {
         self.result = result
         self.selected = isSelected
         self.theme = theme
+        self.iconProvider = iconProvider
         super.init(frame: .zero)
 
         wantsLayer = true
@@ -542,7 +568,21 @@ final class CommandPaletteResultRow: NSView {
         shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(shortcutLabel)
+
+        appIconView.imageScaling = .scaleProportionallyDown
+        appIconView.setContentHuggingPriority(.required, for: .horizontal)
+        appIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            appIconView.widthAnchor.constraint(equalToConstant: 16),
+            appIconView.heightAnchor.constraint(equalToConstant: 16),
+        ])
+
+        rightStack.orientation = .horizontal
+        rightStack.spacing = 5
+        rightStack.alignment = .centerY
+        rightStack.setViews([appIconView, shortcutLabel], in: .leading)
+        rightStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rightStack)
 
         let checkmarkCfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
         checkmarkView.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
@@ -564,14 +604,14 @@ final class CommandPaletteResultRow: NSView {
 
                 titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
                 titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -12),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -12),
 
                 reasonLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
                 reasonLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-                reasonLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -12),
+                reasonLabel.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -12),
 
-                shortcutLabel.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
-                shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+                rightStack.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
+                rightStack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
                 checkmarkView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
                 checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -588,10 +628,10 @@ final class CommandPaletteResultRow: NSView {
 
                 titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
                 titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -12),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -12),
 
-                shortcutLabel.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
-                shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+                rightStack.trailingAnchor.constraint(equalTo: checkmarkView.leadingAnchor, constant: -8),
+                rightStack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
                 checkmarkView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
                 checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -672,15 +712,21 @@ final class CommandPaletteResultRow: NSView {
         titleLabel.stringValue = result.title
         titleLabel.textColor = result.isEnabled ? colors.textPrimary : colors.textMuted
 
-        // Disabled reason
+        // Secondary line: disabled reason only
         reasonLabel.stringValue = result.disabledReason ?? ""
         reasonLabel.textColor = colors.textMuted
         reasonLabel.isHidden = result.disabledReason == nil
 
-        // Shortcut
-        shortcutLabel.stringValue = result.shortcutLabel ?? ""
+        // Shortcut label, or subtitle (e.g. "Opens in Xcode") when no shortcut is bound
+        let rightLabel = result.shortcutLabel ?? result.subtitle
+        shortcutLabel.stringValue = rightLabel ?? ""
         shortcutLabel.textColor = colors.textMuted
-        shortcutLabel.isHidden = result.shortcutLabel == nil
+        shortcutLabel.isHidden = rightLabel == nil
+
+        // App icon — shown next to the label when an icon is provided and no keybinding occupies the slot
+        let appIcon = result.shortcutLabel == nil ? iconProvider?(result.id) : nil
+        appIconView.image = appIcon
+        appIconView.isHidden = appIcon == nil
 
         checkmarkView.contentTintColor = colors.accent
         checkmarkView.isHidden = !result.isActive

@@ -650,6 +650,11 @@ final class WorkspaceShellViewController: NSViewController {
         }
         paletteView.apply(theme: currentTheme)
 
+        let configOpenContext = resolvedConfigOpenContext()
+        paletteView.iconProvider = { id in
+            id == "cli:omux.config.open" ? configOpenContext?.icon : nil
+        }
+
         paletteView.resultProvider = { [weak self] query in
             guard let self else { return [] }
             let parsed = CommandPaletteParsedQuery(rawText: query)
@@ -662,7 +667,11 @@ final class WorkspaceShellViewController: NSViewController {
             case .command:
                 return CommandPaletteSearch.commandResults(
                     query: parsed.matchingText,
-                    commands: CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: keyBindings)
+                    commands: CommandPaletteCommandCatalog.commands(
+                        controller: controller,
+                        keyBindings: keyBindings,
+                        subtitleOverrides: configOpenContext.map { ["cli:omux.config.open": $0.subtitle] } ?? [:]
+                    )
                 )
             }
         }
@@ -679,6 +688,10 @@ final class WorkspaceShellViewController: NSViewController {
                 themeBeforeSubPalette = currentTheme
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
                 return .inert
+            }
+            if result.invocationTarget == .configOpen {
+                NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
+                return .invoked
             }
             return controller.invokeCommandPaletteResult(result)
         }
@@ -709,6 +722,32 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
         paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
+    }
+
+    private struct ConfigOpenContext {
+        let subtitle: String
+        let icon: NSImage
+    }
+
+    private func resolvedConfigOpenContext() -> ConfigOpenContext? {
+        guard let appURL = resolveDefaultAppForTOML() else { return nil }
+        let appBundle = Bundle(url: appURL)
+        let appName = appBundle?.infoDictionary?["CFBundleDisplayName"] as? String
+            ?? appBundle?.infoDictionary?["CFBundleName"] as? String
+            ?? appURL.deletingPathExtension().lastPathComponent
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        return ConfigOpenContext(subtitle: "Opens in \(appName)", icon: icon)
+    }
+
+    private func resolveDefaultAppForTOML() -> URL? {
+        let configURL = OmuxConfigPaths.configFileURL
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            return NSWorkspace.shared.urlForApplication(toOpen: configURL)
+        }
+        let probe = FileManager.default.temporaryDirectory.appendingPathComponent("omux-probe.toml")
+        guard (try? "".write(to: probe, atomically: true, encoding: .utf8)) != nil else { return nil }
+        defer { try? FileManager.default.removeItem(at: probe) }
+        return NSWorkspace.shared.urlForApplication(toOpen: probe)
     }
 
     private func presentRenamePanePrompt(paneID: PaneID, currentTitle: String) {

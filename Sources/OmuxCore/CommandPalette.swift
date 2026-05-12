@@ -33,6 +33,7 @@ public enum CommandPaletteInvocationTarget: Equatable, Sendable {
     case action(OpenMUXKeyBindingAction)
     case cliCommand(String)
     case themeSwitch
+    case configOpen
 }
 
 public struct CommandPaletteResult: Equatable, Sendable {

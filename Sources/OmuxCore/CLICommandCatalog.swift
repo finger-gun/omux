@@ -5,6 +5,7 @@ public enum OpenMUXCLIPaletteExecution: Equatable, Sendable {
     case createWorkspaceTab
     /// Sends the command as text to the focused terminal tab and submits it.
     case sendToTerminal
+    case configOpen
     case unavailable(String)
 }
 
@@ -16,6 +17,7 @@ public struct OpenMUXCLICommandSpec: Equatable, Sendable {
     public let aliases: [String]
     public let requiresArguments: Bool
     public let hasSafeDefaultTarget: Bool
+    public let includeInUsage: Bool
     public let paletteExecution: OpenMUXCLIPaletteExecution
     private let explicitDisabledReason: String?
 
@@ -27,6 +29,7 @@ public struct OpenMUXCLICommandSpec: Equatable, Sendable {
         aliases: [String] = [],
         requiresArguments: Bool = false,
         hasSafeDefaultTarget: Bool = true,
+        includeInUsage: Bool = true,
         disabledReason: String? = nil,
         paletteExecution: OpenMUXCLIPaletteExecution
     ) {
@@ -37,6 +40,7 @@ public struct OpenMUXCLICommandSpec: Equatable, Sendable {
         self.aliases = aliases
         self.requiresArguments = requiresArguments
         self.hasSafeDefaultTarget = hasSafeDefaultTarget
+        self.includeInUsage = includeInUsage
         self.paletteExecution = paletteExecution
         self.explicitDisabledReason = disabledReason
     }
@@ -112,6 +116,23 @@ public enum OpenMUXCLICommandCatalog {
             summary: "Write a starter OpenMUX configuration file",
             aliases: ["configuration init", "starter config"],
             paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.config.open",
+            usage: "omux config open",
+            title: "omux: Open Config",
+            summary: "Open the OpenMUX configuration file in the default editor",
+            aliases: ["configuration open", "edit config", "open settings", "system editor", "default app"],
+            paletteExecution: .configOpen
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.config.open-terminal",
+            usage: "omux config open",
+            title: "omux: Open Config in Terminal Editor",
+            summary: "Open the OpenMUX configuration file with VISUAL or EDITOR in the focused terminal",
+            aliases: ["configuration open terminal", "edit config terminal", "terminal editor", "visual editor"],
+            includeInUsage: false,
+            paletteExecution: .unavailable("Requires a focused terminal")
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.inactive-opacity",
@@ -475,7 +496,10 @@ public enum OpenMUXCLICommandCatalog {
     ]
 
     public static let usage: String = {
-        let lines = commands.map { "  \($0.usage)" }.joined(separator: "\n")
+        let lines = commands
+            .filter(\.includeInUsage)
+            .map { "  \($0.usage)" }
+            .joined(separator: "\n")
         return """
         OpenMUX CLI
 
