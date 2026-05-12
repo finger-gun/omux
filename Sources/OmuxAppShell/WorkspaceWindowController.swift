@@ -2125,7 +2125,10 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         if descriptor.actionsEnabled {
-            webView.configuration.userContentController.add(self, name: "omuxAction")
+            webView.configuration.userContentController.add(
+                WeakScriptMessageHandler(delegate: self),
+                name: "omuxAction"
+            )
         }
         container.addSubview(webView)
 
@@ -2156,10 +2159,6 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         apply(theme: theme)
         updateFocusState(isFocused)
         renderContent(theme: theme)
-    }
-
-    deinit {
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "omuxAction")
     }
 
     @available(*, unavailable)
@@ -2349,6 +2348,19 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         default:
             return nil
         }
+    }
+}
+
+@MainActor
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var delegate: (any WKScriptMessageHandler)?
+
+    init(delegate: any WKScriptMessageHandler) {
+        self.delegate = delegate
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        delegate?.userContentController(userContentController, didReceive: message)
     }
 }
 
