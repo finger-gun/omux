@@ -36,23 +36,18 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     }
 
     private final class TerminalEventSubscription {
-        private let lock = NSLock()
         private let condition = NSCondition()
         private var queue = EventQueue<ControlPlaneTerminalEvent>()
         private var cancelled = false
 
         func push(_ event: ControlPlaneTerminalEvent) {
-            lock.lock()
-            let isCancelled = cancelled
-            lock.unlock()
-            guard isCancelled == false else {
+            condition.lock()
+            defer { condition.unlock() }
+            guard cancelled == false else {
                 return
             }
-
-            condition.lock()
             queue.append(event)
             condition.signal()
-            condition.unlock()
         }
 
         func nextEvent(timeout: TimeInterval = 0.5) -> ControlPlaneTerminalEvent? {
@@ -73,11 +68,8 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
         }
 
         func cancel() {
-            lock.lock()
-            cancelled = true
-            lock.unlock()
-
             condition.lock()
+            cancelled = true
             condition.broadcast()
             condition.unlock()
         }

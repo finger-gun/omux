@@ -2045,20 +2045,46 @@ public final class WorkspaceController: @unchecked Sendable {
         return location
     }
 
+    private func workspaceIndexLocked(for workspaceID: WorkspaceID) -> Int? {
+        ensureLookupIndexesLocked()
+        guard let index = workspaceIndexByID[workspaceID], workspaces.indices.contains(index) else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = workspaceIndexByID[workspaceID], workspaces.indices.contains(rebuilt) else {
+                return nil
+            }
+            return rebuilt
+        }
+        return index
+    }
+
+    private func tabLocationLocked(for tabID: TabID) -> (workspaceIndex: Int, tabIndex: Int)? {
+        ensureLookupIndexesLocked()
+        guard let location = tabLocationByID[tabID],
+              workspaces.indices.contains(location.workspaceIndex),
+              workspaces[location.workspaceIndex].tabs.indices.contains(location.tabIndex),
+              workspaces[location.workspaceIndex].tabs[location.tabIndex].id == tabID
+        else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = tabLocationByID[tabID],
+                  workspaces.indices.contains(rebuilt.workspaceIndex),
+                  workspaces[rebuilt.workspaceIndex].tabs.indices.contains(rebuilt.tabIndex),
+                  workspaces[rebuilt.workspaceIndex].tabs[rebuilt.tabIndex].id == tabID
+            else {
+                return nil
+            }
+            return rebuilt
+        }
+        return location
+    }
+
     private var activeWorkspaceIndex: Int? {
         // Lock must be held by caller.
         guard let activeWorkspaceID else {
             return nil
         }
-
-        ensureLookupIndexesLocked()
-        if let index = workspaceIndexByID[activeWorkspaceID], workspaces.indices.contains(index) {
-            return index
-        }
-
-        lookupIndexesDirty = true
-        ensureLookupIndexesLocked()
-        return workspaceIndexByID[activeWorkspaceID]
+        return workspaceIndexLocked(for: activeWorkspaceID)
     }
 
     private func setActiveWorkspaceID(_ workspaceID: WorkspaceID, recordPrevious: Bool = true) {
@@ -2107,26 +2133,17 @@ public final class WorkspaceController: @unchecked Sendable {
             }
             return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
         case .tab(let tabID):
-            ensureLookupIndexesLocked()
-            guard let location = tabLocationByID[tabID],
-                  workspaces.indices.contains(location.workspaceIndex)
-            else {
+            guard let location = tabLocationLocked(for: tabID) else {
                 return nil
             }
             let workspace = workspaces[location.workspaceIndex]
-            guard workspace.tabs.indices.contains(location.tabIndex) else {
-                return nil
-            }
             let tab = workspace.tabs[location.tabIndex]
             guard let pane = tab.focusedPane else {
                 return nil
             }
             return terminalContext(workspace: workspace, tab: tab, pane: pane)
         case .workspace(let workspaceID):
-            ensureLookupIndexesLocked()
-            guard let workspaceIndex = workspaceIndexByID[workspaceID],
-                  workspaces.indices.contains(workspaceIndex)
-            else {
+            guard let workspaceIndex = workspaceIndexLocked(for: workspaceID) else {
                 return nil
             }
             let workspace = workspaces[workspaceIndex]
@@ -2161,23 +2178,14 @@ public final class WorkspaceController: @unchecked Sendable {
         case .session, .pane, .focused:
             return resolveTerminalTargetLocked(target).map { [$0.paneID] }
         case .tab(let tabID):
-            ensureLookupIndexesLocked()
-            guard let location = tabLocationByID[tabID],
-                  workspaces.indices.contains(location.workspaceIndex)
-            else {
+            guard let location = tabLocationLocked(for: tabID) else {
                 return nil
             }
             let workspace = workspaces[location.workspaceIndex]
-            guard workspace.tabs.indices.contains(location.tabIndex) else {
-                return nil
-            }
             let tab = workspace.tabs[location.tabIndex]
             return tab.panes.filter(\.isTerminal).map(\.id)
         case .workspace(let workspaceID):
-            ensureLookupIndexesLocked()
-            guard let workspaceIndex = workspaceIndexByID[workspaceID],
-                  workspaces.indices.contains(workspaceIndex)
-            else {
+            guard let workspaceIndex = workspaceIndexLocked(for: workspaceID) else {
                 return nil
             }
             let workspace = workspaces[workspaceIndex]

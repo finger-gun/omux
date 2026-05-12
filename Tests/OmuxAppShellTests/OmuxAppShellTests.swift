@@ -5122,7 +5122,10 @@ final class OmuxAppShellTests: XCTestCase {
 
         let workspace = try controller.openWorkspace(at: "/tmp")
         let streamFinished = expectation(description: "stream finished")
+        let streamReady = DispatchSemaphore(value: 0)
+        let streamReadySignaled = LockedBox(false)
         let captured = LockedBox<[String]>([])
+        let isCollecting = LockedBox(false)
         let errorBox = LockedBox<Error?>(nil)
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -5132,6 +5135,13 @@ final class OmuxAppShellTests: XCTestCase {
                     guard case .object(let object) = event,
                           case .string(let name)? = object["name"]
                     else {
+                        return
+                    }
+                    if isCollecting.value == false {
+                        if streamReadySignaled.value == false {
+                            streamReadySignaled.value = true
+                            streamReady.signal()
+                        }
                         return
                     }
                     captured.value.append(name)
@@ -5147,7 +5157,13 @@ final class OmuxAppShellTests: XCTestCase {
             streamFinished.fulfill()
         }
 
-        Thread.sleep(forTimeInterval: 0.1)
+        var streamIsReady = false
+        for _ in 0..<30 where streamIsReady == false {
+            try controller.notify(NotificationRequest(title: "Ready", body: "Handshake", severity: .info))
+            streamIsReady = streamReady.wait(timeout: .now() + 0.1) == .success
+        }
+        XCTAssertTrue(streamIsReady)
+        isCollecting.value = true
         try controller.notify(NotificationRequest(title: "A", body: "First", severity: .info))
         _ = controller.restore(workspaceID: workspace.id)
         wait(for: [streamFinished], timeout: 3)
@@ -5192,7 +5208,10 @@ final class OmuxAppShellTests: XCTestCase {
 
         _ = try controller.openWorkspace(at: "/tmp")
         let streamFinished = expectation(description: "stream cancelled")
+        let streamReady = DispatchSemaphore(value: 0)
+        let streamReadySignaled = LockedBox(false)
         let captured = LockedBox<[String]>([])
+        let isCollecting = LockedBox(false)
         let errorBox = LockedBox<Error?>(nil)
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -5202,6 +5221,13 @@ final class OmuxAppShellTests: XCTestCase {
                     guard case .object(let object) = event,
                           case .string(let name)? = object["name"]
                     else {
+                        return
+                    }
+                    if isCollecting.value == false {
+                        if streamReadySignaled.value == false {
+                            streamReadySignaled.value = true
+                            streamReady.signal()
+                        }
                         return
                     }
                     captured.value.append(name)
@@ -5215,7 +5241,13 @@ final class OmuxAppShellTests: XCTestCase {
             streamFinished.fulfill()
         }
 
-        Thread.sleep(forTimeInterval: 0.1)
+        var streamIsReady = false
+        for _ in 0..<30 where streamIsReady == false {
+            try controller.notify(NotificationRequest(title: "Ready", body: "Handshake", severity: .info))
+            streamIsReady = streamReady.wait(timeout: .now() + 0.1) == .success
+        }
+        XCTAssertTrue(streamIsReady)
+        isCollecting.value = true
         try controller.notify(NotificationRequest(title: "B", body: "Only", severity: .info))
         wait(for: [streamFinished], timeout: 3)
 

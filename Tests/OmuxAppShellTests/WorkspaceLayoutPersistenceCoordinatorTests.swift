@@ -50,4 +50,30 @@ final class WorkspaceLayoutPersistenceCoordinatorTests: XCTestCase {
         coordinator.flushLayoutSave()
         XCTAssertEqual(saveCount, 0)
     }
+
+    func testScheduleLayoutSaveHonorsDebounceWindow() async {
+        var saveCount = 0
+        let persisted = expectation(description: "layout persisted")
+        let sleepStarted = expectation(description: "debounce sleep started")
+
+        let coordinator = WorkspaceLayoutPersistenceCoordinator(
+            debounceNanoseconds: 50_000_000,
+            sleep: { nanoseconds in
+                sleepStarted.fulfill()
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            },
+            persistLayout: {
+                saveCount += 1
+                persisted.fulfill()
+            }
+        )
+
+        coordinator.scheduleLayoutSave()
+        await fulfillment(of: [sleepStarted], timeout: 1)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(saveCount, 0)
+        await fulfillment(of: [persisted], timeout: 1)
+
+        XCTAssertEqual(saveCount, 1)
+    }
 }
