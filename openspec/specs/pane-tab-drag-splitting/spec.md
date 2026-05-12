@@ -146,7 +146,7 @@ The system SHALL not initiate a pane-tab drag interaction when the current layou
 - **THEN** OpenMUX SHALL NOT start a pane-tab drag for that tab because no valid split or merge target exists
 
 ### Requirement: Dragging onto another pane tab strip SHALL merge the tab into that stack
-The system SHALL recognize when a dragged pane tab is hovering over the tab strip of a different pane stack and offer a merge-into-stack drop mode distinct from the directional split mode.
+The system SHALL recognize pane-tab header drops for both different-stack merge and same-stack reorder, while preserving directional split behavior outside header regions.
 
 #### Scenario: Hover over a different pane tab strip shows merge preview
 - **WHEN** the user drags a pane tab over the tab strip region of a different pane stack
@@ -171,6 +171,10 @@ The system SHALL recognize when a dragged pane tab is hovering over the tab stri
 #### Scenario: Merge drop preserves terminal session identity
 - **WHEN** a pane tab is moved into a different stack by drag-to-merge
 - **THEN** OpenMUX SHALL preserve the pane ID, session ID, terminal surface association, title, and terminal state for the merged pane tab
+
+#### Scenario: Dropping in the source pane tab strip reorders within the same stack
+- **WHEN** the user drags a pane tab and drops it in the tab strip of its source pane stack
+- **THEN** OpenMUX SHALL reorder pane tabs within that same stack according to drop position and keep the moved tab focused
 
 ### Requirement: Single-tab source stacks SHALL be movable
 The system SHALL allow dragging a pane tab out of a source stack even when that source stack contains only that pane tab, provided the drop target is valid and not the source stack.

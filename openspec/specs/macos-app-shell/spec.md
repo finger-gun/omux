@@ -10,6 +10,10 @@ The system SHALL provide a native macOS application shell that owns OpenMUX work
 - **WHEN** a developer creates or manipulates workspace structure
 - **THEN** the system represents that structure using OpenMUX-native concepts rather than raw terminal-engine objects
 
+#### Scenario: Frequent shell updates preserve focused pane continuity
+- **WHEN** the app shell applies frequent non-structural workspace updates
+- **THEN** OpenMUX preserves focused-pane continuity without resetting first-responder ownership away from the active pane
+
 ### Requirement: Terminal hosting uses AppKit-first integration
 The system SHALL host terminal surfaces within an AppKit-first application shell, with SwiftUI limited to non-terminal chrome where it does not control terminal interaction semantics, and with real pane surfaces embedded as native AppKit-hosted views. Sidebar terminal navigation SHALL restore native focus to the selected hosted terminal surface.
 
