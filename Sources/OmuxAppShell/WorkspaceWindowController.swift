@@ -2101,14 +2101,22 @@ extension HostedTerminalPaneView: WorkspacePaneRendering {
 
 @MainActor
 private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNavigationDelegate, WKScriptMessageHandler {
+    private struct ScrollPosition {
+        let x: Double
+        let y: Double
+    }
+
+    private static var scrollPositionBySource: [String: ScrollPosition] = [:]
     private let paneID: PaneID
     private let descriptor: ExtensionPaneDescriptor
+    private let scrollStateSource: String
     private let onFocus: @MainActor (PaneID) -> Void
     private let onAction: @MainActor (ExtensionPaneActionRequest) -> Void
     private let container = NSView()
     private let placeholderLabel = NSTextField(wrappingLabelWithString: "")
     private let webView: WKWebView
     private var isLoadingInjectedHTML = false
+    private var pendingScrollPosition: ScrollPosition?
 
     init(
         pane: Pane,
@@ -2120,12 +2128,21 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
     ) {
         self.paneID = pane.id
         self.descriptor = descriptor
+        self.scrollStateSource = descriptor.source ?? pane.id.rawValue
         self.onFocus = onFocus
         self.onAction = onAction
 
         let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = descriptor.actionsEnabled
+        let allowsContentJavaScript = descriptor.actionsEnabled || descriptor.pluginID == "dev.fingergun.markdown-preview"
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = allowsContentJavaScript
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.scrollStateBridgeScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
         if descriptor.actionsEnabled {
             configuration.userContentController.addUserScript(
                 WKUserScript(
@@ -2151,6 +2168,10 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
+        webView.configuration.userContentController.add(
+            WeakScriptMessageHandler(delegate: self),
+            name: "omuxScrollState"
+        )
         if descriptor.actionsEnabled {
             webView.configuration.userContentController.add(
                 WeakScriptMessageHandler(delegate: self),
@@ -2238,6 +2259,7 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoadingInjectedHTML = false
+        restorePendingScrollPosition()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -2245,6 +2267,12 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "omuxScrollState",
+           let position = Self.scrollPosition(from: message.body) {
+            Self.scrollPositionBySource[scrollStateSource] = position
+            return
+        }
+
         guard message.name == "omuxAction",
               let actionRequest = Self.actionRequest(
                 from: message.body,
@@ -2271,8 +2299,20 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
 
         placeholderLabel.isHidden = true
         webView.isHidden = false
+        pendingScrollPosition = Self.scrollPositionBySource[scrollStateSource]
         isLoadingInjectedHTML = true
         webView.loadHTMLString(html, baseURL: baseURL)
+    }
+
+    private func restorePendingScrollPosition() {
+        guard let pendingScrollPosition else {
+            return
+        }
+        self.pendingScrollPosition = nil
+        webView.evaluateJavaScript(
+            "window.scrollTo(\(pendingScrollPosition.x), \(pendingScrollPosition.y));",
+            completionHandler: nil
+        )
     }
 
     private var placeholderMessage: String {
@@ -2310,6 +2350,25 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         """
     }
 
+    private static var scrollStateBridgeScript: String {
+        """
+        (() => {
+          const post = () => {
+            try {
+              window.webkit.messageHandlers.omuxScrollState.postMessage({
+                x: window.scrollX || 0,
+                y: window.scrollY || 0
+              });
+            } catch (_) {}
+          };
+          window.addEventListener('scroll', post, { passive: true });
+          window.addEventListener('beforeunload', post);
+          window.addEventListener('pagehide', post);
+          window.addEventListener('load', post);
+        })();
+        """
+    }
+
     private static func javascriptString(_ value: String) -> String {
         guard let data = try? JSONEncoder().encode(value),
               let string = String(data: data, encoding: .utf8)
@@ -2341,6 +2400,33 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
             payload: payload
         )
     }
+
+    private static func scrollPosition(from body: Any) -> ScrollPosition? {
+        guard let object = body as? [String: Any] else {
+            return nil
+        }
+
+        let x: Double
+        if let value = object["x"] as? Double {
+            x = value
+        } else if let value = object["x"] as? Int {
+            x = Double(value)
+        } else {
+            return nil
+        }
+
+        let y: Double
+        if let value = object["y"] as? Double {
+            y = value
+        } else if let value = object["y"] as? Int {
+            y = Double(value)
+        } else {
+            return nil
+        }
+
+        return ScrollPosition(x: x, y: y)
+    }
+
 
     private static func omuxValue(from value: Any) -> OmuxValue? {
         switch value {

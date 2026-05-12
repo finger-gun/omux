@@ -408,7 +408,8 @@ public struct OmuxMarkdownPreviewPlugin {
         writeLine: (String) -> Void
     ) throws -> Int32 {
         var paneID = request.paneID
-        if let createdPaneID = try updatePreview(request: request, paneID: paneID, client: client) {
+        let markdown = try String(contentsOf: request.fileURL, encoding: .utf8)
+        if let createdPaneID = try updatePreview(request: request, paneID: paneID, client: client, markdown: markdown) {
             paneID = createdPaneID
         }
 
@@ -422,7 +423,7 @@ public struct OmuxMarkdownPreviewPlugin {
         }
 
         writeLine("Watching \(request.fileURL.path)")
-        try watch(request: request, paneID: paneID, client: client, writeLine: writeLine)
+        try watch(request: request, paneID: paneID, client: client, initialMarkdown: markdown, writeLine: writeLine)
         return 0
     }
 
@@ -431,11 +432,21 @@ public struct OmuxMarkdownPreviewPlugin {
         paneID: String?,
         client: OmuxControlClient
     ) throws -> String? {
+        let markdown = try String(contentsOf: request.fileURL, encoding: .utf8)
+        return try updatePreview(request: request, paneID: paneID, client: client, markdown: markdown)
+    }
+
+    private func updatePreview(
+        request: OmuxMarkdownPreviewRequest,
+        paneID: String?,
+        client: OmuxControlClient,
+        markdown: String
+    ) throws -> String? {
         let html: String
         let status: String
         let message: String?
         do {
-            html = try renderer.renderFile(request.fileURL)
+            html = try renderer.render(markdown: markdown, title: request.title ?? request.fileURL.lastPathComponent, sourcePath: request.fileURL.path)
             status = ExtensionPaneStatus.ready.rawValue
             message = nil
         } catch {
@@ -471,29 +482,38 @@ public struct OmuxMarkdownPreviewPlugin {
         request: OmuxMarkdownPreviewRequest,
         paneID: String,
         client: OmuxControlClient,
+        initialMarkdown: String,
         writeLine: (String) -> Void
     ) throws {
-        var lastModificationDate = modificationDate(for: request.fileURL)
+        var tracker = MarkdownPreviewChangeTracker(initialMarkdown: initialMarkdown)
         while true {
             Thread.sleep(forTimeInterval: 0.4)
-            let nextModificationDate = modificationDate(for: request.fileURL)
-            guard nextModificationDate != lastModificationDate else {
-                continue
-            }
-            lastModificationDate = nextModificationDate
+            guard let nextMarkdown = tracker.nextMarkdown(for: request.fileURL) else { continue }
             do {
-                _ = try updatePreview(request: request, paneID: paneID, client: client)
+                _ = try updatePreview(request: request, paneID: paneID, client: client, markdown: nextMarkdown)
             } catch {
                 writeLine("omux markdown-preview error: \(error.localizedDescription)")
             }
         }
     }
+}
 
-    private func modificationDate(for fileURL: URL) -> Date? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path) else {
+struct MarkdownPreviewChangeTracker {
+    private var lastMarkdown: String?
+
+    init(initialMarkdown: String? = nil) {
+        self.lastMarkdown = initialMarkdown
+    }
+
+    mutating func nextMarkdown(for fileURL: URL) -> String? {
+        guard let markdown = try? String(contentsOf: fileURL, encoding: .utf8) else {
             return nil
         }
-        return attributes[.modificationDate] as? Date
+        guard markdown != lastMarkdown else {
+            return nil
+        }
+        lastMarkdown = markdown
+        return markdown
     }
 }
 

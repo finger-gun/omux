@@ -805,6 +805,18 @@ final class OmuxAppShellTests: XCTestCase {
         let session = try XCTUnwrap(pane.terminalSession)
         _ = try bridge.attach(session: session, to: pane)
 
+        let previewUpdated = expectation(description: "markdown preview updated after file change")
+        controller.onChange = { workspace in
+            let updatedPane = workspace.tabs
+                .flatMap(\.panes)
+                .compactMap(\.extensionPane)
+                .first { $0.source == readmeURL.path }
+            if updatedPane?.html?.contains("<h1>Updated</h1>") == true {
+                XCTAssertTrue(Thread.isMainThread)
+                previewUpdated.fulfill()
+            }
+        }
+
         let claimed = controller.handleTerminalTextActivation(
             TerminalTextActivationRequest(
                 paneID: pane.id,
@@ -828,6 +840,9 @@ final class OmuxAppShellTests: XCTestCase {
                 && event.paneID == pane.id
                 && event.payload.objectValue?["token"] == .string("README.md")
         })
+
+        try "# Updated\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+        wait(for: [previewUpdated], timeout: 3)
     }
 
     func testTerminalTextActivationDoesNotClaimMarkdownWhenPluginDisabled() throws {

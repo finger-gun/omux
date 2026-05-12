@@ -50,6 +50,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
+    private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
     private let progressIdleClearDelay: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
@@ -1072,6 +1073,7 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
+        cancelMarkdownPreviewWatch(paneID: result.pane.id)
         try hookRunner.emit(
             HookInvocation(
                 category: .session,
@@ -1221,6 +1223,8 @@ public final class WorkspaceController: @unchecked Sendable {
 
         if removedPane.isTerminal {
             try bridge.teardown(paneID: removedPane.id)
+        } else if removedPane.extensionPane != nil {
+            cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
         try hookRunner.emit(
             HookInvocation(
@@ -1300,6 +1304,8 @@ public final class WorkspaceController: @unchecked Sendable {
 
         if removedPane.isTerminal {
             try bridge.teardown(paneID: removedPane.id)
+        } else if removedPane.extensionPane != nil {
+            cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
 
         let hookName = closedPaneTab ? "pane-tab-closed" : "pane-removed"
@@ -1410,6 +1416,8 @@ public final class WorkspaceController: @unchecked Sendable {
 
         if removedPane.isTerminal {
             try bridge.teardown(paneID: removedPane.id)
+        } else if removedPane.extensionPane != nil {
+            cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
         try hookRunner.emit(
             HookInvocation(
@@ -2163,24 +2171,13 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private func openMarkdownPreview(for path: String) {
-        lock.lock()
-        let markdownPreviewConfiguration = self.markdownPreviewConfiguration
-        lock.unlock()
-
         let fileURL = URL(fileURLWithPath: path)
-        let descriptor: ExtensionPaneDescriptor
+        let markdownPreviewConfiguration = markdownPreviewConfigurationSnapshot()
+        let markdown: String
         do {
-            let html = try OmuxMarkdownPreviewRenderer(theme: markdownPreviewConfiguration.theme)
-                .renderFile(fileURL)
-            descriptor = ExtensionPaneDescriptor(
-                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
-                contentKind: .html,
-                source: path,
-                html: html,
-                status: .ready
-            )
+            markdown = try String(contentsOf: fileURL, encoding: .utf8)
         } catch {
-            descriptor = ExtensionPaneDescriptor(
+            let descriptor = ExtensionPaneDescriptor(
                 pluginID: OmuxMarkdownPreviewPlugin.pluginID,
                 contentKind: .html,
                 source: path,
@@ -2188,12 +2185,149 @@ public final class WorkspaceController: @unchecked Sendable {
                 status: .error,
                 message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
             )
+            if let paneID = markdownPreviewPaneID(for: path) {
+                _ = updateExtensionPane(paneID: paneID, descriptor: descriptor, title: fileURL.lastPathComponent)
+            } else {
+                _ = createExtensionPane(title: fileURL.lastPathComponent, descriptor: descriptor)
+            }
+            return
         }
 
-        if let paneID = markdownPreviewPaneID(for: path) {
+        let descriptor = markdownPreviewDescriptor(
+            markdown: markdown,
+            fileURL: fileURL,
+            theme: markdownPreviewConfiguration.theme
+        )
+        var paneID = markdownPreviewPaneID(for: path)
+        if let paneID {
             _ = updateExtensionPane(paneID: paneID, descriptor: descriptor, title: fileURL.lastPathComponent)
         } else {
-            _ = createExtensionPane(title: fileURL.lastPathComponent, descriptor: descriptor)
+            paneID = createExtensionPane(title: fileURL.lastPathComponent, descriptor: descriptor)?.pane.id
+        }
+
+        if let paneID {
+            startMarkdownPreviewWatch(paneID: paneID, sourcePath: path, initialMarkdown: markdown)
+        }
+    }
+
+    private func markdownPreviewConfigurationSnapshot() -> OmuxConfigPlugins.MarkdownPreview {
+        lock.lock()
+        defer { lock.unlock() }
+        return markdownPreviewConfiguration
+    }
+
+    private func markdownPreviewDescriptor(markdown: String, fileURL: URL, theme: String) -> ExtensionPaneDescriptor {
+        do {
+            let html = try OmuxMarkdownPreviewRenderer(theme: theme).render(
+                markdown: markdown,
+                title: fileURL.lastPathComponent,
+                sourcePath: fileURL.path
+            )
+            return ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: fileURL.path,
+                html: html,
+                status: .ready
+            )
+        } catch {
+            return ExtensionPaneDescriptor(
+                pluginID: OmuxMarkdownPreviewPlugin.pluginID,
+                contentKind: .html,
+                source: fileURL.path,
+                html: "",
+                status: .error,
+                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func startMarkdownPreviewWatch(paneID: PaneID, sourcePath: String, initialMarkdown: String) {
+        let token = UUID()
+        let sourceURL = URL(fileURLWithPath: sourcePath)
+        let task = Task { [weak self] in
+            defer {
+                self?.finishMarkdownPreviewWatch(paneID: paneID, token: token)
+            }
+
+            var lastRenderedMarkdown = initialMarkdown
+            while Task.isCancelled == false {
+                do {
+                    try await Task.sleep(nanoseconds: 400_000_000)
+                } catch {
+                    return
+                }
+
+                guard Task.isCancelled == false else {
+                    return
+                }
+                guard let self else {
+                    return
+                }
+                guard self.isMarkdownPreviewPane(paneID, displaying: sourcePath) else {
+                    return
+                }
+                guard let markdown = try? String(contentsOf: sourceURL, encoding: .utf8) else {
+                    continue
+                }
+                guard markdown != lastRenderedMarkdown else {
+                    continue
+                }
+                lastRenderedMarkdown = markdown
+                let updated = await MainActor.run { [weak self] in
+                    guard let self else {
+                        return false
+                    }
+                    return self.updateMarkdownPreview(paneID: paneID, sourceURL: sourceURL, markdown: markdown)
+                }
+                guard updated else {
+                    return
+                }
+            }
+        }
+
+        lock.lock()
+        markdownPreviewWatchTasks[paneID]?.task.cancel()
+        markdownPreviewWatchTasks[paneID] = (token: token, task: task)
+        lock.unlock()
+    }
+
+    private func updateMarkdownPreview(paneID: PaneID, sourceURL: URL, markdown: String) -> Bool {
+        let markdownPreviewConfiguration = markdownPreviewConfigurationSnapshot()
+        let descriptor = markdownPreviewDescriptor(markdown: markdown, fileURL: sourceURL, theme: markdownPreviewConfiguration.theme)
+        return updateExtensionPane(paneID: paneID, descriptor: descriptor, title: sourceURL.lastPathComponent) != nil
+    }
+
+    private func finishMarkdownPreviewWatch(paneID: PaneID, token: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = markdownPreviewWatchTasks[paneID],
+              entry.token == token
+        else {
+            return
+        }
+        markdownPreviewWatchTasks.removeValue(forKey: paneID)
+    }
+
+    private func cancelMarkdownPreviewWatch(paneID: PaneID) {
+        lock.lock()
+        let entry = markdownPreviewWatchTasks.removeValue(forKey: paneID)
+        lock.unlock()
+        entry?.task.cancel()
+    }
+
+    private func isMarkdownPreviewPane(_ paneID: PaneID, displaying sourcePath: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return workspaces.contains { workspace in
+            workspace.tabs.contains { tab in
+                tab.panes.contains { pane in
+                    pane.id == paneID
+                        && pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
+                        && pane.extensionPane?.source == sourcePath
+                }
+            }
         }
     }
 
