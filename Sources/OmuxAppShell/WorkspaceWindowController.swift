@@ -3340,6 +3340,26 @@ private class ChromePillButton: NSControl {
         }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else {
+            return
+        }
+
+        onPress?()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard isEnabled else {
+            return
+        }
+
+        if let menu = menu ?? contextMenuProvider?() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        } else {
+            super.rightMouseDown(with: event)
+        }
+    }
+
 }
 
 @MainActor
