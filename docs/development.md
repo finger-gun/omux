@@ -178,6 +178,8 @@ This keeps the shell AppKit-first while preserving one narrow terminal-engine se
 
 `omux events` now streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events for the first wave of short `omux` commands.
 
+Control-plane terminal event subscriptions now use a FIFO queue with head-indexed dequeue semantics (instead of repeated front-removal on an array). This preserves publish order and cancellation behavior while avoiding O(n) churn under sustained streams.
+
 Explicit OpenMUX input actions such as `omux run` and `send-text` publish `terminal.inputSent` after successful delivery. Native pane typing is intentionally not streamed as `terminal.inputSent`, because per-key input is noisy, sensitive, and not an authoritative shell command record; terminal title updates remain presentation metadata and are not used as command text.
 
 Current first-wave shared action event names:
@@ -246,3 +248,8 @@ The current shell is usable, but it is still intentionally narrow:
 3. Keep pane-stack behavior in shared workspace actions so the AppKit shell, JSON-RPC, and `omux` stay aligned.
 4. Preserve international keyboard correctness whenever input handling changes.
 5. Keep `omux`, JSON-RPC, and the native shell pointed at the same live session objects.
+
+## Performance invariants
+
+- Workspace layout persistence in `OpenMUXAppDelegate` must be scheduled through `WorkspaceLayoutPersistenceCoordinator` so bursty `onChange` updates are coalesced. Lifecycle boundaries that need durability (quit, power-off, full-state writes) should call the coordinator flush path.
+- `WorkspaceController` pane/session/tab/workspace target resolution should prefer the internal lookup indexes and keep index invalidation hooks aligned with every state mutation. If new mutations are added, update index dirtiness/rebuild wiring in the same change.

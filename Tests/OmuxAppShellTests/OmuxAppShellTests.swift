@@ -5086,6 +5086,268 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testControlPlaneTerminalEventStreamPreservesPublishOrder() throws {
+        enum StopStreaming: Error { case done }
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-events-order-\(UUID().uuidString.prefix(8)).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+        try service.start()
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let streamFinished = expectation(description: "stream finished")
+        let captured = LockedBox<[String]>([])
+        let errorBox = LockedBox<Error?>(nil)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketURL.path(percentEncoded: false))
+                try client.streamTerminalEvents { event in
+                    guard case .object(let object) = event,
+                          case .string(let name)? = object["name"]
+                    else {
+                        return
+                    }
+                    captured.value.append(name)
+                    if captured.value.count >= 2 {
+                        throw StopStreaming.done
+                    }
+                }
+            } catch StopStreaming.done {
+                // expected
+            } catch {
+                errorBox.value = error
+            }
+            streamFinished.fulfill()
+        }
+
+        Thread.sleep(forTimeInterval: 0.1)
+        try controller.notify(NotificationRequest(title: "A", body: "First", severity: .info))
+        _ = controller.restore(workspaceID: workspace.id)
+        wait(for: [streamFinished], timeout: 3)
+
+        XCTAssertNil(errorBox.value)
+        XCTAssertEqual(captured.value.suffix(2), ["notification.raised", "workspace.restored"])
+    }
+
+    @MainActor
+    func testControlPlaneTerminalEventStreamStopsAfterClientCancellation() throws {
+        enum StopStreaming: Error { case done }
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-events-cancel-\(UUID().uuidString.prefix(8)).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+        try service.start()
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let streamFinished = expectation(description: "stream cancelled")
+        let captured = LockedBox<[String]>([])
+        let errorBox = LockedBox<Error?>(nil)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketURL.path(percentEncoded: false))
+                try client.streamTerminalEvents { event in
+                    guard case .object(let object) = event,
+                          case .string(let name)? = object["name"]
+                    else {
+                        return
+                    }
+                    captured.value.append(name)
+                    throw StopStreaming.done
+                }
+            } catch StopStreaming.done {
+                // expected
+            } catch {
+                errorBox.value = error
+            }
+            streamFinished.fulfill()
+        }
+
+        Thread.sleep(forTimeInterval: 0.1)
+        try controller.notify(NotificationRequest(title: "B", body: "Only", severity: .info))
+        wait(for: [streamFinished], timeout: 3)
+
+        XCTAssertNil(errorBox.value)
+        XCTAssertEqual(captured.value.filter { $0 == "notification.raised" }.count, 1)
+    }
+
+    func testWorkspaceControllerTargetResolutionMatchesWorkspaceScanAcrossMutations() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        var workspace = try controller.openWorkspace(at: "/tmp/scan-a")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        workspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondPane = try XCTUnwrap(workspace.focusedPane)
+        _ = try controller.createTab()
+        let workspaceB = try controller.createWorkspace()
+
+        let cases: [ControlPlaneTerminalTarget] = [
+            .pane(firstPane.id),
+            .pane(secondPane.id),
+            .session(firstPane.session.id),
+            .session(secondPane.session.id),
+            .workspace(workspaceB.id),
+            .focused,
+        ]
+
+        func scannedContext(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
+            let workspaces = controller.allWorkspaces()
+            switch target {
+            case .pane(let paneID):
+                for workspace in workspaces {
+                    for tab in workspace.tabs {
+                        if let pane = tab.panes.first(where: { $0.id == paneID }),
+                           let sessionID = pane.terminalSession?.id {
+                            return ControlPlaneTerminalContext(
+                                workspaceID: workspace.id,
+                                tabID: tab.id,
+                                paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                                paneID: pane.id,
+                                sessionID: sessionID
+                            )
+                        }
+                    }
+                }
+            case .session(let sessionID):
+                for workspace in workspaces {
+                    for tab in workspace.tabs {
+                        if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
+                            return ControlPlaneTerminalContext(
+                                workspaceID: workspace.id,
+                                tabID: tab.id,
+                                paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                                paneID: pane.id,
+                                sessionID: sessionID
+                            )
+                        }
+                    }
+                }
+            case .tab(let tabID):
+                for workspace in workspaces {
+                    if let tab = workspace.tabs.first(where: { $0.id == tabID }),
+                       let pane = tab.focusedPane,
+                       let sessionID = pane.terminalSession?.id {
+                        return ControlPlaneTerminalContext(
+                            workspaceID: workspace.id,
+                            tabID: tab.id,
+                            paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                            paneID: pane.id,
+                            sessionID: sessionID
+                        )
+                    }
+                }
+            case .workspace(let workspaceID):
+                guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
+                      let tab = workspace.focusedTab,
+                      let pane = tab.focusedPane,
+                      let sessionID = pane.terminalSession?.id
+                else {
+                    return nil
+                }
+                return ControlPlaneTerminalContext(
+                    workspaceID: workspace.id,
+                    tabID: tab.id,
+                    paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                    paneID: pane.id,
+                    sessionID: sessionID
+                )
+            case .focused:
+                guard let workspace = controller.activeWorkspace(),
+                      let tab = workspace.focusedTab,
+                      let pane = tab.focusedPane,
+                      let sessionID = pane.terminalSession?.id
+                else {
+                    return nil
+                }
+                return ControlPlaneTerminalContext(
+                    workspaceID: workspace.id,
+                    tabID: tab.id,
+                    paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                    paneID: pane.id,
+                    sessionID: sessionID
+                )
+            }
+            return nil
+        }
+
+        for target in cases {
+            let indexed = controller.resolveTerminalTarget(target)
+            let scanned = scannedContext(target)
+            XCTAssertEqual(indexed?.workspaceID, scanned?.workspaceID)
+            XCTAssertEqual(indexed?.tabID, scanned?.tabID)
+            XCTAssertEqual(indexed?.paneID, scanned?.paneID)
+            XCTAssertEqual(indexed?.sessionID, scanned?.sessionID)
+        }
+
+        _ = try controller.closePane(paneID: secondPane.id)
+        let remainingTargets: [ControlPlaneTerminalTarget] = [.pane(firstPane.id), .session(firstPane.session.id), .focused]
+        for target in remainingTargets {
+            let indexed = controller.resolveTerminalTarget(target)
+            let scanned = scannedContext(target)
+            XCTAssertEqual(indexed?.workspaceID, scanned?.workspaceID)
+            XCTAssertEqual(indexed?.tabID, scanned?.tabID)
+            XCTAssertEqual(indexed?.paneID, scanned?.paneID)
+            XCTAssertEqual(indexed?.sessionID, scanned?.sessionID)
+        }
+    }
+
     private func runGit(_ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
