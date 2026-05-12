@@ -3452,7 +3452,6 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
 
         let initialLocation = convert(event.locationInWindow, from: nil)
         var didStartDragging = false
-        var pendingPress = false
 
         while let nextEvent = window?.nextEvent(
             matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown],
@@ -3464,8 +3463,6 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
             case .leftMouseDown:
                 if nextEvent.clickCount == 2, onRename != nil {
                     onBeginRename?()
-                } else if pendingPress {
-                    onPress?()
                 }
                 return
 
@@ -3490,7 +3487,6 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
                 // Only wait for a possible double-click if this workspace is already active.
                 // If it's inactive, fire onPress immediately — no delay on workspace switching.
                 if onRename != nil, isActive {
-                    pendingPress = true
                     let doubleClickInterval = NSEvent.doubleClickInterval
                     if let secondClick = window?.nextEvent(
                         matching: [.leftMouseDown],
