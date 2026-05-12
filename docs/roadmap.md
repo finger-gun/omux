@@ -11,8 +11,8 @@ This roadmap is directional rather than date-driven. It describes the current pr
 | Done | Workspace model | Workspaces, top-level tabs, split panes, pane-local tab stacks, focus routing, and persistent shell sessions are available. |
 | Done | CLI and control plane | `omux` and the local JSON-RPC control plane share live workspace actions. |
 | Done | Configuration and themes | OpenMUX owns `~/.omux/config.toml`, token-based themes, built-in presets, user theme overrides, and generated Ghostty config output. |
-| Done | Hooks and events | External hooks, terminal runtime events, and `omux events` provide local automation seams. |
-| Done | Plugins and extension panes | User plugin commands, bundled plugin registration, extension panes, plugin toggling, and terminal text activation exist. |
+| Done | Hooks and events | External hooks, hook registries, terminal runtime events, and `omux events` provide local automation seams. |
+| Done | Plugins and extension panes | User plugin commands, plugin registries, bundled plugin registration, extension panes, menu contributions, plugin toggling, and terminal text activation exist. |
 | Done | Developer workflow | `make setup`, `make app`, `make build`, `make test`, `make verify`, and `make smoke` provide a stable local workflow. |
 | In progress | Runtime transcript and snapshot quality | Improve runtime-backed pane snapshots and transcript fidelity for automation and restore flows. |
 | In progress | Pane stack polish | Improve reordering, drag/drop, close behavior, and local pane-tab ergonomics. |
@@ -29,7 +29,7 @@ This roadmap is directional rather than date-driven. It describes the current pr
 | High | Workspace usability | Refine pane-tab interactions, focus behavior, restore flows, sidebar context, and split ergonomics. |
 | High | Automation contracts | Keep `omux`, JSON-RPC, hooks, terminal events, and plugin extension points predictable and documented. |
 | Medium | Plugins | Expand bundled plugin examples and make external plugin authoring easier without embedding runtimes into the core. |
-| Medium | Theme and config UX | Improve discovery, validation messages, contrast checks, and editing workflows on top of the token model. |
+| Medium | Theme and config UX | Improve discovery, validation messages, contrast checks, and editing workflows on top of the token model and Settings UI. |
 | Medium | Release UX | Improve app packaging, install/update confidence, and user-facing release notes. |
 
 ## Product shape

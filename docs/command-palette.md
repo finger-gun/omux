@@ -17,6 +17,8 @@ You can also open it from the **View** menu.
 
 You can also switch mode inline: type `>` at the start of the field to enter command mode, or delete it to return to workspace mode.
 
+Common command-mode entries include opening `~/.omux/config.toml`, reloading configuration, splitting panes, creating pane-local tabs, switching themes, and running public `omux` commands.
+
 ## Navigating
 
 | Key | Action |

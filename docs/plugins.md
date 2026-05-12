@@ -124,8 +124,9 @@ When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchan
 | `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
 | `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
 | `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
+| `OMUX_CLI` | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
 
-Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app.
+Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app. Prefer `${OMUX_CLI:-omux}` when launching the CLI so packaged app and Terminal-launched workflows both work.
 
 ## Config read/apply commands
 
@@ -227,7 +228,7 @@ builtin = "config.reload"
 
 Supported built-ins are `config.open` and `config.reload`. To make menu metadata available after registry install, include `omux-plugin.toml` in the manifest files list.
 
-The official plugin registry includes `settings-ui`, which opens a local extension-pane form for supported settings and saves through `omux config apply`.
+The official plugin registry includes `settings-ui`, which opens a local extension-pane form for supported settings and saves through `omux config apply`. After installation, run `omux settings-ui` or use **Configuration -> Open Settings** when the app has refreshed its installed plugin menus.
 
 ## Terminal text activation
 

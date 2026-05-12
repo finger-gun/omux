@@ -99,7 +99,7 @@ target = "20-notify"
 executable = true
 ```
 
-Installing a hook installs executable local code. OpenMUX prints the source registry, package version, and target paths before install; use `--yes` for non-interactive installs.
+Installing a hook installs executable local code. OpenMUX prints the source registry, package version, and target paths before install; use `--yes` for non-interactive installs. Installed package receipts live under `~/.omux/installed/` so update and uninstall only remove files OpenMUX installed.
 
 ## Handler format
 

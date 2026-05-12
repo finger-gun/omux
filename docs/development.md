@@ -67,14 +67,20 @@ Scripts/check-changes-since-release.sh
 swift build
 swift test
 swift run omux config doctor
+swift run omux config open
 swift run omux config reload
+swift run omux config get --json
 swift run omux config init
 swift run omux theme
 swift run omux theme nord
 swift run omux theme list
 swift run omux plugins
+swift run omux plugins discover
+swift run omux plugins install <plugin-id>
 swift run omux plugin list
 swift run omux plugin path
+swift run omux hooks discover
+swift run omux hooks install <hook-id>
 swift run omux open [path]
 swift run omux workspace-close [workspace-id]
 swift run omux tab
@@ -109,7 +115,7 @@ swift run OpenMUXApp
 
 `swift run omux theme` opens the interactive fuzzy-search arrow-key picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback.
 
-`swift run omux plugins` opens the interactive plugin picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback. Bundled plugin behavior is documented in [Plugin index](./plugins/index.md), and the external plugin/extension-pane contract is documented in [Plugin ecosystem](./plugins.md).
+`swift run omux plugins` opens the interactive plugin picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback. Registry discovery and installs use explicit subcommands such as `omux plugins discover` and `omux plugins install <plugin-id>`. Bundled and registry-hosted plugin behavior is documented in [Plugin index](./plugins/index.md), and the external plugin/extension-pane contract is documented in [Plugin ecosystem](./plugins.md).
 
 Command-palette action entries are described by bundled JSON files under `Sources/OmuxAppShell/Resources/CommandPalette/Commands/`. Each descriptor uses a `command` object with a `kind` and target identifier resolved by app code, not a shell string. CLI entries are generated from `OpenMUXCLICommandCatalog`, which also feeds `omux help`, so command-mode search covers the full typed CLI surface without maintaining a separate allow-list.
 

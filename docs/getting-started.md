@@ -1,6 +1,6 @@
 # Getting Started with OpenMUX
 
-OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, user hooks, and plugins.
+OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, user hooks, plugins, and extension panes.
 
 This guide is for people who want to use OpenMUX, not contribute to its internals.
 
@@ -159,11 +159,19 @@ Check or reload config after editing:
 
 ```bash
 omux config doctor
+omux config open
 omux config reload
 omux plugins
 ```
 
-For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, plugin settings, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
+`omux config open` opens `~/.omux/config.toml` with your configured visual editor or the macOS default app. If you prefer a graphical form, install the registry-hosted Settings UI plugin:
+
+```bash
+omux plugins install settings-ui
+omux settings-ui
+```
+
+For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, registry settings, plugin settings, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
 
 ## 6. Add a simple hook
 
@@ -195,6 +203,13 @@ chmod +x ~/.omux/hooks/command-failed/20-notify
 
 OpenMUX passes hook data as JSON on stdin. Hooks can call `omux` again to split panes, run commands, send text, or inspect workspace state. For the full hook list and payload contract, see [Hooks](./hooks.md).
 
+You can also install hook packages from the official registry:
+
+```bash
+omux hooks discover
+omux hooks install <hook-id>
+```
+
 ## 7. Use plugins
 
 List and manage plugins:
@@ -206,6 +221,13 @@ omux plugins
 
 Bundled plugins can be toggled from the interactive picker. External plugins are executable files under `~/.omux/plugins/`; see [Plugin ecosystem](./plugins.md) to create one and [Plugin index](./plugins/index.md) for bundled plugin docs.
 
+Discover and install registry-hosted plugins:
+
+```bash
+omux plugins discover
+omux plugins install <plugin-id>
+```
+
 ## 8. Know where files live
 
 | Path | Purpose |
@@ -214,6 +236,7 @@ Bundled plugins can be toggled from the interactive picker. External plugins are
 | `~/.omux/themes/` | Custom themes. |
 | `~/.omux/hooks/` | User hook handlers. |
 | `~/.omux/plugins/` | User plugin commands. |
+| `~/.omux/installed/` | Receipts for registry-installed hooks and plugins. |
 | `~/.omux/generated/ghostty/` | Generated OpenMUX-managed terminal config. |
 
 Prefer editing `config.toml`, custom theme files, hook files, and plugin executables. The generated Ghostty directory is managed by OpenMUX.
