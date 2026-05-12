@@ -140,11 +140,17 @@ struct OmuxCLIPluginRunner {
         let process = Process()
         process.executableURL = plugin.executableURL
         process.arguments = arguments
-        process.environment = environment.merging([
+        var pluginEnvironment = environment.merging([
             "OMUX_PLUGIN_COMMAND": plugin.commandName,
             "OMUX_PLUGIN_EXECUTABLE": plugin.executableURL.path,
             "OMUX_PLUGINS_DIR": plugin.executableURL.deletingLastPathComponent().path,
         ]) { current, _ in current }
+        if pluginEnvironment["OMUX_CLI"] == nil,
+           let executableURL = Bundle.main.executableURL,
+           FileManager.default.isExecutableFile(atPath: executableURL.path) {
+            pluginEnvironment["OMUX_CLI"] = executableURL.path
+        }
+        process.environment = pluginEnvironment
 
         try process.run()
         process.waitUntilExit()

@@ -125,13 +125,11 @@ final class ExtensionPaneActionService: @unchecked Sendable {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = ["__omux_action"]
-        process.environment = ProcessInfo.processInfo.environment.merging([
-            "OMUX_PLUGIN_COMMAND": commandName,
-            "OMUX_PLUGIN_EXECUTABLE": executableURL.path,
-            "OMUX_PLUGINS_DIR": executableURL.deletingLastPathComponent().path,
-            "OMUX_EXTENSION_PANE_ID": request.paneID.rawValue,
-            "OMUX_EXTENSION_PANE_ACTION": request.action,
-        ]) { current, _ in current }
+        process.environment = ProcessInfo.processInfo.environment.merging(pluginEnvironment(
+            commandName: commandName,
+            executableURL: executableURL,
+            request: request
+        )) { current, _ in current }
 
         let stdin = Pipe()
         let stdout = Pipe()
@@ -163,5 +161,43 @@ final class ExtensionPaneActionService: @unchecked Sendable {
         }
 
         return try JSONDecoder().decode(ExtensionPaneActionResponse.self, from: Data(trimmedOutput.utf8))
+    }
+
+    private static func pluginEnvironment(
+        commandName: String,
+        executableURL: URL,
+        request: ExtensionPaneActionRequest
+    ) -> [String: String] {
+        var environment: [String: String] = [
+            "OMUX_PLUGIN_COMMAND": commandName,
+            "OMUX_PLUGIN_EXECUTABLE": executableURL.path,
+            "OMUX_PLUGINS_DIR": executableURL.deletingLastPathComponent().path,
+            "OMUX_EXTENSION_PANE_ID": request.paneID.rawValue,
+            "OMUX_EXTENSION_PANE_ACTION": request.action,
+        ]
+        let existingPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = [
+            existingPath,
+            "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/bin",
+            "/Applications/OpenMUX.app/Contents/MacOS",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ].joined(separator: ":")
+        if let bundledCLIURL = bundledCLIURL() {
+            environment["OMUX_CLI"] = bundledCLIURL.path
+        }
+        return environment
+    }
+
+    private static func bundledCLIURL() -> URL? {
+        let bundleURL = Bundle.main.bundleURL
+        let candidates = [
+            bundleURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false),
+            URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 }

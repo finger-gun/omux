@@ -447,11 +447,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
-            process.environment = ProcessInfo.processInfo.environment.merging([
-                "OMUX_PLUGIN_COMMAND": contribution.pluginID,
-                "OMUX_PLUGIN_EXECUTABLE": executableURL.path,
-                "OMUX_PLUGINS_DIR": executableURL.deletingLastPathComponent().path,
-            ]) { current, _ in current }
+            process.environment = Self.pluginEnvironment(
+                commandName: contribution.pluginID,
+                executableURL: executableURL
+            )
             do {
                 try process.run()
             } catch {
@@ -459,6 +458,38 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
         }
         refreshMenuValidation()
+    }
+
+    private static func pluginEnvironment(commandName: String, executableURL: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment.merging([
+            "OMUX_PLUGIN_COMMAND": commandName,
+            "OMUX_PLUGIN_EXECUTABLE": executableURL.path,
+            "OMUX_PLUGINS_DIR": executableURL.deletingLastPathComponent().path,
+        ]) { current, _ in current }
+        let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = [
+            existingPath,
+            "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/bin",
+            "/Applications/OpenMUX.app/Contents/MacOS",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ].joined(separator: ":")
+        if let bundledCLIURL = bundledCLIURL() {
+            environment["OMUX_CLI"] = bundledCLIURL.path
+        }
+        return environment
+    }
+
+    private static func bundledCLIURL() -> URL? {
+        let bundleURL = Bundle.main.bundleURL
+        let candidates = [
+            bundleURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false),
+            URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
     @discardableResult
