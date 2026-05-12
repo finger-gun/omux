@@ -514,6 +514,64 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func loadsExtensionRegistrySettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [registries]
+            hooks = ["https://github.com/example/omux-hooks"]
+            plugins = ["file:///tmp/omux-plugins"]
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.registries.hooks == ["https://github.com/example/omux-hooks"])
+        #expect(result.config.registries.plugins == ["file:///tmp/omux-plugins"])
+    }
+
+    @Test
+    func defaultsExtensionRegistriesToOfficialRepositories() throws {
+        let result = OmuxConfigLoader(configURL: temporaryMissingConfigURL()).load()
+
+        #expect(result.hasErrors == false)
+        #expect(result.config.registries.hooks == OmuxConfigRegistries.defaultHooks)
+        #expect(result.config.registries.plugins == OmuxConfigRegistries.defaultPlugins)
+    }
+
+    @Test
+    func rejectsInvalidExtensionRegistrySettings() throws {
+        let cases = [
+            ("hooks = \"https://github.com/example/omux-hooks\"", "registries.hooks must be an array"),
+            ("plugins = [123]", "registries.plugins must be an array"),
+            ("hooks = [\"ftp://example.com/registry\"]", "registries.hooks contains an unsupported registry URL"),
+            ("unknown = []", "Unknown [registries] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [registries]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
     func loadsKeyBindingsAndUnbinds() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
@@ -588,6 +646,9 @@ struct OmuxConfigTests {
         #expect(contents.contains("enabled = true"))
         #expect(contents.contains("renderer = \"builtin\""))
         #expect(contents.contains("theme = \"auto\""))
+        #expect(contents.contains("[registries]"))
+        #expect(contents.contains("hooks = [\"https://github.com/finger-gun/omux-hooks\"]"))
+        #expect(contents.contains("plugins = [\"https://github.com/finger-gun/omux-plugins\"]"))
         #expect(contents.contains("[keys]"))
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
             #expect(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))

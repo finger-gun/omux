@@ -44,6 +44,63 @@ In the production app, hook handlers run asynchronously on a background queue. O
 
 OpenMUX also enriches hook `PATH` before launch so hooks work when the app is started from Finder or `/Applications`, where macOS provides a minimal GUI environment. The hook path includes the app bundle executable directory, `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and the standard system paths. This lets hooks call installed tools such as `omux`, `jq`, `deno`, or `python3` without hardcoding absolute paths in most setups.
 
+## Registry discovery and install
+
+OpenMUX can discover and install hook packages from TOML registries. The official default registry is:
+
+```text
+https://github.com/finger-gun/omux-hooks
+```
+
+Commands:
+
+```sh
+omux hooks discover
+omux hooks discover --json
+omux hooks install <hook-id>
+omux hooks update <hook-id>
+omux hooks uninstall <hook-id>
+```
+
+Use `--registry <url>` to discover or install from a custom registry for one command. Registry-installed hooks are still copied into the same local layout under `~/.omux/hooks/<hook-name>/`; runtime hook execution never fetches remote code.
+
+Registry packages use TOML metadata. A registry root contains `catalog.toml`:
+
+```toml
+schema = 1
+
+[packages.fail-notify]
+kind = "hook"
+name = "Notify on failure"
+description = "Shows a notification when a command exits nonzero."
+version = "0.1.0"
+path = "hooks/fail-notify/omux-hook.toml"
+tags = ["notifications"]
+```
+
+The package manifest describes hook metadata and installed files:
+
+```toml
+schema = 1
+id = "fail-notify"
+name = "Notify on failure"
+description = "Shows a notification when a command exits nonzero."
+version = "0.1.0"
+license = "Apache-2.0"
+kind = "hook"
+
+[hook]
+name = "terminal-command-finished"
+category = "command"
+
+[files.handler]
+source = "20-notify"
+target = "20-notify"
+executable = true
+```
+
+Installing a hook installs executable local code. OpenMUX prints the source registry, package version, and target paths before install; use `--yes` for non-interactive installs.
+
 ## Handler format
 
 A handler can be any executable file. OpenMUX launches the handler directly.

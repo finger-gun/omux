@@ -60,7 +60,7 @@ targets.append(
         ),
         .target(
             name: "OmuxCLI",
-            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxTheme", "OmuxMarkdownPreviewPlugin"],
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxTheme", "OmuxHooks", "OmuxMarkdownPreviewPlugin"],
             path: "Sources/OmuxCLI"
         ),
         .target(

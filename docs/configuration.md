@@ -42,6 +42,10 @@ enabled = true
 renderer = "builtin"
 theme = "auto"
 
+[registries]
+hooks = ["https://github.com/finger-gun/omux-hooks"]
+plugins = ["https://github.com/finger-gun/omux-plugins"]
+
 [keys]
 "cmd+p" = "command-palette.workspace"
 "cmd+shift+p" = "command-palette.command"
@@ -275,6 +279,25 @@ theme = "auto"
 ```
 
 Run `omux markdown-preview README.md --watch` from an OpenMUX pane to open a preview beside your terminal. See [Markdown Preview plugin](./plugins/markdown-preview.md) for the full workflow.
+
+## `[registries]` settings
+
+Extension registry URLs configure where `omux hooks` and `omux plugins` discover remote packages. Official registries are used by default.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `hooks` | array of URL strings | Hook registries used by `omux hooks discover/install`. Defaults to `https://github.com/finger-gun/omux-hooks`. |
+| `plugins` | array of URL strings | Plugin registries used by `omux plugins discover/install`. Defaults to `https://github.com/finger-gun/omux-plugins`. |
+
+Example:
+
+```toml
+[registries]
+hooks = ["https://github.com/finger-gun/omux-hooks"]
+plugins = ["https://github.com/finger-gun/omux-plugins", "https://github.com/example/omux-plugins"]
+```
+
+Use `--registry <url>` on a discover or install command to override configured registries for one invocation.
 
 ## `[workspace]` settings
 

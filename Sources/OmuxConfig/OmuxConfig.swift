@@ -312,6 +312,22 @@ public struct OmuxConfigPlugins: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigRegistries: Equatable, Sendable {
+    public static let defaultHooks = ["https://github.com/finger-gun/omux-hooks"]
+    public static let defaultPlugins = ["https://github.com/finger-gun/omux-plugins"]
+
+    public let hooks: [String]
+    public let plugins: [String]
+
+    public init(
+        hooks: [String] = Self.defaultHooks,
+        plugins: [String] = Self.defaultPlugins
+    ) {
+        self.hooks = hooks
+        self.plugins = plugins
+    }
+}
+
 public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
     public let autoCheckUpdate: Bool
@@ -320,6 +336,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
     public let plugins: OmuxConfigPlugins
+    public let registries: OmuxConfigRegistries
     public let keyBindings: [OpenMUXKeyBindingOverride]
     public let ghostty: [OmuxGhosttyConfigEntry]
     public let sourceURL: URL?
@@ -332,6 +349,7 @@ public struct OmuxConfig: Equatable, Sendable {
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
+        registries: OmuxConfigRegistries = OmuxConfigRegistries(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
         ghostty: [OmuxGhosttyConfigEntry],
         sourceURL: URL? = nil
@@ -343,6 +361,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.workspace = workspace
         self.ui = ui
         self.plugins = plugins
+        self.registries = registries
         self.keyBindings = keyBindings
         self.ghostty = ghostty
         self.sourceURL = sourceURL
@@ -356,6 +375,7 @@ public struct OmuxConfig: Equatable, Sendable {
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
         plugins: OmuxConfigPlugins(),
+        registries: OmuxConfigRegistries(),
         keyBindings: [],
         ghostty: []
     )
@@ -477,6 +497,10 @@ public enum OmuxConfigTemplate {
         enabled = true
         renderer = "builtin"
         theme = "auto"
+
+        [registries]
+        hooks = ["https://github.com/finger-gun/omux-hooks"]
+        plugins = ["https://github.com/finger-gun/omux-plugins"]
 
         [keys]
         \(OpenMUXKeyBindingRegistry.defaultBindingPairs.map { "\"\($0.0.description)\" = \"\($0.1.rawValue)\"" }.joined(separator: "\n"))
@@ -835,7 +859,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "plugins.markdown-preview", "keys", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "plugins.markdown-preview", "registries", "keys", "ghostty"]
         for tableName in document.tableNames where allowedTables.contains(tableName) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
@@ -919,6 +943,7 @@ public struct OmuxConfigLoader {
                 workspace: config.workspace,
                 ui: config.ui,
                 plugins: config.plugins,
+                registries: config.registries,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -932,6 +957,7 @@ public struct OmuxConfigLoader {
                 workspace: config.workspace,
                 ui: config.ui,
                 plugins: config.plugins,
+                registries: config.registries,
                 keyBindings: config.keyBindings,
                 ghostty: config.ghostty,
                 sourceURL: sourceURL
@@ -1375,6 +1401,55 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let registriesAllowedKeys: Set<String> = ["hooks", "plugins"]
+        var hookRegistries = config.registries.hooks
+        var pluginRegistries = config.registries.plugins
+        for entry in document.entries(in: "registries") {
+            guard registriesAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [registries] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard let values = registryURLStrings(from: entry.value) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "registries.\(entry.key) must be an array of URL strings.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+            guard values.allSatisfy(Self.isSupportedRegistryURLString) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "registries.\(entry.key) contains an unsupported registry URL.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "hooks":
+                hookRegistries = values
+            case "plugins":
+                pluginRegistries = values
+            default:
+                break
+            }
+        }
+
         var keyBindings: [OpenMUXKeyBindingOverride] = []
         var seenKeyChords = Set<OpenMUXKeyChord>()
         for entry in document.entries(in: "keys") {
@@ -1472,6 +1547,10 @@ public struct OmuxConfigLoader {
                     theme: markdownPreviewTheme
                 )
             ),
+            registries: OmuxConfigRegistries(
+                hooks: hookRegistries,
+                plugins: pluginRegistries
+            ),
             keyBindings: keyBindings,
             ghostty: ghosttyEntries,
             sourceURL: sourceURL
@@ -1491,5 +1570,32 @@ public struct OmuxConfigLoader {
         default:
             return "Malformed [keys] chord '\(rawChord)'."
         }
+    }
+
+    private func registryURLStrings(from value: OmuxTOMLValue) -> [String]? {
+        guard case .array(let values) = value else {
+            return nil
+        }
+
+        var strings: [String] = []
+        strings.reserveCapacity(values.count)
+        for value in values {
+            guard let string = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  string.isEmpty == false
+            else {
+                return nil
+            }
+            strings.append(string)
+        }
+        return strings
+    }
+
+    private static func isSupportedRegistryURLString(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased()
+        else {
+            return false
+        }
+        return ["https", "file"].contains(scheme)
     }
 }
