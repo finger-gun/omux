@@ -106,7 +106,11 @@ final class TerminalActionCoordinator {
             fputs("warning: failed to emit terminal action hook \(event.action.hookName): \(error)\n", stderr)
         }
 
-        controller.publishTerminalEvent(makeControlPlaneEvent(from: event, context: context, payload: payload))
+        if case .searchMatchesUpdated = event.action {
+            // Internal find-bar event; not forwarded to the control plane.
+        } else {
+            controller.publishTerminalEvent(makeControlPlaneEvent(from: event, context: context, payload: payload))
+        }
 
         switch event.action {
         case .openURL(let url, _):
@@ -164,6 +168,8 @@ final class TerminalActionCoordinator {
             name = .childExited
         case .rendererHealthChanged:
             name = .rendererHealthChanged
+        case .searchMatchesUpdated:
+            name = .rendererHealthChanged // unreachable; guarded above
         }
 
         return ControlPlaneTerminalEvent(

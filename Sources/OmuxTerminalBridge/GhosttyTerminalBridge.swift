@@ -61,6 +61,9 @@ public protocol GhosttyRuntime {
     func terminalTextSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> TerminalTextSnapshot
     func scrollbackSnapshot(runtimeSurfaceID: String, maxBytes: Int, maxLines: Int) -> PaneScrollbackSnapshot?
     func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool
+    func searchSurface(runtimeSurfaceID: String, needle: String) throws
+    func navigateSearch(runtimeSurfaceID: String, forward: Bool) throws
+    func endSearch(runtimeSurfaceID: String) throws
 }
 
 public extension GhosttyRuntime {
@@ -157,6 +160,16 @@ public extension GhosttyRuntime {
     func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool {
         _ = runtimeSurfaceID
         return false
+    }
+
+    func searchSurface(runtimeSurfaceID: String, needle: String) throws {
+        _ = runtimeSurfaceID; _ = needle
+    }
+    func navigateSearch(runtimeSurfaceID: String, forward: Bool) throws {
+        _ = runtimeSurfaceID; _ = forward
+    }
+    func endSearch(runtimeSurfaceID: String) throws {
+        _ = runtimeSurfaceID
     }
 }
 
@@ -540,6 +553,29 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             throw TerminalBridgeError.missingSession(paneID)
         }
         return try runtime.clearScreenAndScrollback(runtimeSurfaceID: runtimeSurfaceID)
+    }
+
+    public func search(paneID: PaneID, needle: String) throws {
+        let runtimeSurfaceID = try requireSurfaceID(for: paneID)
+        try runtime.searchSurface(runtimeSurfaceID: runtimeSurfaceID, needle: needle)
+    }
+
+    public func navigateSearch(paneID: PaneID, forward: Bool) throws {
+        let runtimeSurfaceID = try requireSurfaceID(for: paneID)
+        try runtime.navigateSearch(runtimeSurfaceID: runtimeSurfaceID, forward: forward)
+    }
+
+    public func endSearch(paneID: PaneID) throws {
+        let runtimeSurfaceID = try requireSurfaceID(for: paneID)
+        try runtime.endSearch(runtimeSurfaceID: runtimeSurfaceID)
+    }
+
+    private func requireSurfaceID(for paneID: PaneID) throws -> String {
+        lock.lock()
+        let id = sessionStateByPane[paneID]?.runtimeSurfaceID
+        lock.unlock()
+        guard let id else { throw TerminalBridgeError.missingSession(paneID) }
+        return id
     }
 
     public func terminalTextSnapshot(

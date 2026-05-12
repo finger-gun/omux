@@ -2397,7 +2397,7 @@ public final class WorkspaceController: @unchecked Sendable {
                         pane.terminalState.rendererHealthy = isHealthy
                     }
                     updatedWorkspace = workspaces[workspaceIndex]
-                case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
+                case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished, .searchMatchesUpdated:
                     break
                 }
 

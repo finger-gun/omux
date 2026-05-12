@@ -164,6 +164,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
     private var commandPaletteView: CommandPaletteView?
     private var paneFindBarView: PaneFindBarView?
+    private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
@@ -753,11 +754,8 @@ final class WorkspaceShellViewController: NSViewController {
 
     func presentPaneFind(mode: PaneFindBarView.Mode, initialQuery: String = "") {
         if let existing = paneFindBarView {
-            existing.present(
-                mode: mode,
-                paneResults: collectPaneResults(mode: mode, query: initialQuery),
-                existingQuery: initialQuery
-            )
+            existing.present(mode: mode, existingQuery: initialQuery)
+            applySearch(to: existing, query: initialQuery)
             return
         }
 
@@ -768,73 +766,100 @@ final class WorkspaceShellViewController: NSViewController {
             findBar.trailingAnchor.constraint(equalTo: canvasView.trailingAnchor, constant: -8),
             findBar.bottomAnchor.constraint(equalTo: canvasView.bottomAnchor, constant: -8),
             findBar.widthAnchor.constraint(equalToConstant: 460),
-            findBar.heightAnchor.constraint(equalToConstant: 280),
         ])
 
         findBar.onDismiss = { [weak self, weak findBar] in
+            self?.stopFindSearch()
             findBar?.removeFromSuperview()
             if self?.paneFindBarView === findBar {
                 self?.paneFindBarView = nil
             }
         }
 
-        findBar.onFocusPane = { [weak self] paneID in
-            _ = self?.controller.focus(paneID: paneID)
+        findBar.onSearch = { [weak self, weak findBar] query in
+            guard let self, let findBar else { return }
+            applySearch(to: findBar, query: query)
+        }
+
+        findBar.onNavigate = { [weak self, weak findBar] forward in
+            guard let self, let findBar else { return }
+            navigateSearch(in: findBar, forward: forward)
         }
 
         findBar.onModeToggle = { [weak self] newMode, query in
             self?.presentPaneFind(mode: newMode, initialQuery: query)
         }
 
-        findBar.onQueryChange = { [weak self, weak findBar] query in
-            guard let self, let findBar else { return }
-            let results = self.collectPaneResults(mode: findBar.mode, query: query)
-            findBar.present(mode: findBar.mode, paneResults: results, existingQuery: query)
+        findBar.onFocusPaneForSearch = { [weak self] paneID, query in
+            _ = self?.controller.focus(paneID: paneID)
+            self?.presentPaneFind(mode: .currentPane, initialQuery: query)
         }
 
-        findBar.present(
-            mode: mode,
-            paneResults: collectPaneResults(mode: mode, query: initialQuery),
-            existingQuery: initialQuery
-        )
+        // Observe Ghostty search callbacks to update match count label
+        let token = controller.terminalBridge.addTerminalActionObserver { [weak findBar] event in
+            guard case .searchMatchesUpdated(let total, let selected) = event.action else { return }
+            DispatchQueue.main.async {
+                findBar?.updateMatchCount(total: total, selected: selected)
+            }
+        }
+        findSearchObserverToken = token
+
+        findBar.present(mode: mode, existingQuery: initialQuery)
+        if !initialQuery.isEmpty {
+            applySearch(to: findBar, query: initialQuery)
+        }
     }
 
     func dismissPaneFind() {
         paneFindBarView?.onDismiss?()
     }
 
-    private func collectPaneResults(mode: PaneFindBarView.Mode, query: String) -> [PaneFindPaneResult] {
-        let workspaces: [Workspace]
-        switch mode {
+    private func applySearch(to findBar: PaneFindBarView, query: String) {
+        let bridge = controller.terminalBridge
+        switch findBar.mode {
         case .currentPane:
-            guard let workspace = currentWorkspace, let pane = workspace.focusedPane else { return [] }
-            workspaces = [workspace]
-            _ = pane
+            guard let pane = currentWorkspace?.focusedPane else { return }
+            try? bridge.search(paneID: pane.id, needle: query)
         case .allPanes:
-            workspaces = controller.allWorkspaces()
-        }
-
-        return workspaces.flatMap { workspace -> [PaneFindPaneResult] in
-            let panes: [Pane]
-            switch mode {
-            case .currentPane:
-                guard let pane = workspace.focusedPane else { return [] }
-                panes = [pane]
-            case .allPanes:
-                panes = workspace.tabs.flatMap(\.panes)
+            let allPanes = controller.allWorkspaces().flatMap { ws in ws.tabs.flatMap(\.panes).map { (ws, $0) } }
+            for (_, pane) in allPanes {
+                try? bridge.search(paneID: pane.id, needle: query)
             }
-            return panes.compactMap { pane -> PaneFindPaneResult? in
-                let snapshot = controller.terminalBridge.terminalTextSnapshot(for: pane.id)
+            // Build per-pane summary using text search for count display
+            let summaryItems: [(paneID: PaneID, title: String, count: Int)] = allPanes.compactMap { ws, pane in
+                let snapshot = bridge.terminalTextSnapshot(for: pane.id)
                 guard snapshot.isAvailable else { return nil }
-                let matches = PaneFindSearch.search(query: query, in: snapshot.text)
-                guard !matches.isEmpty || query.isEmpty else { return nil }
-                return PaneFindPaneResult(
-                    paneID: pane.id,
-                    workspaceName: workspace.name,
-                    paneTitle: pane.title,
-                    matches: matches
-                )
+                let count = PaneFindSearch.matchCount(query: query, in: snapshot.text)
+                guard count > 0 else { return nil }
+                return (paneID: pane.id, title: "\(ws.name) › \(pane.title)", count: count)
             }
+            findBar.setPaneSummary(summaryItems)
+        }
+    }
+
+    private func navigateSearch(in findBar: PaneFindBarView, forward: Bool) {
+        let bridge = controller.terminalBridge
+        switch findBar.mode {
+        case .currentPane:
+            guard let pane = currentWorkspace?.focusedPane else { return }
+            try? bridge.navigateSearch(paneID: pane.id, forward: forward)
+        case .allPanes:
+            // Navigate in the focused pane only
+            guard let pane = currentWorkspace?.focusedPane else { return }
+            try? bridge.navigateSearch(paneID: pane.id, forward: forward)
+        }
+    }
+
+    private func stopFindSearch() {
+        if let token = findSearchObserverToken {
+            controller.terminalBridge.removeTerminalActionObserver(token: token)
+            findSearchObserverToken = nil
+        }
+        // End search on all active pane surfaces
+        let bridge = controller.terminalBridge
+        let allPanes = controller.allWorkspaces().flatMap { ws in ws.tabs.flatMap(\.panes) }
+        for pane in allPanes {
+            try? bridge.endSearch(paneID: pane.id)
         }
     }
 

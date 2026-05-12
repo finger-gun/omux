@@ -27,6 +27,7 @@ public enum TerminalAction: Equatable, Codable, Sendable {
     case progressReported(state: TerminalProgressState, progress: Int?)
     case childExited(exitCode: Int, elapsedMilliseconds: UInt64)
     case rendererHealthChanged(isHealthy: Bool)
+    case searchMatchesUpdated(total: Int, selected: Int)
 
     public var payload: OmuxValue {
         switch self {
@@ -74,6 +75,8 @@ public enum TerminalAction: Equatable, Codable, Sendable {
             ])
         case .rendererHealthChanged(let isHealthy):
             return .object(["isHealthy": .bool(isHealthy)])
+        case .searchMatchesUpdated(let total, let selected):
+            return .object(["total": .integer(total), "selected": .integer(selected)])
         }
     }
 
@@ -101,6 +104,8 @@ public enum TerminalAction: Equatable, Codable, Sendable {
             return "terminal-child-exited"
         case .rendererHealthChanged:
             return "terminal-renderer-health-changed"
+        case .searchMatchesUpdated:
+            return "terminal-search-matches-updated"
         }
     }
 }

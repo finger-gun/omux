@@ -1,20 +1,6 @@
 import AppKit
 import OmuxCore
 
-// MARK: - Data model
-
-struct PaneFindMatch {
-    let lineText: String
-    let matchRanges: [NSRange]
-}
-
-struct PaneFindPaneResult {
-    let paneID: PaneID
-    let workspaceName: String
-    let paneTitle: String
-    let matches: [PaneFindMatch]
-}
-
 // MARK: - Find bar
 
 @MainActor
@@ -24,21 +10,28 @@ final class PaneFindBarView: NSView {
         case allPanes
     }
 
+    // Callbacks wired by WorkspaceWindowController
     var onDismiss: (() -> Void)?
-    var onFocusPane: ((PaneID) -> Void)?
+    var onSearch: ((String) -> Void)?
+    var onNavigate: ((Bool) -> Void)?   // true = forward
+    var onModeToggle: ((Mode, String) -> Void)?
+    var onFocusPaneForSearch: ((PaneID, String) -> Void)?
 
     private let searchField = NSSearchField()
     private let matchCountLabel = NSTextField(labelWithString: "")
     private let prevButton = NSButton()
     private let nextButton = NSButton()
     private let allPanesButton = NSButton()
-    private let resultsScrollView = NSScrollView()
-    private let resultsTextView = NSTextView()
+
+    // Per-pane summary shown in all-panes mode
+    private var paneSummaryStack: NSStackView?
+    private var paneSummaryItems: [(paneID: PaneID, label: NSButton)] = []
+    private var heightConstraint: NSLayoutConstraint?
 
     private(set) var mode: Mode = .currentPane
-    private var paneResults: [PaneFindPaneResult] = []
-    private var flatMatches: [(paneResultIndex: Int, matchIndex: Int)] = []
-    private var currentFlatIndex: Int = 0
+
+    private var searchTotal: Int = 0
+    private var searchSelected: Int = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -50,27 +43,77 @@ final class PaneFindBarView: NSView {
 
     // MARK: - Public interface
 
-    func present(
-        mode: Mode,
-        paneResults: [PaneFindPaneResult],
-        existingQuery: String = ""
-    ) {
+    func present(mode: Mode, existingQuery: String = "") {
         self.mode = mode
-        self.paneResults = paneResults
-        updateFlatMatches()
-        currentFlatIndex = 0
-        updateMatchUI()
-        renderResults()
         allPanesButton.state = mode == .allPanes ? .on : .off
         allPanesButton.toolTip = mode == .allPanes ? "Searching all panes" : "Search all panes"
+        searchTotal = 0
+        searchSelected = 0
+        updateMatchUI()
         if !existingQuery.isEmpty {
             searchField.stringValue = existingQuery
         }
         window?.makeFirstResponder(searchField)
     }
 
-    var currentQuery: String {
-        searchField.stringValue
+    var currentQuery: String { searchField.stringValue }
+
+    /// Called by the controller when Ghostty fires SEARCH_TOTAL / SEARCH_SELECTED callbacks.
+    /// Pass -1 for a field to keep its current value.
+    func updateMatchCount(total: Int, selected: Int) {
+        if total >= 0 { searchTotal = total }
+        if selected >= 0 { searchSelected = selected }
+        updateMatchUI()
+    }
+
+    /// Called by the controller to populate the per-pane summary in all-panes mode.
+    func setPaneSummary(_ items: [(paneID: PaneID, title: String, count: Int)]) {
+        paneSummaryStack?.removeFromSuperview()
+        paneSummaryStack = nil
+        paneSummaryItems = []
+        guard mode == .allPanes, !items.isEmpty else {
+            updateHeight(showSummary: false)
+            return
+        }
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.alignment = .leading
+
+        for item in items {
+            let btn = NSButton(title: "\(item.title): \(item.count) match\(item.count == 1 ? "" : "es")",
+                               target: self, action: #selector(paneSummaryTapped(_:)))
+            btn.bezelStyle = .inline
+            btn.isBordered = false
+            btn.alignment = .left
+            btn.font = .systemFont(ofSize: 11)
+            btn.contentTintColor = .secondaryLabelColor
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(btn)
+            paneSummaryItems.append((paneID: item.paneID, label: btn))
+        }
+
+        let separatorBox = NSBox()
+        separatorBox.boxType = .separator
+        separatorBox.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(separatorBox)
+        addSubview(stack)
+        paneSummaryStack = stack
+
+        NSLayoutConstraint.activate([
+            separatorBox.topAnchor.constraint(equalTo: topAnchor, constant: 44),
+            separatorBox.leadingAnchor.constraint(equalTo: leadingAnchor),
+            separatorBox.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            stack.topAnchor.constraint(equalTo: separatorBox.bottomAnchor, constant: 4),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+        ])
+
+        updateHeight(showSummary: true, rowCount: items.count)
     }
 
     // MARK: - View setup
@@ -87,11 +130,7 @@ final class PaneFindBarView: NSView {
         blurView.state = .active
         blurView.translatesAutoresizingMaskIntoConstraints = false
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-
-        searchField.placeholderString = "Find in pane…"
+        searchField.placeholderString = "Find…"
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.sendsSearchStringImmediately = true
         searchField.target = self
@@ -111,6 +150,7 @@ final class PaneFindBarView: NSView {
         prevButton.action = #selector(previousMatch(_:))
         prevButton.translatesAutoresizingMaskIntoConstraints = false
         prevButton.contentTintColor = .secondaryLabelColor
+        prevButton.isEnabled = false
 
         nextButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Next match")
         nextButton.bezelStyle = .regularSquare
@@ -119,6 +159,7 @@ final class PaneFindBarView: NSView {
         nextButton.action = #selector(nextMatch(_:))
         nextButton.translatesAutoresizingMaskIntoConstraints = false
         nextButton.contentTintColor = .secondaryLabelColor
+        nextButton.isEnabled = false
 
         allPanesButton.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Search all panes")
         allPanesButton.bezelStyle = .regularSquare
@@ -139,23 +180,6 @@ final class PaneFindBarView: NSView {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.contentTintColor = .secondaryLabelColor
 
-        resultsScrollView.translatesAutoresizingMaskIntoConstraints = false
-        resultsScrollView.hasVerticalScroller = true
-        resultsScrollView.borderType = .noBorder
-        resultsScrollView.backgroundColor = .clear
-        resultsScrollView.drawsBackground = false
-
-        resultsTextView.isEditable = false
-        resultsTextView.isSelectable = true
-        resultsTextView.backgroundColor = .clear
-        resultsTextView.drawsBackground = false
-        resultsTextView.textContainerInset = NSSize(width: 8, height: 6)
-        resultsTextView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        resultsTextView.isVerticallyResizable = true
-        resultsTextView.autoresizingMask = [.width]
-        resultsTextView.textContainer?.widthTracksTextView = true
-        resultsScrollView.documentView = resultsTextView
-
         let controlsRow = NSStackView(views: [
             searchField, matchCountLabel, prevButton, nextButton, allPanesButton, closeButton
         ])
@@ -170,8 +194,9 @@ final class PaneFindBarView: NSView {
 
         addSubview(blurView)
         addSubview(controlsRow)
-        addSubview(separator)
-        addSubview(resultsScrollView)
+
+        let hc = heightAnchor.constraint(equalToConstant: 44)
+        heightConstraint = hc
 
         NSLayoutConstraint.activate([
             blurView.topAnchor.constraint(equalTo: topAnchor),
@@ -184,15 +209,6 @@ final class PaneFindBarView: NSView {
             controlsRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             controlsRow.heightAnchor.constraint(equalToConstant: 28),
 
-            separator.topAnchor.constraint(equalTo: controlsRow.bottomAnchor, constant: 6),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            resultsScrollView.topAnchor.constraint(equalTo: separator.bottomAnchor),
-            resultsScrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            resultsScrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            resultsScrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
             prevButton.widthAnchor.constraint(equalToConstant: 20),
             prevButton.heightAnchor.constraint(equalToConstant: 20),
             nextButton.widthAnchor.constraint(equalToConstant: 20),
@@ -202,126 +218,53 @@ final class PaneFindBarView: NSView {
             closeButton.widthAnchor.constraint(equalToConstant: 20),
             closeButton.heightAnchor.constraint(equalToConstant: 20),
             matchCountLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 52),
+
+            hc,
         ])
     }
 
-    // MARK: - Search
-
-    private func updateFlatMatches() {
-        flatMatches = paneResults.enumerated().flatMap { paneIdx, paneResult in
-            paneResult.matches.indices.map { matchIdx in (paneResultIndex: paneIdx, matchIndex: matchIdx) }
-        }
+    private func updateHeight(showSummary: Bool, rowCount: Int = 0) {
+        let base: CGFloat = 44
+        let extraPerRow: CGFloat = 22
+        let separatorHeight: CGFloat = 10
+        let newHeight = showSummary ? base + separatorHeight + extraPerRow * CGFloat(rowCount) : base
+        heightConstraint?.constant = newHeight
     }
 
+    // MARK: - Match count UI
+
     private func updateMatchUI() {
-        let total = flatMatches.count
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
             matchCountLabel.stringValue = ""
-        } else if total == 0 {
+            prevButton.isEnabled = false
+            nextButton.isEnabled = false
+        } else if searchTotal == 0 {
             matchCountLabel.stringValue = "No results"
             matchCountLabel.textColor = .systemRed
+            prevButton.isEnabled = false
+            nextButton.isEnabled = false
         } else {
-            matchCountLabel.stringValue = "\(currentFlatIndex + 1) of \(total)"
+            let idx = searchSelected >= 0 ? searchSelected + 1 : 1
+            matchCountLabel.stringValue = "\(idx) of \(searchTotal)"
             matchCountLabel.textColor = .secondaryLabelColor
+            prevButton.isEnabled = searchTotal > 1
+            nextButton.isEnabled = searchTotal > 1
         }
-        prevButton.isEnabled = total > 1
-        nextButton.isEnabled = total > 1
-    }
-
-    private func renderResults() {
-        let storage = resultsTextView.textStorage
-        let attributed = NSMutableAttributedString()
-        let baseFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let sectionFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        let highlightColor = NSColor.systemYellow.withAlphaComponent(0.45)
-        let activeHighlightColor = NSColor.systemOrange.withAlphaComponent(0.55)
-
-        var globalMatchIdx = 0
-        for (paneIdx, paneResult) in paneResults.enumerated() {
-            if mode == .allPanes {
-                let header = "\(paneResult.workspaceName)  ›  \(paneResult.paneTitle)\n"
-                let headerAttr = NSMutableAttributedString(
-                    string: header,
-                    attributes: [
-                        .font: sectionFont,
-                        .foregroundColor: NSColor.tertiaryLabelColor,
-                    ]
-                )
-                if paneIdx > 0 {
-                    attributed.append(NSAttributedString(string: "\n"))
-                }
-                attributed.append(headerAttr)
-            }
-
-            for (matchIdx, match) in paneResult.matches.enumerated() {
-                let isActive = globalMatchIdx == currentFlatIndex
-                let lineStr = NSMutableAttributedString(
-                    string: match.lineText + "\n",
-                    attributes: [
-                        .font: baseFont,
-                        .foregroundColor: NSColor.labelColor,
-                    ]
-                )
-                if isActive {
-                    lineStr.addAttribute(
-                        .backgroundColor,
-                        value: NSColor.controlAccentColor.withAlphaComponent(0.15),
-                        range: NSRange(location: 0, length: lineStr.length - 1)
-                    )
-                }
-                for range in match.matchRanges {
-                    let color = isActive ? activeHighlightColor : highlightColor
-                    lineStr.addAttribute(.backgroundColor, value: color, range: range)
-                }
-                _ = matchIdx
-                attributed.append(lineStr)
-                globalMatchIdx += 1
-            }
-        }
-
-        storage?.setAttributedString(attributed)
-        scrollToCurrentMatch()
-    }
-
-    private func scrollToCurrentMatch() {
-        guard !flatMatches.isEmpty else { return }
-        var lineOffset = 0
-        for (idx, _) in flatMatches.enumerated() {
-            if idx == currentFlatIndex { break }
-            let prevFlat = flatMatches[idx]
-            if mode == .allPanes, idx == 0 || prevFlat.paneResultIndex != flatMatches[max(0, idx - 1)].paneResultIndex {
-                lineOffset += 1
-            }
-            lineOffset += 1
-        }
-        if mode == .allPanes {
-            let paneIdx = flatMatches[currentFlatIndex].paneResultIndex
-            lineOffset += paneIdx
-        }
-        let estimatedLineHeight: CGFloat = 17
-        let yPos = CGFloat(lineOffset) * estimatedLineHeight
-        resultsTextView.scroll(NSPoint(x: 0, y: yPos))
     }
 
     // MARK: - Actions
 
     @objc private func searchFieldAction(_ sender: Any?) {
-        nextMatch(sender)
+        onNavigate?(true)
     }
 
     @objc func nextMatch(_ sender: Any?) {
-        guard !flatMatches.isEmpty else { return }
-        currentFlatIndex = (currentFlatIndex + 1) % flatMatches.count
-        updateMatchUI()
-        renderResults()
+        onNavigate?(true)
     }
 
     @objc func previousMatch(_ sender: Any?) {
-        guard !flatMatches.isEmpty else { return }
-        currentFlatIndex = (currentFlatIndex - 1 + flatMatches.count) % flatMatches.count
-        updateMatchUI()
-        renderResults()
+        onNavigate?(false)
     }
 
     @objc private func toggleAllPanes(_ sender: Any?) {
@@ -333,8 +276,10 @@ final class PaneFindBarView: NSView {
         onDismiss?()
     }
 
-    var onModeToggle: ((Mode, String) -> Void)?
-    var onQueryChange: ((String) -> Void)?
+    @objc private func paneSummaryTapped(_ sender: NSButton) {
+        guard let item = paneSummaryItems.first(where: { $0.label === sender }) else { return }
+        onFocusPaneForSearch?(item.paneID, searchField.stringValue)
+    }
 
     // MARK: - Key handling
 
@@ -358,8 +303,10 @@ final class PaneFindBarView: NSView {
 
 extension PaneFindBarView: NSSearchFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
-        currentFlatIndex = 0
-        onQueryChange?(searchField.stringValue)
+        searchTotal = 0
+        searchSelected = 0
+        updateMatchUI()
+        onSearch?(searchField.stringValue)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -371,24 +318,19 @@ extension PaneFindBarView: NSSearchFieldDelegate {
     }
 }
 
-// MARK: - Search logic
+// MARK: - Text search helper (used for all-panes match counting)
 
 enum PaneFindSearch {
-    static func search(query: String, in text: String) -> [PaneFindMatch] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        let lowercasedQuery = query.lowercased()
-        return text
-            .components(separatedBy: "\n")
-            .compactMap { line -> PaneFindMatch? in
-                let lowercasedLine = line.lowercased()
-                var ranges: [NSRange] = []
-                var searchFrom = lowercasedLine.startIndex
-                while let range = lowercasedLine.range(of: lowercasedQuery, range: searchFrom..<lowercasedLine.endIndex) {
-                    ranges.append(NSRange(range, in: line))
-                    searchFrom = range.upperBound
-                }
-                guard !ranges.isEmpty else { return nil }
-                return PaneFindMatch(lineText: line, matchRanges: ranges)
-            }
+    static func matchCount(query: String, in text: String) -> Int {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return 0 }
+        let lower = text.lowercased()
+        var count = 0
+        var start = lower.startIndex
+        while let range = lower.range(of: q, range: start..<lower.endIndex) {
+            count += 1
+            start = range.upperBound
+        }
+        return count
     }
 }
