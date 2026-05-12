@@ -11,6 +11,7 @@ import OmuxTheme
 public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
+    private let extensionPaneActionService: ExtensionPaneActionService
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let workspacePersistenceStore: any WorkspacePersistenceStoring
     private var windowController: WorkspaceWindowController?
@@ -43,8 +44,12 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var scrollbackAutosaveTask: Task<Void, Never>?
     private let autoCheckUpdate: Bool
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
+    private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
     public override init() {
+        self.pluginMenuContributionProvider = {
+            PluginMenuContributionRegistry().contributions()
+        }
         let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
         preparedConfiguration.diagnostics.forEach { diagnostic in
             let prefix = diagnostic.severity == .warning ? "warning" : "error"
@@ -67,13 +72,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
         )
         self.workspaceController = workspaceController
+        let extensionPaneActionService = ExtensionPaneActionService(controller: workspaceController)
+        self.extensionPaneActionService = extensionPaneActionService
         self.configurationCoordinator = OpenMUXConfigurationCoordinator(
             bridge: bridge,
             initialState: preparedConfiguration
         )
         self.controlPlaneService = OpenMUXControlPlaneService(
             controller: workspaceController,
-            configurationCoordinator: configurationCoordinator
+            configurationCoordinator: configurationCoordinator,
+            extensionPaneActionService: extensionPaneActionService
         )
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
@@ -103,7 +111,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 controller: workspaceController,
                 initialTheme: initialTheme,
                 initialPanes: configurationCoordinator.paneConfiguration(),
-                initialIcons: configurationCoordinator.iconConfiguration()
+                initialIcons: configurationCoordinator.iconConfiguration(),
+                onExtensionPaneAction: { [weak self] request in
+                    self?.dispatchExtensionPaneAction(request)
+                }
             )
             self.windowController = windowController
             windowController.window?.delegate = self
@@ -188,6 +199,17 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         _ = sender
         persistWorkspaceStateIncludingScrollback()
         return true
+    }
+
+    private func dispatchExtensionPaneAction(_ request: ExtensionPaneActionRequest) {
+        let actionService = extensionPaneActionService
+        Task.detached {
+            do {
+                _ = try actionService.dispatch(request)
+            } catch {
+                fputs("extension-pane action failed: \(error)\n", stderr)
+            }
+        }
     }
 
     @objc private func createWorkspaceFromMenu(_ sender: Any?) {
@@ -393,6 +415,83 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
+    @objc private func openConfigFromMenu(_ sender: Any?) {
+        _ = sender
+        NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
+    }
+
+    @objc private func reloadConfigFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = configurationCoordinator.reload()
+        refreshMenuValidation()
+    }
+
+    @objc private func invokePluginMenuItem(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let contribution = item.representedObject as? PluginMenuContribution
+        else {
+            return
+        }
+
+        switch contribution.target {
+        case .builtin(let identifier):
+            switch identifier {
+            case "config.open":
+                NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
+            case "config.reload":
+                _ = configurationCoordinator.reload()
+            default:
+                return
+            }
+        case .plugin(_, let arguments, let executableURL):
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = arguments
+            process.environment = Self.pluginEnvironment(
+                commandName: contribution.pluginID,
+                executableURL: executableURL
+            )
+            do {
+                try process.run()
+            } catch {
+                fputs("plugin menu item failed: \(error)\n", stderr)
+            }
+        }
+        refreshMenuValidation()
+    }
+
+    private static func pluginEnvironment(commandName: String, executableURL: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment.merging([
+            "OMUX_PLUGIN_COMMAND": commandName,
+            "OMUX_PLUGIN_EXECUTABLE": executableURL.path,
+            "OMUX_PLUGINS_DIR": executableURL.deletingLastPathComponent().path,
+        ]) { current, _ in current }
+        let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = [
+            existingPath,
+            "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/bin",
+            "/Applications/OpenMUX.app/Contents/MacOS",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ].joined(separator: ":")
+        if let bundledCLIURL = bundledCLIURL() {
+            environment["OMUX_CLI"] = bundledCLIURL.path
+        }
+        return environment
+    }
+
+    private static func bundledCLIURL() -> URL? {
+        let bundleURL = Bundle.main.bundleURL
+        let candidates = [
+            bundleURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false),
+            URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
     @discardableResult
     func configureMenus(assigningToApplication: Bool = true) -> NSMenu {
         let mainMenu = NSMenu()
@@ -422,6 +521,42 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         editMenu.addItem(withTitle: "Select All", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        let configurationMenuItem = NSMenuItem()
+        let configurationMenu = NSMenu(title: "Configuration")
+        let openConfigMenuItem = NSMenuItem(
+            title: "Open",
+            action: #selector(openConfigFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        openConfigMenuItem.target = self
+        configurationMenu.addItem(openConfigMenuItem)
+        let reloadConfigMenuItem = NSMenuItem(
+            title: "Reload",
+            action: #selector(reloadConfigFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        reloadConfigMenuItem.target = self
+        configurationMenu.addItem(reloadConfigMenuItem)
+
+        let pluginMenuContributions = pluginMenuContributionProvider()
+            .filter { $0.location == "Configuration" }
+        if pluginMenuContributions.isEmpty == false {
+            configurationMenu.addItem(.separator())
+            for contribution in pluginMenuContributions {
+                let item = NSMenuItem(
+                    title: contribution.title,
+                    action: #selector(invokePluginMenuItem(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = contribution
+                configurationMenu.addItem(item)
+            }
+        }
+
+        configurationMenuItem.submenu = configurationMenu
+        mainMenu.addItem(configurationMenuItem)
 
         let workspaceMenuItem = NSMenuItem()
         let workspaceMenu = NSMenu(title: "Workspace")

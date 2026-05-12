@@ -3,6 +3,8 @@ import Foundation
 public enum OpenMUXCLIPaletteExecution: Equatable, Sendable {
     case keyBindingAction(OpenMUXKeyBindingAction)
     case createWorkspaceTab
+    /// Sends the command as text to the focused terminal tab and submits it.
+    case sendToTerminal
     case configOpen
     case unavailable(String)
 }
@@ -97,7 +99,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Config Doctor",
             summary: "Validate the current OpenMUX configuration",
             aliases: ["configuration diagnostics", "doctor"],
-            paletteExecution: .unavailable("Run from a terminal to view configuration diagnostics")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.reload",
@@ -105,7 +107,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Reload Config",
             summary: "Reload OpenMUX configuration",
             aliases: ["configuration reload"],
-            paletteExecution: .unavailable("Use the terminal command to reload configuration")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.init",
@@ -113,7 +115,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Initialize Config",
             summary: "Write a starter OpenMUX configuration file",
             aliases: ["configuration init", "starter config"],
-            paletteExecution: .unavailable("Run from a terminal to create the config file")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.open",
@@ -130,7 +132,7 @@ public enum OpenMUXCLICommandCatalog {
             summary: "Open the OpenMUX configuration file with VISUAL or EDITOR in the focused terminal",
             aliases: ["configuration open terminal", "edit config terminal", "terminal editor", "visual editor"],
             includeInUsage: false,
-            paletteExecution: .unavailable("Requires a focused terminal")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.config.inactive-opacity",
@@ -140,7 +142,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["inactive opacity", "pane opacity"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires an opacity value")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.version",
@@ -148,7 +150,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Version",
             summary: "Print the installed OpenMUX version",
             aliases: ["--version"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.help",
@@ -156,7 +158,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Help",
             summary: "Print CLI usage",
             aliases: ["--help", "-h"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.update",
@@ -164,7 +166,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Update",
             summary: "Update OpenMUX from the command line",
             aliases: ["self update"],
-            paletteExecution: .unavailable("Run from a terminal to update OpenMUX")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.theme",
@@ -172,7 +174,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Pick Theme",
             summary: "Select a theme interactively",
             aliases: ["theme picker"],
-            paletteExecution: .unavailable("Run from a terminal to use the interactive theme picker")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.theme.set",
@@ -182,7 +184,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["theme name"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a theme name")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.theme.list",
@@ -190,7 +192,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: List Themes",
             summary: "List installed themes",
             aliases: ["themes"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.plugins",
@@ -198,7 +200,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: List Plugins",
             summary: "List installed CLI plugins",
             aliases: ["omux plugin list"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.plugin.list",
@@ -206,7 +208,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Plugin List",
             summary: "List installed CLI plugins",
             aliases: ["plugins"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.plugin.path",
@@ -214,7 +216,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Plugin Path",
             summary: "Print the user plugin directory path",
             aliases: ["plugins path"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.list",
@@ -222,7 +224,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: List Workspaces",
             summary: "Print workspace state as JSON",
             aliases: ["workspace list", "workspaces"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.sessions",
@@ -230,7 +232,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: List Sessions",
             summary: "Print terminal sessions as JSON",
             aliases: ["omux session"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.panes",
@@ -238,7 +240,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: List Panes",
             summary: "Print panes as JSON",
             aliases: ["omux pane"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.events",
@@ -246,7 +248,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Stream Events",
             summary: "Stream terminal events",
             aliases: ["terminal events"],
-            paletteExecution: .unavailable("Run from a terminal to stream events")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.history",
@@ -254,7 +256,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: History",
             summary: "Print terminal scrollback history",
             aliases: ["scrollback"],
-            paletteExecution: .unavailable("Run from a terminal to view CLI output")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.history.clear",
@@ -262,7 +264,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Clear History",
             summary: "Clear persisted terminal history",
             aliases: ["clear scrollback"],
-            paletteExecution: .unavailable("Run from a terminal and choose an explicit history target")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.markdown-preview",
@@ -272,7 +274,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["markdown", "preview"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a Markdown file path")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.extension-pane.create",
@@ -282,7 +284,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["extension create", "plugin pane"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires extension pane arguments")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.extension-pane.update",
@@ -292,7 +294,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["extension update", "plugin pane update"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires extension pane arguments")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.extension-pane.close",
@@ -302,7 +304,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["extension close", "plugin pane close"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a pane ID")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.open",
@@ -384,7 +386,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["focus pane tab"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a pane ID")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.pane-tab-close",
@@ -421,7 +423,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["focus session", "focus pane"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a focus target")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.run",
@@ -431,7 +433,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["run in session"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a target and shell command")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.run.target",
@@ -441,7 +443,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["run focused"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a target and shell command")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.send-text",
@@ -451,7 +453,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["type text", "send input"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a target and text")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.pane-status",
@@ -461,7 +463,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["pane status", "status indicator"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a target and status")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.notify",
@@ -471,7 +473,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["notification"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a notification title")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.restore",
@@ -481,7 +483,7 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["restore layout"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
-            paletteExecution: .unavailable("Requires a workspace ID")
+            paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
             id: "omux.install-cli",
@@ -489,7 +491,7 @@ public enum OpenMUXCLICommandCatalog {
             title: "omux: Install CLI",
             summary: "Install the omux CLI executable",
             aliases: ["cli install"],
-            paletteExecution: .unavailable("Use the app menu or run from a terminal to install the CLI")
+            paletteExecution: .sendToTerminal
         ),
     ]
 

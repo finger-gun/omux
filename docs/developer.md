@@ -36,8 +36,10 @@ When changing the CLI, use SwiftPM directly:
 ```bash
 swift run omux help
 swift run omux config doctor
+swift run omux config open
 swift run omux theme
 swift run omux plugins
+swift run omux plugins discover
 ```
 
 If you install a development CLI into your shell, remember that it talks to the running app over the local control plane. Most commands need `OpenMUXApp` running.
@@ -62,8 +64,8 @@ openspec validate <change-id> --strict
 ## Useful docs while developing
 
 - [Development notes](./development.md) - module boundaries, runtime bridge details, command list, and current implementation status.
-- [Plugin ecosystem](./plugins.md) - external plugin commands, extension panes, and terminal text activation hooks.
-- [Plugin index](./plugins/index.md) - bundled plugin docs.
+- [Plugin ecosystem](./plugins.md) - external plugin commands, extension panes, menu contributions, and terminal text activation hooks.
+- [Plugin index](./plugins/index.md) - bundled and registry-hosted plugin docs.
 - [Configuration and themes](./configuration.md) - config schema, theme tokens, keybindings, and bundled plugin settings.
 - [Hooks](./hooks.md) - hook names, payloads, and automation examples.
 - [Releasing](./releasing.md) - packaging and release flow.

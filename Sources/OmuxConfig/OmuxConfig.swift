@@ -3,7 +3,7 @@ import OmuxCore
 
 public let OmuxConfigSchemaVersion = 1
 
-public enum OmuxConfigDiagnosticSeverity: String, Sendable {
+public enum OmuxConfigDiagnosticSeverity: String, Codable, Sendable {
     case warning
     case error
 
@@ -12,7 +12,7 @@ public enum OmuxConfigDiagnosticSeverity: String, Sendable {
     }
 }
 
-public struct OmuxConfigDiagnostic: Error, Equatable, Sendable {
+public struct OmuxConfigDiagnostic: Error, Codable, Equatable, Sendable {
     public let severity: OmuxConfigDiagnosticSeverity
     public let message: String
     public let filePath: String?

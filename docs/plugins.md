@@ -10,6 +10,8 @@ Plugins can:
 
 - register top-level `omux` commands
 - create, update, and close extension panes
+- opt extension panes into host-mediated action callbacks
+- contribute native app menu items from installed manifests
 - mark terminal pane status with `omux pane-status`
 - call any public `omux` command
 - react to hooks and terminal text activation events
@@ -104,6 +106,11 @@ entrypoint = "plugin"
 source = "plugin"
 target = "plugin"
 executable = true
+
+[files.manifest]
+source = "omux-plugin.toml"
+target = "omux-plugin.toml"
+executable = false
 ```
 
 Installing a plugin installs executable local code. OpenMUX prints the source registry, package version, and target paths before install; use `--yes` for non-interactive installs. Installed package receipts live under `~/.omux/installed/` so update and uninstall only remove files OpenMUX installed.
@@ -117,8 +124,20 @@ When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchan
 | `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
 | `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
 | `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
+| `OMUX_CLI` | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
 
-Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app.
+Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app. Prefer `${OMUX_CLI:-omux}` when launching the CLI so packaged app and Terminal-launched workflows both work.
+
+## Config read/apply commands
+
+Plugins that need configuration data should use OpenMUX-owned config commands instead of parsing or rewriting `config.toml` directly:
+
+```sh
+omux config get --json
+omux config apply --json-file /path/to/payload.json
+```
+
+`config get --json` returns the source path, effective supported values, defaults metadata, and diagnostics. `config apply --json-file` accepts supported OpenMUX-owned keys, validates the rendered TOML before replacing the config file, writes a backup, and reloads the running app on success.
 
 ## Minimal plugin example
 
@@ -164,8 +183,52 @@ The control plane accepts these fields:
 | `--status ready\|disabled\|error` | Rendering state. Non-ready states show placeholder copy. |
 | `--message <text>` | Placeholder or error message. |
 | `--axis columns\|rows` | Split direction for new panes. |
+| `--actions` | Opt the pane into the host-mediated JavaScript action bridge. |
 
 Extension panes are shell-owned content panes. They are not terminal sessions, do not allocate Ghostty surfaces, and terminal-only actions such as `omux run`, `send-text`, and history operations reject or ignore them.
+
+### Extension pane action bridge
+
+By default extension pane JavaScript remains disabled. A plugin that needs form interactions can pass `--actions` when creating or updating a pane. OpenMUX then injects a narrow bridge:
+
+```js
+window.omux.submitAction("save", { themeName: "default" })
+```
+
+OpenMUX validates that the pane exists, that the plugin ID owns the pane, that the action name is safe, and that the payload is a JSON object. Valid actions invoke the owning external plugin with:
+
+```sh
+plugin __omux_action
+```
+
+The action request is passed as JSON on stdin and includes `paneID`, `pluginID`, `action`, and `payload`. The plugin can return JSON such as:
+
+```json
+{ "success": true, "message": "Saved" }
+```
+
+Action payloads are never treated as terminal text or shell commands.
+
+## Native menu contributions
+
+Installed plugin manifests may declare menu contributions without running plugin code during menu construction. OpenMUX currently supports `Configuration` menu locations, plugin command targets, and safe built-ins:
+
+```toml
+[menu.configuration.open-settings]
+location = "Configuration"
+title = "Open Settings"
+command = "settings-ui"
+arguments = []
+
+[menu.configuration.reload]
+location = "Configuration"
+title = "Reload"
+builtin = "config.reload"
+```
+
+Supported built-ins are `config.open` and `config.reload`. To make menu metadata available after registry install, include `omux-plugin.toml` in the manifest files list.
+
+The official plugin registry includes `settings-ui`, which opens a local extension-pane form for supported settings and saves through `omux config apply`. After installation, run `omux settings-ui` or use **Configuration -> Open Settings** when the app has refreshed its installed plugin menus.
 
 ## Terminal text activation
 

@@ -815,7 +815,7 @@ public struct OmuxCLICommand {
         switch subcommand {
         case "create":
             guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: false) else {
-                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>]")
+                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--actions]")
                 return 1
             }
             let response = try client.request(method: .createExtensionPane, params: .object(request))
@@ -823,7 +823,7 @@ public struct OmuxCLICommand {
             return 0
         case "update":
             guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: true) else {
-                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>]")
+                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>] [--actions]")
                 return 1
             }
             let response = try client.request(method: .updateExtensionPane, params: .object(request))
@@ -854,6 +854,11 @@ public struct OmuxCLICommand {
         var index = 0
         while index < arguments.count {
             let option = arguments[index]
+            if option == "--actions" {
+                params["actionsEnabled"] = .bool(true)
+                index += 1
+                continue
+            }
             guard index + 1 < arguments.count else {
                 return nil
             }
@@ -1346,7 +1351,7 @@ public struct OmuxCLICommand {
 
     private func runConfigCommand(arguments: [String]) -> Int32 {
         guard let subcommand = arguments.first else {
-            writeLine("usage: omux config <doctor|reload|init|open|inactive-opacity>")
+            writeLine("usage: omux config <doctor|reload|get|apply|init|open|inactive-opacity>")
             return 1
         }
 
@@ -1356,6 +1361,10 @@ public struct OmuxCLICommand {
                 return try runConfigDoctor()
             case "reload":
                 return try runConfigReload()
+            case "get":
+                return try runConfigGet(arguments: Array(arguments.dropFirst()))
+            case "apply":
+                return try runConfigApply(arguments: Array(arguments.dropFirst()))
             case "init":
                 let configURL = OmuxConfigPaths.configFileURL
                 if FileManager.default.fileExists(atPath: configURL.path) {
@@ -1375,7 +1384,7 @@ public struct OmuxCLICommand {
             case "inactive-opacity":
                 return try runConfigInactiveOpacity(arguments: Array(arguments.dropFirst()))
             default:
-                writeLine("usage: omux config <doctor|reload|init|open|inactive-opacity>")
+                writeLine("usage: omux config <doctor|reload|get|apply|init|open|inactive-opacity>")
                 return 1
             }
         } catch {
@@ -1405,6 +1414,37 @@ public struct OmuxCLICommand {
         try process.run()
         process.waitUntilExit()
         return process.terminationStatus
+    }
+
+    private func runConfigGet(arguments: [String]) throws -> Int32 {
+        guard arguments == ["--json"] else {
+            writeLine("usage: omux config get --json")
+            return 1
+        }
+
+        let export = OmuxConfigExporter(loader: configLoader).export()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(export)
+        writeLine(String(decoding: data, as: UTF8.self))
+        return export.diagnostics.contains(where: { $0.severity.isError }) ? 1 : 0
+    }
+
+    private func runConfigApply(arguments: [String]) throws -> Int32 {
+        guard arguments.count == 2, arguments[0] == "--json-file" else {
+            writeLine("usage: omux config apply --json-file <path>")
+            return 1
+        }
+
+        let result = try OmuxConfigEditor(loader: configLoader).apply(jsonFileURL: URL(fileURLWithPath: resolveCLIPath(arguments[1])))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(result)
+        writeLine(String(decoding: data, as: UTF8.self))
+        guard result.diagnostics.contains(where: { $0.severity.isError }) == false else {
+            return 1
+        }
+        return try runConfigReload()
     }
 
     private func runConfigInactiveOpacity(arguments: [String]) throws -> Int32 {
@@ -1447,7 +1487,7 @@ public struct OmuxCLICommand {
             at: configURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
+        try OmuxConfigRenderer.render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
 
         writeLine("Inactive pane opacity set to \(renderOpacity(opacity)).")
         return try runConfigReload()
@@ -1606,7 +1646,7 @@ public struct OmuxCLICommand {
             at: configURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
+        try OmuxConfigRenderer.render(config: updated).write(to: configURL, atomically: true, encoding: .utf8)
 
         writeLine("Theme set to \(theme.displayName).")
         return try runConfigReload()
@@ -1632,94 +1672,7 @@ public struct OmuxCLICommand {
     }
 
     private func render(config: OmuxConfig) -> String {
-        var lines: [String] = [
-            "schema = \(config.schema)",
-        ]
-        if config.autoCheckUpdate == false {
-            lines.append("auto_check_update = false")
-        }
-        lines.append("")
-        lines.append("[theme]")
-        lines.append("name = \(render(.string(config.theme.name)))")
-        lines.append("")
-        lines.append("[terminal]")
-
-        if let fontFamily = config.terminal.fontFamily {
-            lines.append("font_family = \(render(.string(fontFamily)))")
-        }
-        if let fontSize = config.terminal.fontSize {
-            lines.append("font_size = \(fontSize)")
-        }
-        if let scrollbackLines = config.terminal.scrollbackLines {
-            lines.append("scrollback_lines = \(scrollbackLines)")
-        }
-        if let optionAsAlt = config.terminal.optionAsAlt {
-            switch optionAsAlt {
-            case .disabled:
-                lines.append("option_as_alt = false")
-            case .both:
-                lines.append("option_as_alt = true")
-            case .left:
-                lines.append("option_as_alt = \"left\"")
-            case .right:
-                lines.append("option_as_alt = \"right\"")
-            }
-        }
-        let persistedScrollback = config.terminal.persistedScrollback
-        if persistedScrollback.enabled != OmuxConfigTerminal.PersistedScrollback.defaultEnabled {
-            lines.append("persist_scrollback = \(persistedScrollback.enabled ? "true" : "false")")
-        }
-        if persistedScrollback.maxLines != OmuxConfigTerminal.PersistedScrollback.defaultMaxLines {
-            lines.append("persist_scrollback_lines = \(persistedScrollback.maxLines)")
-        }
-        if persistedScrollback.maxBytes != OmuxConfigTerminal.PersistedScrollback.defaultMaxBytes {
-            lines.append("persist_scrollback_bytes = \(persistedScrollback.maxBytes)")
-        }
-
-        lines.append("")
-        lines.append("[workspace]")
-        lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
-
-        lines.append("")
-        lines.append("[ui.icons]")
-        lines.append("enabled = \(config.ui.icons.enabled ? "true" : "false")")
-        lines.append("provider = \(render(.string(config.ui.icons.provider.rawValue)))")
-        if let fontFamily = config.ui.icons.fontFamily {
-            lines.append("font_family = \(render(.string(fontFamily)))")
-        }
-        lines.append("colors_enabled = \(config.ui.icons.colorsEnabled ? "true" : "false")")
-
-        lines.append("")
-        lines.append("[ui.panes]")
-        lines.append("inactive_opacity = \(renderOpacity(config.ui.panes.inactiveOpacity))")
-        lines.append("idle_status_clear = \(render(.string(config.ui.panes.idleStatusClear.rawValue)))")
-
-        lines.append("")
-        lines.append("[plugins.markdown-preview]")
-        let markdownPreview = config.plugins.markdownPreview
-        lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
-        lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
-        lines.append("theme = \(render(.string(markdownPreview.theme)))")
-
-        lines.append("")
-        lines.append("[registries]")
-        lines.append("hooks = \(render(.array(config.registries.hooks.map(OmuxTOMLValue.string))))")
-        lines.append("plugins = \(render(.array(config.registries.plugins.map(OmuxTOMLValue.string))))")
-
-        lines.append("")
-        lines.append("[keys]")
-        for entry in config.keyBindings {
-            let value = entry.action?.rawValue ?? "none"
-            lines.append("\"\(entry.chord.description)\" = \(render(.string(value)))")
-        }
-
-        lines.append("")
-        lines.append("[ghostty]")
-        for entry in config.ghostty {
-            lines.append("\"\(escape(entry.key))\" = \(render(entry.value))")
-        }
-
-        return lines.joined(separator: "\n") + "\n"
+        OmuxConfigRenderer.render(config: config)
     }
 
     private func render(_ value: OmuxTOMLValue) -> String {

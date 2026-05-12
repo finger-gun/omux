@@ -37,6 +37,7 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
     public var html: String?
     public var status: ExtensionPaneStatus
     public var message: String?
+    public var actionsEnabled: Bool
 
     public init(
         pluginID: String,
@@ -44,7 +45,8 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
         source: String? = nil,
         html: String? = nil,
         status: ExtensionPaneStatus = .ready,
-        message: String? = nil
+        message: String? = nil,
+        actionsEnabled: Bool = false
     ) {
         self.pluginID = pluginID
         self.contentKind = contentKind
@@ -52,6 +54,77 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
         self.html = html
         self.status = status
         self.message = message
+        self.actionsEnabled = actionsEnabled
+    }
+}
+
+public struct ExtensionPaneActionRequest: Equatable, Codable, Sendable {
+    public var paneID: PaneID
+    public var pluginID: String
+    public var action: String
+    public var payload: OmuxValue
+
+    public init(
+        paneID: PaneID,
+        pluginID: String,
+        action: String,
+        payload: OmuxValue = .object([:])
+    ) {
+        self.paneID = paneID
+        self.pluginID = pluginID
+        self.action = action
+        self.payload = payload
+    }
+
+    public var validationError: String? {
+        if pluginID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "missing pluginID"
+        }
+        if Self.isValidActionName(action) == false {
+            return "invalid action name"
+        }
+        if payload.objectValue == nil {
+            return "payload must be a JSON object"
+        }
+        return nil
+    }
+
+    public static func isValidActionName(_ value: String) -> Bool {
+        guard value.isEmpty == false,
+              value.count <= 128,
+              value.first != ".",
+              value.first != "-"
+        else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "." || character == "-" || character == "_" || character == ":"
+        }
+    }
+}
+
+public struct ExtensionPaneActionResponse: Equatable, Codable, Sendable {
+    public var success: Bool
+    public var message: String?
+    public var payload: OmuxValue
+
+    private enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case payload
+    }
+
+    public init(success: Bool, message: String? = nil, payload: OmuxValue = .object([:])) {
+        self.success = success
+        self.message = message
+        self.payload = payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.success = try container.decode(Bool.self, forKey: .success)
+        self.message = try container.decodeIfPresent(String.self, forKey: .message)
+        self.payload = try container.decodeIfPresent(OmuxValue.self, forKey: .payload) ?? .object([:])
     }
 }
 

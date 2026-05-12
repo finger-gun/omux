@@ -339,9 +339,13 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
 
         for (index, result) in results.enumerated() {
             let row = CommandPaletteResultRow(result: result, isSelected: index == selectedIndex, theme: currentTheme, iconProvider: iconProvider)
-            row.target = self
-            row.action = #selector(resultRowClicked(_:))
-            row.tag = index
+            row.clickHandler = { [weak self] clickedRow in
+                self?.resultRowClicked(clickedRow)
+            }
+            row.hoverHandler = { [weak self] hoveredRow in
+                self?.updateSelection(to: hoveredRow.rowIndex)
+            }
+            row.rowIndex = index
             resultStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: resultStack.widthAnchor).isActive = true
         }
@@ -368,8 +372,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
     }
 
-    @objc private func resultRowClicked(_ sender: CommandPaletteResultRow) {
-        selectedIndex = sender.tag
+    private func resultRowClicked(_ sender: CommandPaletteResultRow) {
+        selectedIndex = sender.rowIndex
         invokeSelectedResult()
     }
 
@@ -497,7 +501,6 @@ final class CommandPaletteResultRow: NSView {
     private let appIconView = NSImageView()
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let checkmarkView = NSImageView()
-    private let clickTarget = NSButton(frame: .zero)
 
     private static let rowHeightNormal: CGFloat = 38
     private static let rowHeightWithReason: CGFloat = 52
@@ -505,18 +508,9 @@ final class CommandPaletteResultRow: NSView {
     private static let hPad: CGFloat = 12
     private static let cornerRadius: CGFloat = 6
 
-    var target: AnyObject? {
-        get { clickTarget.target }
-        set { clickTarget.target = newValue }
-    }
-    var action: Selector? {
-        get { clickTarget.action }
-        set { clickTarget.action = newValue }
-    }
-    override var tag: Int {
-        get { clickTarget.tag }
-        set { clickTarget.tag = newValue }
-    }
+    var clickHandler: ((CommandPaletteResultRow) -> Void)?
+    var hoverHandler: ((CommandPaletteResultRow) -> Void)?
+    var rowIndex: Int = 0
 
     init(result: CommandPaletteResult, isSelected: Bool, theme: WorkspaceShellTheme, iconProvider: ((String) -> NSImage?)?) {
         self.result = result
@@ -530,13 +524,6 @@ final class CommandPaletteResultRow: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         let rowHeight = result.disabledReason != nil ? Self.rowHeightWithReason : Self.rowHeightNormal
         heightAnchor.constraint(equalToConstant: rowHeight).isActive = true
-
-        // Transparent full-size button for click handling
-        clickTarget.isBordered = false
-        clickTarget.setButtonType(.momentaryChange)
-        clickTarget.title = ""
-        clickTarget.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(clickTarget)
 
         iconView.imageScaling = .scaleProportionallyDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -600,11 +587,6 @@ final class CommandPaletteResultRow: NSView {
         if result.disabledReason != nil {
             // Two-line layout: title + reason stacked, icon centered on title
             NSLayoutConstraint.activate([
-                clickTarget.topAnchor.constraint(equalTo: topAnchor),
-                clickTarget.leadingAnchor.constraint(equalTo: leadingAnchor),
-                clickTarget.trailingAnchor.constraint(equalTo: trailingAnchor),
-                clickTarget.bottomAnchor.constraint(equalTo: bottomAnchor),
-
                 iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.hPad),
                 iconView.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
                 iconView.widthAnchor.constraint(equalToConstant: Self.iconSize),
@@ -629,11 +611,6 @@ final class CommandPaletteResultRow: NSView {
         } else {
             // Single-line layout: everything centered
             NSLayoutConstraint.activate([
-                clickTarget.topAnchor.constraint(equalTo: topAnchor),
-                clickTarget.leadingAnchor.constraint(equalTo: leadingAnchor),
-                clickTarget.trailingAnchor.constraint(equalTo: trailingAnchor),
-                clickTarget.bottomAnchor.constraint(equalTo: bottomAnchor),
-
                 iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.hPad),
                 iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
                 iconView.widthAnchor.constraint(equalToConstant: Self.iconSize),
@@ -674,6 +651,33 @@ final class CommandPaletteResultRow: NSView {
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hoverHandler?(self)
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        // Absorb mouseDown so the window doesn't start a drag
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        clickHandler?(self)
     }
 
     private func applyPresentation() {

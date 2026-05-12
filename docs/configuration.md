@@ -6,6 +6,21 @@ OpenMUX then compiles that config into an internal Ghostty config file under **`
 
 New to OpenMUX? Start with [Getting started](./getting-started.md), then return here for the full configuration reference.
 
+Open the config file from the CLI:
+
+```bash
+omux config open
+```
+
+If you prefer a graphical editor, install the registry-hosted Settings UI plugin:
+
+```bash
+omux plugins install settings-ui
+omux settings-ui
+```
+
+The Settings UI opens an extension pane, renders supported config keys with defaults, and saves through OpenMUX's config validation path.
+
 ## Starter config
 
 ```toml
@@ -299,6 +314,8 @@ plugins = ["https://github.com/finger-gun/omux-plugins", "https://github.com/exa
 
 Use `--registry <url>` on a discover or install command to override configured registries for one invocation.
 
+Registry installs copy package files into `~/.omux/hooks/` or `~/.omux/plugins/` and write receipts under `~/.omux/installed/`. OpenMUX does not fetch remote code while running hooks or plugins; installed executable files run locally.
+
 ## `[workspace]` settings
 
 OpenMUX currently models these workspace settings directly:
@@ -434,7 +451,10 @@ Use the running app’s control plane for diagnostics and explicit reloads:
 
 ```bash
 omux config doctor
+omux config open
 omux config reload
+omux config get --json
+omux config apply --json-file /path/to/payload.json
 omux config init
 omux theme
 omux theme <name>
@@ -452,6 +472,8 @@ omux send-text --pane <pane-id> -- "hello"
 When attached to an interactive terminal, `omux theme` opens a keyboard picker: type to fuzzy-filter by theme id or display name, use Up/Down to move, Enter to apply the highlighted theme, Backspace to edit the filter, and Escape to cancel. For example, typing `cat` narrows the list to the Catppuccin themes. In non-interactive contexts it keeps the scriptable prompt that accepts a typed theme number or name.
 
 When attached to an interactive terminal, `omux plugins` opens a similar picker for bundled plugin toggles.
+
+`omux config get --json` and `omux config apply --json-file` are primarily for tools and plugins. They expose supported OpenMUX-owned settings, defaults, diagnostics, atomic apply behavior, backups, and app reload on success.
 
 ## Hooks
 

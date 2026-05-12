@@ -42,7 +42,7 @@
 
 ## What OpenMUX is
 
-OpenMUX is a native macOS terminal workspace. It gives you workspaces, tabs, split panes, pane-local tab stacks, persistent shell sessions, themes, a local CLI, hooks, and extension panes.
+OpenMUX is a native macOS terminal workspace. It gives you workspaces, tabs, split panes, pane-local tab stacks, persistent shell sessions, themes, a local CLI, hooks, plugins, and extension panes.
 
 The goal is simple: keep the terminal powerful, inspectable, and open to your workflow.
 
@@ -54,10 +54,9 @@ OpenMUX is a beta, but the core workflow is usable:
 - workspaces, top-level tabs, split panes, and pane-local tabs
 - persistent shell sessions with direct typing, paste, resize, command injection, and bounded scrollback restore
 - local `omux` CLI and JSON-RPC control plane
-- external hooks and `omux events`
+- external hook system, official hook registry, and `omux events`
 - fuzzy-search theme picker and token-based themes
-- plugin command discovery and extension panes
-- bundled plugin management and extension-pane workflows
+- plugin command discovery, extension panes, native menu contributions, and official plugin registry
 - explicit keyboard-correctness work for ISO layouts, Option behavior, dead keys, compose input, and IME-sensitive flows
 
 ## Start here
@@ -66,9 +65,9 @@ User docs:
 
 - [Getting started](./docs/getting-started.md) - install, first launch, CLI setup, workspaces, panes, themes, hooks, and plugins.
 - [Configuration and themes](./docs/configuration.md) - `~/.omux/config.toml`, themes, terminal settings, keybindings, and plugin config.
-- [Hooks](./docs/hooks.md) - executable user hooks, hook payloads, and automation examples.
-- [Plugins](./docs/plugins/index.md) - bundled plugins and plugin management.
-- [Plugin ecosystem](./docs/plugins.md) - how to create external plugin commands and extension panes.
+- [Hooks](./docs/hooks.md) - executable user hooks, registry installs, hook payloads, and automation examples.
+- [Plugins](./docs/plugins/index.md) - bundled plugins, registry installs, and plugin management.
+- [Plugin ecosystem](./docs/plugins.md) - how to create external plugin commands, extension panes, and menu contributions.
 
 Contributor docs:
 
@@ -113,6 +112,7 @@ Create a starter config:
 ```bash
 omux config init
 omux config doctor
+omux config open
 omux config reload
 ```
 
@@ -124,16 +124,26 @@ User-owned files live under `~/.omux/`:
 | `~/.omux/themes/` | Custom themes. |
 | `~/.omux/hooks/` | User hook handlers. |
 | `~/.omux/plugins/` | External plugin commands. |
+| `~/.omux/installed/` | Receipts for registry-installed hooks and plugins. |
 | `~/.omux/generated/ghostty/` | OpenMUX-managed generated terminal config. |
 
 ## Plugins
 
-OpenMUX has two plugin surfaces:
+OpenMUX has two plugin and automation surfaces:
 
 1. Bundled plugins can be toggled with `omux plugins`.
 2. User plugins are executable commands discovered from `~/.omux/plugins/`.
 
-Plugins can create extension panes with `omux extension-pane`, listen through hooks, and call back into the public CLI. See [Plugin ecosystem](./docs/plugins.md) for the contract and [Plugin index](./docs/plugins/index.md) for bundled plugins.
+Plugins can create extension panes with `omux extension-pane`, listen through hooks, call back into the public CLI, and contribute native menu items. Hooks are executable event handlers under `~/.omux/hooks/`.
+
+Official registries:
+
+| Registry | Repository |
+| --- | --- |
+| Hooks | <https://github.com/finger-gun/omux-hooks> |
+| Plugins | <https://github.com/finger-gun/omux-plugins> |
+
+Discover registry packages with `omux hooks discover` and `omux plugins discover`. See [Hooks](./docs/hooks.md) for the hook system, [Plugin ecosystem](./docs/plugins.md) for the plugin contract, and [Plugin index](./docs/plugins/index.md) for bundled and registry-hosted plugins.
 
 ## Status
 

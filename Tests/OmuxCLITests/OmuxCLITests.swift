@@ -1676,6 +1676,139 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["No diagnostics.", "OpenMUX config reloaded."])
     }
 
+    func testCLIConfigGetJSONExportsEffectiveConfigAndDiagnostics() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+        [theme]
+        name = "nord"
+        [ui.panes]
+        inactive_opacity = 0.7
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "get", "--json"]), 0)
+        let export = try JSONDecoder().decode(OmuxConfigExport.self, from: Data(output[0].utf8))
+        XCTAssertEqual(export.sourcePath, configURL.path)
+        XCTAssertEqual(export.values.themeName, "nord")
+        XCTAssertEqual(export.values.ui.panes.inactiveOpacity, 0.7)
+        XCTAssertEqual(export.defaults.markdownPreviewRenderer, "builtin")
+        XCTAssertEqual(export.diagnostics, [])
+    }
+
+    func testCLIConfigGetJSONReportsDiagnostics() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try "schema = \"bad\"\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "get", "--json"]), 1)
+        let export = try JSONDecoder().decode(OmuxConfigExport.self, from: Data(output[0].utf8))
+        XCTAssertEqual(export.sourcePath, OmuxConfigPaths.configFileURL.path)
+        XCTAssertEqual(export.diagnostics.first?.severity, .error)
+        XCTAssertEqual(export.diagnostics.first?.message, "Schema must be an integer.")
+    }
+
+    func testCLIConfigApplyJSONWritesBackupAndReloads() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try OmuxConfigTemplate.starter(themeName: "nord").write(to: configURL, atomically: true, encoding: .utf8)
+        let payloadURL = tempHome.appendingPathComponent("apply.json")
+        try """
+        {
+          "themeName": "monokai-soda",
+          "ui": {
+            "panes": {
+              "inactiveOpacity": 0.66
+            }
+          },
+          "plugins": {
+            "markdownPreview": {
+              "enabled": false
+            }
+          }
+        }
+        """.write(to: payloadURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-apply-\(UUID().uuidString).sock"
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            if request.method == ControlMethod.configReload.rawValue {
+                return JSONRPCResponse(id: request.id, result: .object([
+                    "applied": .bool(true),
+                    "diagnostics": .array([]),
+                ]))
+            }
+            return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "apply", "--json-file", payloadURL.path]), 0)
+        let result = try JSONDecoder().decode(OmuxConfigApplyResult.self, from: Data(output[0].utf8))
+        XCTAssertTrue(result.applied)
+        XCTAssertEqual(result.path, configURL.path)
+        let backupPath = try XCTUnwrap(result.backupPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backupPath))
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("name = \"monokai-soda\""))
+        XCTAssertTrue(contents.contains("inactive_opacity = 0.66"))
+        XCTAssertTrue(contents.contains("enabled = false"))
+        XCTAssertEqual(output.suffix(2), ["No diagnostics.", "OpenMUX config reloaded."])
+    }
+
+    func testCLIConfigApplyJSONRejectsUnsupportedKeysWithoutWriting() throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        setenv("OMUX_HOME", tempHome.path, 1)
+        let configURL = tempHome.appendingPathComponent("config.toml")
+        try OmuxConfigTemplate.starter(themeName: "nord").write(to: configURL, atomically: true, encoding: .utf8)
+        let originalContents = try String(contentsOf: configURL, encoding: .utf8)
+        let payloadURL = tempHome.appendingPathComponent("apply.json")
+        try #"{"ghostty":{"copy-on-select":false}}"#.write(to: payloadURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "config", "apply", "--json-file", payloadURL.path]), 1)
+        let result = try JSONDecoder().decode(OmuxConfigApplyResult.self, from: Data(output[0].utf8))
+        XCTAssertFalse(result.applied)
+        XCTAssertEqual(result.diagnostics.first?.message, "Unsupported config apply key 'ghostty'.")
+        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), originalContents)
+    }
+
     func testCLIConfigInitWritesStarterConfigAndRefusesOverwrite() throws {
         let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)

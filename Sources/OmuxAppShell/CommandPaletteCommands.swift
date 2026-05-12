@@ -102,7 +102,8 @@ struct CommandPaletteCommandCatalog {
         }
     }
 
-    private static func isEnabled(cliCommand _: OpenMUXCLICommandSpec, controller: WorkspaceController) -> Bool {
+    private static func isEnabled(cliCommand spec: OpenMUXCLICommandSpec, controller: WorkspaceController) -> Bool {
+        if case .unavailable = spec.paletteExecution { return false }
         return controller.resolveTerminalTarget(.focused) != nil
     }
 
@@ -116,6 +117,10 @@ struct CommandPaletteCommandCatalog {
         case .builtin:
             if command.target == "theme.switch" {
                 return descriptor.disabledReason
+            }
+            // Prefer the spec's own disabled reason (e.g. .unavailable message) over the generic fallback
+            if let specReason = descriptor.disabledReason {
+                return specReason
             }
             return "No focused terminal"
         }
@@ -245,6 +250,10 @@ extension WorkspaceController {
     private func invokePaletteCLICommand(_ commandID: String) -> CommandPaletteInvocationResult {
         guard let spec = OpenMUXCLICommandCatalog.command(id: commandID) else {
             return .failed("Unsupported palette CLI command")
+        }
+
+        if case .unavailable(let reason) = spec.paletteExecution {
+            return .disabled(reason)
         }
 
         do {

@@ -62,10 +62,13 @@ public enum ControlMethod: String, Sendable {
     case clearTerminalHistory = "terminal.history.clear"
     case createExtensionPane = "extensionPane.create"
     case updateExtensionPane = "extensionPane.update"
+    case extensionPaneAction = "extensionPane.action"
     case closeExtensionPane = "extensionPane.close"
     case sendNotification = "notification.send"
     case restoreLayout = "workspace.restore"
     case configDoctor = "config.doctor"
     case configReload = "config.reload"
+    case configGet = "config.get"
+    case configApply = "config.apply"
     case terminalEvents = "terminal.events"
 }

@@ -1,6 +1,6 @@
 # OpenMUX Plugin Index
 
-This index lists bundled plugins and points to the plugin ecosystem docs for creating your own integrations.
+This index lists bundled plugins, highlights useful registry-hosted plugins, and points to the plugin ecosystem docs for creating your own integrations.
 
 ## Bundled plugins
 
@@ -29,6 +29,20 @@ omux plugins uninstall <plugin-id>
 
 OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts `--registry <url>` for custom registries.
 
+## Registry-hosted plugins
+
+| Plugin | Command | What it does |
+| --- | --- | --- |
+| Settings UI | `omux settings-ui` | Opens a graphical editor for supported `config.toml` settings and saves through OpenMUX validation. |
+| Hello Pane | `omux hello-pane` | Opens a small demo extension pane. Useful when testing plugin install and pane creation. |
+| macOS Notify | `omux macos-notify` | Sends a macOS notification from a plugin command. |
+
+Install one with:
+
+```sh
+omux plugins install settings-ui
+```
+
 Inspect plugin registration:
 
 ```sh
@@ -38,4 +52,4 @@ omux plugin path
 
 ## Create your own
 
-Read [Plugin Ecosystem](../plugins.md) for command registration, extension panes, process environment, and terminal text activation hooks.
+Read [Plugin Ecosystem](../plugins.md) for command registration, extension panes, process environment, menu contributions, and terminal text activation hooks.

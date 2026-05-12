@@ -64,7 +64,8 @@ final class WorkspaceWindowController: NSWindowController {
         initialTheme: WorkspaceShellTheme = .defaultTheme,
         initialPanes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
-        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared
+        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared,
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void = { _ in }
     ) {
         self.controller = controller
         self.rootViewController = WorkspaceShellViewController(
@@ -72,7 +73,8 @@ final class WorkspaceWindowController: NSWindowController {
             initialTheme: initialTheme,
             initialPanes: initialPanes,
             initialIcons: initialIcons,
-            sidebarVisibilityStore: sidebarVisibilityStore
+            sidebarVisibilityStore: sidebarVisibilityStore,
+            onExtensionPaneAction: onExtensionPaneAction
         )
         let window = NSWindow(
             contentRect: NSRect(x: 120, y: 120, width: 1220, height: 780),
@@ -154,6 +156,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
     private var commandPaletteView: CommandPaletteView?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
+    private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
     var themeCommitHandler: ((String) -> Void)?
 
@@ -162,7 +165,8 @@ final class WorkspaceShellViewController: NSViewController {
         initialTheme: WorkspaceShellTheme,
         initialPanes: OmuxConfigUI.Panes,
         initialIcons: OmuxConfigUI.Icons,
-        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
+        sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring,
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
     ) {
         self.controller = controller
         self.currentTheme = initialTheme
@@ -170,6 +174,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.currentIcons = initialIcons
         self.sidebarVisibilityStore = sidebarVisibilityStore
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
+        self.onExtensionPaneAction = onExtensionPaneAction
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -928,6 +933,9 @@ final class WorkspaceShellViewController: NSViewController {
                 },
                 onTextActivationHover: { [weak self] request in
                     self?.controller.canHandleTerminalTextActivation(request) ?? false
+                },
+                onExtensionPaneAction: { [weak self] request in
+                    self?.onExtensionPaneAction(request)
                 }
             )
             return (
@@ -2092,10 +2100,11 @@ extension HostedTerminalPaneView: WorkspacePaneRendering {
 }
 
 @MainActor
-private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNavigationDelegate {
+private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNavigationDelegate, WKScriptMessageHandler {
     private let paneID: PaneID
     private let descriptor: ExtensionPaneDescriptor
     private let onFocus: @MainActor (PaneID) -> Void
+    private let onAction: @MainActor (ExtensionPaneActionRequest) -> Void
     private let container = NSView()
     private let placeholderLabel = NSTextField(wrappingLabelWithString: "")
     private let webView: WKWebView
@@ -2106,15 +2115,26 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         descriptor: ExtensionPaneDescriptor,
         isFocused: Bool,
         theme: WorkspaceShellTheme,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
     ) {
         self.paneID = pane.id
         self.descriptor = descriptor
         self.onFocus = onFocus
+        self.onAction = onAction
 
         let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = descriptor.actionsEnabled
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        if descriptor.actionsEnabled {
+            configuration.userContentController.addUserScript(
+                WKUserScript(
+                    source: Self.bridgeScript(paneID: pane.id, pluginID: descriptor.pluginID),
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                )
+            )
+        }
         self.webView = WKWebView(frame: .zero, configuration: configuration)
 
         super.init(frame: .zero)
@@ -2131,6 +2151,12 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
+        if descriptor.actionsEnabled {
+            webView.configuration.userContentController.add(
+                WeakScriptMessageHandler(delegate: self),
+                name: "omuxAction"
+            )
+        }
         container.addSubview(webView)
 
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -2218,6 +2244,19 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         isLoadingInjectedHTML = false
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "omuxAction",
+              let actionRequest = Self.actionRequest(
+                from: message.body,
+                expectedPaneID: paneID,
+                expectedPluginID: descriptor.pluginID
+              )
+        else {
+            return
+        }
+        onAction(actionRequest)
+    }
+
     private func renderContent(theme: WorkspaceShellTheme) {
         guard descriptor.status == .ready,
               descriptor.contentKind == .html,
@@ -2254,6 +2293,102 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
     private var baseURL: URL? {
         descriptor.source.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
     }
+
+    private static func bridgeScript(paneID: PaneID, pluginID: String) -> String {
+        let paneJSONString = javascriptString(paneID.rawValue)
+        let pluginJSONString = javascriptString(pluginID)
+        return """
+        (() => {
+          const paneID = \(paneJSONString);
+          const pluginID = \(pluginJSONString);
+          window.omux = Object.freeze({
+            submitAction(action, payload = {}) {
+              window.webkit.messageHandlers.omuxAction.postMessage({ paneID, pluginID, action, payload });
+            }
+          });
+        })();
+        """
+    }
+
+    private static func javascriptString(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return "\"\""
+        }
+        return string
+    }
+
+    private static func actionRequest(
+        from body: Any,
+        expectedPaneID: PaneID,
+        expectedPluginID: String
+    ) -> ExtensionPaneActionRequest? {
+        guard let object = body as? [String: Any],
+              let paneID = object["paneID"] as? String,
+              let pluginID = object["pluginID"] as? String,
+              let action = object["action"] as? String,
+              paneID == expectedPaneID.rawValue,
+              pluginID == expectedPluginID,
+              let payload = omuxValue(from: object["payload"] ?? [:])
+        else {
+            return nil
+        }
+        return ExtensionPaneActionRequest(
+            paneID: expectedPaneID,
+            pluginID: expectedPluginID,
+            action: action,
+            payload: payload
+        )
+    }
+
+    private static func omuxValue(from value: Any) -> OmuxValue? {
+        switch value {
+        case let string as String:
+            return .string(string)
+        case let bool as Bool:
+            return .bool(bool)
+        case let int as Int:
+            return .integer(int)
+        case let number as NSNumber:
+            return CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .double(number.doubleValue)
+        case let array as [Any]:
+            var result: [OmuxValue] = []
+            for item in array {
+                guard let converted = omuxValue(from: item) else {
+                    return nil
+                }
+                result.append(converted)
+            }
+            return .array(result)
+        case let object as [String: Any]:
+            var result: [String: OmuxValue] = [:]
+            for (key, nestedValue) in object {
+                guard let converted = omuxValue(from: nestedValue) else {
+                    return nil
+                }
+                result[key] = converted
+            }
+            return .object(result)
+        case _ as NSNull:
+            return .null
+        default:
+            return nil
+        }
+    }
+}
+
+@MainActor
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var delegate: (any WKScriptMessageHandler)?
+
+    init(delegate: any WKScriptMessageHandler) {
+        self.delegate = delegate
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        delegate?.userContentController(userContentController, didReceive: message)
+    }
 }
 
 @MainActor
@@ -2287,7 +2422,8 @@ final class PaneStackView: NSView {
         onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
         onPaneTabDragCancelled: (() -> Void)? = nil,
         onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
-        onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool
+        onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
     ) {
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
         if let descriptor = activePane.extensionPane {
@@ -2296,7 +2432,8 @@ final class PaneStackView: NSView {
                 descriptor: descriptor,
                 isFocused: activePane.id == focusedPaneID,
                 theme: theme,
-                onFocus: onFocus
+                onFocus: onFocus,
+                onAction: onExtensionPaneAction
             )
             self.paneRenderer = extensionPaneView
             self.paneContentView = extensionPaneView
