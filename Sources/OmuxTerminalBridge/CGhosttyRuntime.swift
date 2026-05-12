@@ -627,7 +627,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         guard let surface = state.surface else {
             throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
         }
-        _ = mainActorValue {
+        mainActorValue {
             let action = "search:\(needle)"
             action.withCString { ptr in
                 _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
@@ -641,7 +641,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         guard let surface = state.surface else {
             throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
         }
-        _ = mainActorValue {
+        mainActorValue {
             let action = forward ? "search_next" : "search_prev"
             action.withCString { ptr in
                 _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
@@ -655,7 +655,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         guard let surface = state.surface else {
             throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
         }
-        _ = mainActorValue {
+        mainActorValue {
             let action = "end_search"
             action.withCString { ptr in
                 _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
