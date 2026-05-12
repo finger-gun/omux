@@ -266,6 +266,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func update(workspace: Workspace) {
+        let previousWorkspace = currentWorkspace
         let previousWorkspaceID = currentWorkspace?.id
         let previousFocusedPaneID = currentWorkspace?.focusedPane?.id
         let shouldRestoreFocus = shouldRestoreFocus(
@@ -315,19 +316,54 @@ final class WorkspaceShellViewController: NSViewController {
             }
         )
 
-        let layout = workspace.focusedTab.map {
-            makeLayoutView(
-                for: $0.rootLayout,
-                focusedPaneID: $0.focusedPaneID,
-                windowIsKey: windowIsKey,
-                inactiveOpacity: currentPanes.inactiveOpacity,
-                canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
-            )
+        let plan = WorkspaceRenderReconciliationPlanner.classify(
+            previousWorkspaceID: previousWorkspace?.id,
+            previousFocusedTabID: previousWorkspace?.focusedTabID,
+            previousLayout: previousWorkspace?.focusedTab?.rootLayout,
+            nextWorkspaceID: workspace.id,
+            nextFocusedTabID: workspace.focusedTabID,
+            nextLayout: workspace.focusedTab?.rootLayout
+        )
+
+        let layout: (view: NSView, focusedPaneView: NSView?, representativePaneID: PaneID?)?
+        var reconciledFocusedPaneView: NSView?
+        var reconciliationMetrics = WorkspaceReconciliationMetrics()
+
+        if plan == .nonStructural,
+           let focusedTab = workspace.focusedTab,
+           let existingLayoutView = canvasView.currentLayoutView,
+           let reconciliation = reconcileLayoutView(
+               existingView: existingLayoutView,
+               node: focusedTab.rootLayout,
+               focusedPaneID: focusedTab.focusedPaneID,
+               windowIsKey: windowIsKey,
+               inactiveOpacity: currentPanes.inactiveOpacity,
+               canCloseSinglePaneStack: focusedTab.panes.count > 1 || workspace.tabs.count > 1
+           ),
+           reconciliation.success {
+            layout = nil
+            reconciledFocusedPaneView = reconciliation.focusedPaneView
+            reconciliationMetrics.reusedHostViews = reconciliation.reusedPaneStackViews
+            canvasView.apply(theme: currentTheme)
+        } else {
+            layout = workspace.focusedTab.map {
+                makeLayoutView(
+                    for: $0.rootLayout,
+                    focusedPaneID: $0.focusedPaneID,
+                    windowIsKey: windowIsKey,
+                    inactiveOpacity: currentPanes.inactiveOpacity,
+                    canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
+                )
+            }
+            canvasView.render(layoutView: layout?.view, theme: currentTheme)
+            reconciliationMetrics.rebuiltHostViews = workspace.focusedTab?.paneStacks.count ?? 0
         }
-        canvasView.render(layoutView: layout?.view, theme: currentTheme)
+
+        logReconciliationMetricsIfNeeded(reconciliationMetrics)
         renderedIconKindByPaneID = iconKindSignature(for: workspace)
 
-        if shouldRestoreFocus, let focusedPaneView = layout?.focusedPaneView {
+        let focusedPaneView = reconciledFocusedPaneView ?? layout?.focusedPaneView
+        if shouldRestoreFocus, let focusedPaneView {
             focusRestoreGeneration &+= 1
             let generation = focusRestoreGeneration
 
@@ -874,6 +910,134 @@ final class WorkspaceShellViewController: NSViewController {
         return menu
     }
 
+    private struct WorkspaceReconciliationMetrics {
+        var reusedHostViews: Int = 0
+        var rebuiltHostViews: Int = 0
+    }
+
+    private func logReconciliationMetricsIfNeeded(_ metrics: WorkspaceReconciliationMetrics) {
+        #if DEBUG
+        guard metrics.reusedHostViews > 0 || metrics.rebuiltHostViews > 0 else {
+            return
+        }
+        print("omux.appshell.reconcile reused=\(metrics.reusedHostViews) rebuilt=\(metrics.rebuiltHostViews)")
+        #endif
+    }
+
+    private func reconcileLayoutView(
+        existingView: NSView,
+        node: TabLayoutNode,
+        focusedPaneID: PaneID,
+        windowIsKey: Bool,
+        inactiveOpacity: Double,
+        canCloseSinglePaneStack: Bool
+    ) -> (success: Bool, focusedPaneView: NSView?, reusedPaneStackViews: Int)? {
+        switch node {
+        case .paneStack(let paneStack):
+            guard let stackView = existingView as? PaneStackView else {
+                return nil
+            }
+            stackView.update(
+                paneStack: paneStack,
+                focusedPaneID: focusedPaneID,
+                windowIsKey: windowIsKey,
+                inactiveOpacity: inactiveOpacity,
+                bridge: controller.terminalBridge,
+                theme: currentTheme,
+                iconResolver: iconResolver,
+                iconConfiguration: currentIcons,
+                onSelectPaneTab: { [weak self] paneID in
+                    _ = self?.controller.focusPaneTab(paneID: paneID)
+                },
+                onCreatePaneTab: { [weak self] in
+                    _ = try self?.controller.createPaneTab(in: paneStack.id)
+                },
+                canCloseSinglePaneStack: canCloseSinglePaneStack,
+                onClosePane: { [weak self] paneID in
+                    _ = try self?.controller.closePane(paneID: paneID)
+                },
+                contextMenuProvider: { [weak self] pane in
+                    guard let self else { return NSMenu() }
+                    return makePaneTabContextMenu(
+                        pane: pane,
+                        paneStack: paneStack,
+                        canCloseSinglePaneStack: canCloseSinglePaneStack
+                    )
+                },
+                onFocus: { [weak self] paneID in
+                    _ = self?.controller.focus(paneID: paneID)
+                },
+                canStartPaneTabDrag: { [weak self] paneID in
+                    self?.canStartPaneTabDrag(paneID: paneID, sourceStackID: paneStack.id) ?? false
+                },
+                onPaneTabDragStarted: { [weak self] button, paneID, stackID, _ in
+                    self?.beginPaneTabDrag(button: button, paneID: paneID, sourceStackID: stackID)
+                },
+                onPaneTabDragMoved: { [weak self] _, _, event in
+                    self?.updatePaneTabDrag(with: event)
+                },
+                onPaneTabDragEnded: { [weak self] _, _, event in
+                    self?.endPaneTabDrag(with: event)
+                },
+                onPaneTabDragCancelled: { [weak self] in
+                    self?.cancelPaneTabDrag()
+                },
+                onTextActivation: { [weak self] request in
+                    self?.controller.handleTerminalTextActivation(request) ?? false
+                },
+                onTextActivationHover: { [weak self] request in
+                    self?.controller.canHandleTerminalTextActivation(request) ?? false
+                },
+                onExtensionPaneAction: { [weak self] request in
+                    self?.onExtensionPaneAction(request)
+                }
+            )
+            return (true, paneStack.focusedPaneID == focusedPaneID ? stackView.focusedPaneView : nil, 1)
+
+        case .split(let axis, let proportions, let children):
+            guard let splitView = existingView as? SplitLayoutView,
+                  splitView.canReconcile(axis: axis, childCount: children.count)
+            else {
+                return nil
+            }
+
+            let childViews = splitView.childLayoutViews
+            guard childViews.count == children.count else {
+                return nil
+            }
+
+            var focusedPaneView: NSView?
+            var reusedPaneStackViews = 0
+            var childPaneIDs: [PaneID] = []
+
+            for (index, child) in children.enumerated() {
+                guard let childResult = reconcileLayoutView(
+                    existingView: childViews[index],
+                    node: child,
+                    focusedPaneID: focusedPaneID,
+                    windowIsKey: windowIsKey,
+                    inactiveOpacity: inactiveOpacity,
+                    canCloseSinglePaneStack: canCloseSinglePaneStack
+                ) else {
+                    return nil
+                }
+                if focusedPaneView == nil {
+                    focusedPaneView = childResult.focusedPaneView
+                }
+                reusedPaneStackViews += childResult.reusedPaneStackViews
+                if let representativePaneID = child.representativePaneID {
+                    childPaneIDs.append(representativePaneID)
+                }
+            }
+
+            splitView.updateLayout(
+                proportions: proportions,
+                childPaneIDs: childPaneIDs
+            )
+            return (true, focusedPaneView, reusedPaneStackViews)
+        }
+    }
+
     private func makeLayoutView(
         for node: TabLayoutNode,
         focusedPaneID: PaneID,
@@ -989,6 +1153,7 @@ final class WorkspaceShellViewController: NSViewController {
         case split(PaneSplitDropDirection)
         case splitAtRoot(PaneSplitDropDirection)
         case merge
+        case reorder(Int)
     }
 
     private struct PaneTabDragState {
@@ -1048,13 +1213,18 @@ final class WorkspaceShellViewController: NSViewController {
         if let targetView = paneStackView(atWindowLocation: event.locationInWindow),
            let targetStackID = targetView.paneStackID
         {
-            // Hovering over the tab strip of a different pane → merge into that stack.
-            if targetStackID != dragState.sourceStackID,
-               targetView.isWindowPointInHeader(event.locationInWindow)
-            {
+            if targetView.isWindowPointInHeader(event.locationInWindow) {
                 targetView.setMergePreview(theme: currentTheme)
                 dragState.targetStackID = targetStackID
-                dragState.dropIntent = .merge
+
+                if targetStackID == dragState.sourceStackID {
+                    let insertionIndex = targetView.paneTabInsertionIndex(forWindowPoint: event.locationInWindow) ?? 0
+                    dragState.dropIntent = .reorder(insertionIndex)
+                } else {
+                    // Hovering over the tab strip of a different pane → merge into that stack.
+                    dragState.dropIntent = .merge
+                }
+
                 paneTabDragState = dragState
                 return
             }
@@ -1121,6 +1291,13 @@ final class WorkspaceShellViewController: NSViewController {
                 paneID: dragState.paneID,
                 sourceStackID: dragState.sourceStackID,
                 targetStackID: targetStackID
+            )
+        case .reorder(let insertionIndex):
+            guard let targetStackID = dragState.targetStackID else { return }
+            _ = controller.reorderPaneTabInStack(
+                paneID: dragState.paneID,
+                stackID: targetStackID,
+                insertionIndex: insertionIndex
             )
         }
     }
@@ -1194,6 +1371,51 @@ final class WorkspaceShellViewController: NSViewController {
             x: cursor.x - ghost.frame.width / 2,
             y: cursor.y - ghost.frame.height / 2
         )
+    }
+}
+
+private enum WorkspaceRenderUpdateKind {
+    case initial
+    case nonStructural
+    case structural
+}
+
+private struct WorkspaceRenderReconciliationPlanner {
+    private indirect enum LayoutSignature: Equatable {
+        case paneStack(PaneStackID, [PaneID])
+        case split(PaneSplitAxis, [LayoutSignature])
+    }
+
+    static func classify(
+        previousWorkspaceID: WorkspaceID?,
+        previousFocusedTabID: TabID?,
+        previousLayout: TabLayoutNode?,
+        nextWorkspaceID: WorkspaceID,
+        nextFocusedTabID: TabID,
+        nextLayout: TabLayoutNode?
+    ) -> WorkspaceRenderUpdateKind {
+        guard let previousWorkspaceID,
+              previousWorkspaceID == nextWorkspaceID,
+              let previousFocusedTabID,
+              previousFocusedTabID == nextFocusedTabID,
+              let previousLayout,
+              let nextLayout
+        else {
+            return .initial
+        }
+
+        let previousSignature = signature(for: previousLayout)
+        let nextSignature = signature(for: nextLayout)
+        return previousSignature == nextSignature ? .nonStructural : .structural
+    }
+
+    private static func signature(for node: TabLayoutNode) -> LayoutSignature {
+        switch node {
+        case .paneStack(let paneStack):
+            return .paneStack(paneStack.id, paneStack.panes.map(\.id))
+        case .split(let axis, _, let children):
+            return .split(axis, children.map(signature(for:)))
+        }
     }
 }
 
@@ -1777,6 +1999,10 @@ final class WorkspaceCanvasView: NSView {
     private var currentContentView: NSView?
     private var rootSplitPreview: PaneSplitPreviewView?
 
+    var currentLayoutView: NSView? {
+        currentContentView
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
@@ -1837,7 +2063,7 @@ final class SplitLayoutView: NSView {
     }
 
     private let axis: PaneSplitAxis
-    private let childPaneIDs: [PaneID]
+    private var childPaneIDs: [PaneID]
     private let onResize: ([PaneID], [Double]) -> Void
     private var desiredProportions: [Double]
     private var dividerRects: [NSRect] = []
@@ -1870,6 +2096,20 @@ final class SplitLayoutView: NSView {
     override func layout() {
         super.layout()
         applyLayout()
+    }
+
+    var childLayoutViews: [NSView] {
+        subviews
+    }
+
+    func canReconcile(axis: PaneSplitAxis, childCount: Int) -> Bool {
+        self.axis == axis && subviews.count == childCount
+    }
+
+    func updateLayout(proportions: [Double], childPaneIDs: [PaneID]) {
+        self.childPaneIDs = childPaneIDs
+        desiredProportions = Self.normalizedProportions(proportions, count: childPaneIDs.count)
+        needsLayout = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -2108,8 +2348,8 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
 
     private static var scrollPositionBySource: [String: ScrollPosition] = [:]
     private let paneID: PaneID
-    private let descriptor: ExtensionPaneDescriptor
-    private let scrollStateSource: String
+    private var descriptor: ExtensionPaneDescriptor
+    private var scrollStateSource: String
     private let onFocus: @MainActor (PaneID) -> Void
     private let onAction: @MainActor (ExtensionPaneActionRequest) -> Void
     private let container = NSView()
@@ -2117,6 +2357,7 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
     private let webView: WKWebView
     private var isLoadingInjectedHTML = false
     private var pendingScrollPosition: ScrollPosition?
+    private var lastRenderedHTML: String?
 
     init(
         pane: Pane,
@@ -2228,6 +2469,19 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
         layer?.borderWidth = 0
     }
 
+    func update(
+        pane: Pane,
+        descriptor: ExtensionPaneDescriptor,
+        isFocused: Bool,
+        theme: WorkspaceShellTheme
+    ) {
+        self.descriptor = descriptor
+        self.scrollStateSource = descriptor.source ?? pane.id.rawValue
+        apply(theme: theme)
+        updateFocusState(isFocused)
+        renderContent(theme: theme)
+    }
+
     func apply(theme: WorkspaceShellTheme) {
         layer?.backgroundColor = theme.terminalPalette.backgroundColor.cgColor
         container.layer?.backgroundColor = theme.terminalPalette.backgroundColor.cgColor
@@ -2294,13 +2548,18 @@ private final class ExtensionPaneHostView: NSView, WorkspacePaneRendering, WKNav
             webView.isHidden = true
             placeholderLabel.isHidden = false
             placeholderLabel.stringValue = placeholderMessage
+            lastRenderedHTML = nil
             return
         }
 
         placeholderLabel.isHidden = true
         webView.isHidden = false
+        if lastRenderedHTML == html {
+            return
+        }
         pendingScrollPosition = Self.scrollPositionBySource[scrollStateSource]
         isLoadingInjectedHTML = true
+        lastRenderedHTML = html
         webView.loadHTMLString(html, baseURL: baseURL)
     }
 
@@ -2479,9 +2738,10 @@ private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
 
 @MainActor
 final class PaneStackView: NSView {
-    private let paneContentView: NSView
-    private let paneRenderer: any WorkspacePaneRendering
+    private var paneContentView: NSView
+    private var paneRenderer: any WorkspacePaneRendering
     private let paneCardView = PaneCardView()
+    private var headerView: PaneHeaderView?
     private var splitPreviewView: PaneSplitPreviewView?
     private var mergePreviewView: PaneMergePreviewView?
 
@@ -2560,8 +2820,9 @@ final class PaneStackView: NSView {
             onPaneTabDragStarted: onPaneTabDragStarted,
             onPaneTabDragMoved: onPaneTabDragMoved,
             onPaneTabDragEnded: onPaneTabDragEnded,
-            onPaneTabDragCancelled: onPaneTabDragCancelled
+                onPaneTabDragCancelled: onPaneTabDragCancelled
         )
+        self.headerView = headerView
         paneCardView.configure(
             headerView: headerView,
             statusText: activePane.terminalState.statusSummary,
@@ -2588,6 +2849,103 @@ final class PaneStackView: NSView {
 
     var focusedPaneView: NSView {
         paneContentView
+    }
+
+    func update(
+        paneStack: PaneStack,
+        focusedPaneID: PaneID,
+        windowIsKey: Bool,
+        inactiveOpacity: Double,
+        bridge: GhosttyTerminalBridge,
+        theme: WorkspaceShellTheme,
+        iconResolver: WorkspaceIconResolver,
+        iconConfiguration: OmuxConfigUI.Icons,
+        onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
+        onCreatePaneTab: @escaping @MainActor () throws -> Void,
+        canCloseSinglePaneStack: Bool,
+        onClosePane: @escaping @MainActor (PaneID) throws -> Void,
+        contextMenuProvider: @escaping @MainActor (Pane) -> NSMenu,
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        canStartPaneTabDrag: @escaping @MainActor (PaneID) -> Bool,
+        onPaneTabDragStarted: ((NSView, PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragMoved: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragEnded: ((PaneID, PaneStackID, NSEvent) -> Void)? = nil,
+        onPaneTabDragCancelled: (() -> Void)? = nil,
+        onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
+        onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
+    ) {
+        self.paneStackID = paneStack.id
+        let activePane = paneStack.focusedPane ?? paneStack.panes[0]
+
+        if paneRenderer.representedPaneID != activePane.id {
+            if let descriptor = activePane.extensionPane {
+                let extensionPaneView = ExtensionPaneHostView(
+                    pane: activePane,
+                    descriptor: descriptor,
+                    isFocused: activePane.id == focusedPaneID,
+                    theme: theme,
+                    onFocus: onFocus,
+                    onAction: onExtensionPaneAction
+                )
+                paneRenderer = extensionPaneView
+                paneContentView = extensionPaneView
+            } else {
+                let terminalPaneView = bridge.makeHostedPaneView(
+                    for: activePane,
+                    isFocused: activePane.id == focusedPaneID,
+                    themePalette: theme.terminalPalette,
+                    onFocus: onFocus,
+                    onTextActivation: onTextActivation,
+                    onTextActivationHover: onTextActivationHover
+                )
+                paneRenderer = terminalPaneView
+                paneContentView = terminalPaneView
+            }
+        } else if let descriptor = activePane.extensionPane,
+                  let extensionPaneView = paneRenderer as? ExtensionPaneHostView {
+            extensionPaneView.update(
+                pane: activePane,
+                descriptor: descriptor,
+                isFocused: activePane.id == focusedPaneID,
+                theme: theme
+            )
+        }
+
+        let headerView = PaneHeaderView(
+            paneStack: paneStack,
+            theme: theme,
+            iconResolver: iconResolver,
+            iconConfiguration: iconConfiguration,
+            terminalTextProvider: { pane in
+                guard pane.isTerminal else {
+                    return nil
+                }
+                let snapshot = bridge.terminalTextSnapshot(for: pane.id, maxBytes: 4_096, maxLines: 40)
+                return snapshot.text.isEmpty ? nil : snapshot.text
+            },
+            onSelectPaneTab: onSelectPaneTab,
+            onCreatePaneTab: onCreatePaneTab,
+            canCloseSinglePaneStack: canCloseSinglePaneStack,
+            onClosePane: onClosePane,
+            contextMenuProvider: contextMenuProvider,
+            canStartPaneTabDrag: canStartPaneTabDrag,
+            onPaneTabDragStarted: onPaneTabDragStarted,
+            onPaneTabDragMoved: onPaneTabDragMoved,
+            onPaneTabDragEnded: onPaneTabDragEnded,
+            onPaneTabDragCancelled: onPaneTabDragCancelled
+        )
+        self.headerView = headerView
+        paneRenderer.updateFocusState(activePane.id == focusedPaneID)
+        paneCardView.configure(
+            headerView: headerView,
+            statusText: activePane.terminalState.statusSummary,
+            paneRenderer: paneRenderer,
+            theme: theme,
+            focused: activePane.id == focusedPaneID,
+            windowIsKey: windowIsKey,
+            inactiveOpacity: inactiveOpacity
+        )
     }
 
     func setSplitPreview(_ direction: PaneSplitDropDirection, theme: WorkspaceShellTheme) {
@@ -2625,6 +2983,10 @@ final class PaneStackView: NSView {
         guard bounds.contains(localPoint) else { return false }
         let threshold = ShellLayoutMetrics.paneHeaderHeight + 4
         return isFlipped ? localPoint.y <= threshold : localPoint.y >= bounds.height - threshold
+    }
+
+    func paneTabInsertionIndex(forWindowPoint windowPoint: NSPoint) -> Int? {
+        headerView?.insertionIndex(forWindowPoint: windowPoint)
     }
 }
 
@@ -2771,6 +3133,7 @@ final class PaneCardView: NSView {
 @MainActor
 final class PaneHeaderView: NSView {
     private let tabStrip = NSStackView()
+    private var paneTabButtons: [PaneTabButton] = []
 
     init(
         paneStack: PaneStack,
@@ -2836,6 +3199,7 @@ final class PaneHeaderView: NSView {
                 button.onDragCancelled = { _ in onPaneTabDragCancelled?() }
             }
             tabStrip.addArrangedSubview(button)
+            paneTabButtons.append(button)
         }
 
         let addButton = ChromePillButton()
@@ -2856,6 +3220,17 @@ final class PaneHeaderView: NSView {
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
         ])
+    }
+
+    func insertionIndex(forWindowPoint windowPoint: NSPoint) -> Int {
+        let pointInTabStrip = tabStrip.convert(windowPoint, from: nil)
+        for (index, button) in paneTabButtons.enumerated() {
+            let frame = button.convert(button.bounds, to: tabStrip)
+            if pointInTabStrip.x < frame.midX {
+                return index
+            }
+        }
+        return paneTabButtons.count
     }
 
     @available(*, unavailable)

@@ -880,6 +880,31 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
+    public func reorderPaneTabInStack(
+        paneID: PaneID,
+        stackID: PaneStackID,
+        insertionIndex: Int
+    ) -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[index].reorderPaneTabInStack(
+            paneID: paneID,
+            stackID: stackID,
+            insertionIndex: insertionIndex
+        )
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
     public func movePaneTabToRootSplit(
         paneID: PaneID,
         sourceStackID: PaneStackID,

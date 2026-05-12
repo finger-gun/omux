@@ -2,6 +2,7 @@ import AppKit
 import OmuxConfig
 import OmuxTheme
 import Foundation
+import WebKit
 import XCTest
 @testable import OmuxControlPlane
 @testable import OmuxAppShell
@@ -1305,6 +1306,75 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(bottomChildren.count, 2)
         XCTAssertTrue(bottomChildren[0].containsPane(id: bottomPaneID))
         XCTAssertTrue(bottomChildren[1].containsPane(id: movedPaneID))
+    }
+
+    func testWorkspaceControllerReordersPaneTabsWithinSameStack() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let stackID = try XCTUnwrap(workspace.focusedPaneStack?.id)
+
+        let withSecondPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let secondPaneID = try XCTUnwrap(withSecondPane.focusedPane?.id)
+        let withThirdPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let thirdPaneID = try XCTUnwrap(withThirdPane.focusedPane?.id)
+
+        let reordered = try XCTUnwrap(controller.reorderPaneTabInStack(
+            paneID: secondPaneID,
+            stackID: stackID,
+            insertionIndex: 3
+        ))
+
+        XCTAssertEqual(
+            reordered.focusedPaneStack?.panes.map(\.id),
+            [firstPaneID, thirdPaneID, secondPaneID]
+        )
+        XCTAssertEqual(reordered.focusedPane?.id, secondPaneID)
+    }
+
+    func testPaneReorderFlowKeepsKeyboardRoutingSemantics() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let stackID = try XCTUnwrap(workspace.focusedPaneStack?.id)
+        let withSecondPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let secondPaneID = try XCTUnwrap(withSecondPane.focusedPane?.id)
+        _ = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        _ = controller.reorderPaneTabInStack(
+            paneID: secondPaneID,
+            stackID: stackID,
+            insertionIndex: 3
+        )
+
+        let normalizer = DefaultKeyEventNormalizer()
+        let rightOption = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 19,
+                characters: "@",
+                charactersIgnoringModifiers: "2",
+                modifiers: [.rightOption],
+                isComposing: false
+            )
+        )
+        let deadKey = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 33,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                modifiers: [.rightOption],
+                isComposing: true
+            )
+        )
+
+        XCTAssertEqual(rightOption.route, .terminal)
+        XCTAssertEqual(deadKey.route, .composition)
     }
 
     func testWorkspaceControllerCyclesPanesInVisibleLayoutOrder() throws {
@@ -2995,6 +3065,74 @@ final class OmuxAppShellTests: XCTestCase {
         paneViews = findViews(ofType: HostedTerminalPaneView.self, in: rootView)
         XCTAssertEqual(paneViews.count, 2)
         XCTAssertTrue(window.firstResponder === paneViews.last?.focusTarget)
+    }
+
+    @MainActor
+    func testWorkspaceWindowReusesPaneStackViewOnNonStructuralUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let focusedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: focusedPaneID)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let initialStackView = try XCTUnwrap(findView(ofType: PaneStackView.self, in: rootView))
+
+        runtime.emit(.progressReported(state: .active, progress: 17), on: runtimeSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let updatedStackView = try XCTUnwrap(findView(ofType: PaneStackView.self, in: rootView))
+        XCTAssertTrue(initialStackView === updatedStackView)
+    }
+
+    @MainActor
+    func testWorkspaceWindowReusesExtensionPaneWebViewOnNonStructuralUpdates() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let initialDescriptor = ExtensionPaneDescriptor(
+            pluginID: "dev.fingergun.markdown-preview",
+            contentKind: .html,
+            source: "/tmp/example.md",
+            html: "<html><body><h1>First</h1></body></html>",
+            status: .ready
+        )
+        let created = try XCTUnwrap(controller.createExtensionPane(
+            title: "Preview",
+            descriptor: initialDescriptor
+        ))
+        let paneID = created.pane.id
+
+        let windowController = WorkspaceWindowController(workspace: created.workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let initialWebView = try XCTUnwrap(findView(ofType: WKWebView.self, in: rootView))
+
+        let updatedDescriptor = ExtensionPaneDescriptor(
+            pluginID: initialDescriptor.pluginID,
+            contentKind: .html,
+            source: initialDescriptor.source,
+            html: "<html><body><h1>Second</h1></body></html>",
+            status: .ready
+        )
+        _ = controller.updateExtensionPane(paneID: paneID, descriptor: updatedDescriptor)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let updatedWebView = try XCTUnwrap(findView(ofType: WKWebView.self, in: rootView))
+        XCTAssertTrue(initialWebView === updatedWebView)
     }
 
     @MainActor

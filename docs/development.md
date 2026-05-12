@@ -162,6 +162,8 @@ The current layout tree is now:
 
 This keeps shell structure in `OmuxCore` and `OmuxAppShell` while the terminal bridge still only owns pane/session surfaces. Splitting acts on the active local pane tab in the focused pane stack; creating a pane-local tab stays inside the current split region.
 
+`WorkspaceShellViewController` now applies keyed reconciliation for identity-stable pane stacks, so non-structural updates (pane status/title/content changes) reuse existing pane hosts instead of rebuilding the full canvas subtree. Structural layout changes still take the full rebuild path.
+
 ## Hosted pane path
 
 The current pane-hosting split is:
@@ -234,7 +236,7 @@ The current shell is usable, but it is still intentionally narrow:
 
 - runtime-backed transcript snapshots are still minimal until the Ghostty bridge exposes richer capture
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
-- pane-local tabs cannot yet be reordered or dragged between stacks
+- pane-tab drag behavior now supports same-stack reorder and cross-stack merge, but still needs further polish for large-stack ergonomics
 - workspace, split, pane-stack, and session restore exists, but still needs polish under more workflows
 
 ## Guidance for future changes
