@@ -32,6 +32,8 @@ public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
     case paneTabClose = "pane-tab.close"
     case paneTabNext = "pane-tab.next"
     case paneTabPrevious = "pane-tab.previous"
+    case paneFind = "pane.find"
+    case paneFindAll = "pane.find-all"
 }
 
 public struct OpenMUXKeyChord: Hashable, Sendable {
@@ -214,6 +216,8 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+t"), .paneTabCreate),
         (try! OpenMUXKeyChord(parsing: "cmd+w"), .paneTabClose),
         (try! OpenMUXKeyChord(parsing: "ctrl+tab"), .paneTabNext),
+        (try! OpenMUXKeyChord(parsing: "cmd+f"), .paneFind),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+f"), .paneFindAll),
     ]
 
     public static let defaults = OpenMUXKeyBindingRegistry(bindings: Dictionary(uniqueKeysWithValues: defaultBindingPairs))

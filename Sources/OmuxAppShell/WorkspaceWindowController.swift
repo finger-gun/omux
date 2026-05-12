@@ -129,6 +129,14 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.presentCommandPalette(initialQuery: initialQuery, keyBindings: keyBindings)
     }
 
+    func presentPaneFind(mode: PaneFindBarView.Mode) {
+        rootViewController.presentPaneFind(mode: mode)
+    }
+
+    func dismissPaneFind() {
+        rootViewController.dismissPaneFind()
+    }
+
     var themeCommitHandler: ((String) -> Void)? {
         get { rootViewController.themeCommitHandler }
         set { rootViewController.themeCommitHandler = newValue }
@@ -155,6 +163,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var terminalIconRefreshTimer: Timer?
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
     private var commandPaletteView: CommandPaletteView?
+    private var paneFindBarView: PaneFindBarView?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
@@ -692,6 +701,16 @@ final class WorkspaceShellViewController: NSViewController {
                 toggleSidebarVisibility()
                 return .invoked
             }
+            if result.invocationTarget == .action(.paneFind) {
+                commandPaletteView?.dismissAndRestoreFocus()
+                presentPaneFind(mode: .currentPane)
+                return .invoked
+            }
+            if result.invocationTarget == .action(.paneFindAll) {
+                commandPaletteView?.dismissAndRestoreFocus()
+                presentPaneFind(mode: .allPanes)
+                return .invoked
+            }
             if result.invocationTarget == .themeSwitch {
                 themeBeforeSubPalette = currentTheme
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
@@ -730,6 +749,93 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
         paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
+    }
+
+    func presentPaneFind(mode: PaneFindBarView.Mode, initialQuery: String = "") {
+        if let existing = paneFindBarView {
+            existing.present(
+                mode: mode,
+                paneResults: collectPaneResults(mode: mode, query: initialQuery),
+                existingQuery: initialQuery
+            )
+            return
+        }
+
+        let findBar = PaneFindBarView()
+        paneFindBarView = findBar
+        canvasView.addSubview(findBar)
+        NSLayoutConstraint.activate([
+            findBar.trailingAnchor.constraint(equalTo: canvasView.trailingAnchor, constant: -8),
+            findBar.bottomAnchor.constraint(equalTo: canvasView.bottomAnchor, constant: -8),
+            findBar.widthAnchor.constraint(equalToConstant: 460),
+            findBar.heightAnchor.constraint(equalToConstant: 280),
+        ])
+
+        findBar.onDismiss = { [weak self, weak findBar] in
+            findBar?.removeFromSuperview()
+            if self?.paneFindBarView === findBar {
+                self?.paneFindBarView = nil
+            }
+        }
+
+        findBar.onFocusPane = { [weak self] paneID in
+            _ = self?.controller.focus(paneID: paneID)
+        }
+
+        findBar.onModeToggle = { [weak self] newMode, query in
+            self?.presentPaneFind(mode: newMode, initialQuery: query)
+        }
+
+        findBar.onQueryChange = { [weak self, weak findBar] query in
+            guard let self, let findBar else { return }
+            let results = self.collectPaneResults(mode: findBar.mode, query: query)
+            findBar.present(mode: findBar.mode, paneResults: results, existingQuery: query)
+        }
+
+        findBar.present(
+            mode: mode,
+            paneResults: collectPaneResults(mode: mode, query: initialQuery),
+            existingQuery: initialQuery
+        )
+    }
+
+    func dismissPaneFind() {
+        paneFindBarView?.onDismiss?()
+    }
+
+    private func collectPaneResults(mode: PaneFindBarView.Mode, query: String) -> [PaneFindPaneResult] {
+        let workspaces: [Workspace]
+        switch mode {
+        case .currentPane:
+            guard let workspace = currentWorkspace, let pane = workspace.focusedPane else { return [] }
+            workspaces = [workspace]
+            _ = pane
+        case .allPanes:
+            workspaces = controller.allWorkspaces()
+        }
+
+        return workspaces.flatMap { workspace -> [PaneFindPaneResult] in
+            let panes: [Pane]
+            switch mode {
+            case .currentPane:
+                guard let pane = workspace.focusedPane else { return [] }
+                panes = [pane]
+            case .allPanes:
+                panes = workspace.tabs.flatMap(\.panes)
+            }
+            return panes.compactMap { pane -> PaneFindPaneResult? in
+                let snapshot = controller.terminalBridge.terminalTextSnapshot(for: pane.id)
+                guard snapshot.isAvailable else { return nil }
+                let matches = PaneFindSearch.search(query: query, in: snapshot.text)
+                guard !matches.isEmpty || query.isEmpty else { return nil }
+                return PaneFindPaneResult(
+                    paneID: pane.id,
+                    workspaceName: workspace.name,
+                    paneTitle: pane.title,
+                    matches: matches
+                )
+            }
+        }
     }
 
     private struct ConfigOpenContext {

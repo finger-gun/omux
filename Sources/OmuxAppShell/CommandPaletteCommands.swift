@@ -158,6 +158,10 @@ struct CommandPaletteCommandCatalog {
             return controller.canResizeSplit(.right)
         case .paneTabClose, .paneTabNext, .paneTabPrevious:
             return controller.canFocusPaneTab()
+        case .paneFind:
+            return controller.activeWorkspace()?.focusedPane != nil
+        case .paneFindAll:
+            return controller.activeWorkspace() != nil
         }
     }
 }
@@ -239,6 +243,8 @@ extension WorkspaceController {
                 guard focusNextPaneTab() != nil else { return .failed("No next pane tab") }
             case .paneTabPrevious:
                 guard focusPreviousPaneTab() != nil else { return .failed("No previous pane tab") }
+            case .paneFind, .paneFindAll:
+                return .failed("Pane find is handled by the app shell")
             }
             return .invoked
         } catch {
