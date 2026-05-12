@@ -18,6 +18,17 @@ omux plugins
 
 Use the picker to search bundled plugins and toggle configurable ones. External plugins are discovered from `~/.omux/plugins/` and are enabled or disabled by adding or removing executable plugin files.
 
+Discover and install registry-hosted plugins:
+
+```sh
+omux plugins discover
+omux plugins install <plugin-id>
+omux plugins update <plugin-id>
+omux plugins uninstall <plugin-id>
+```
+
+OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts `--registry <url>` for custom registries.
+
 Inspect plugin registration:
 
 ```sh

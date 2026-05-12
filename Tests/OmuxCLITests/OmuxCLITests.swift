@@ -1017,6 +1017,154 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLIPluginDiscoveryUsesCustomRegistryFlag() throws {
+        let registry = try makePluginRegistryFixture()
+        defer { try? FileManager.default.removeItem(at: registry) }
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "discover", "--registry", registry.absoluteString]), 0)
+        XCTAssertEqual(output, ["hello\t0.1.0\tHello Pane\t\(registry.absoluteString)"])
+    }
+
+    func testCLIPluginDiscoverySupportsJSONOutput() throws {
+        let registry = try makePluginRegistryFixture()
+        defer { try? FileManager.default.removeItem(at: registry) }
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "discover", "--json", "--registry", registry.absoluteString]), 0)
+        let json = output.joined(separator: "\n")
+        XCTAssertTrue(json.contains("\"id\""))
+        XCTAssertTrue(json.contains("\"hello\""))
+        XCTAssertTrue(json.contains("\"registry\""))
+        XCTAssertTrue(json.contains(registry.lastPathComponent))
+    }
+
+    func testCLIPluginInstallWritesLocalPluginAndReceipt() throws {
+        let registry = try makePluginRegistryFixture()
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: registry)
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) }, readInputLine: { nil })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "install", "hello", "--yes", "--registry", registry.absoluteString]), 0)
+        let pluginURL = home.appendingPathComponent("plugins/hello/plugin")
+        let receiptURL = home.appendingPathComponent("installed/plugin/hello.json")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: pluginURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: receiptURL.path))
+        XCTAssertTrue(output.contains("Installed plugin hello 0.1.0."))
+    }
+
+    func testCLIPluginUpdateAndUninstallUseReceipts() throws {
+        let registry = try makePluginRegistryFixture()
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: registry)
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) }, readInputLine: { nil })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "install", "hello", "--yes", "--registry", registry.absoluteString]), 0)
+        try "#!/bin/sh\nexit 7\n".write(to: registry.appendingPathComponent("plugins/hello/plugin"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "update", "hello", "--yes"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "uninstall", "hello"]), 0)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("plugins/hello/plugin").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("installed/plugin/hello.json").path))
+        XCTAssertTrue(output.contains("Updated plugin hello to 0.1.0."))
+        XCTAssertTrue(output.contains("Uninstalled plugin hello 0.1.0."))
+    }
+
+    func testCLIInstallRejectsAmbiguousPackageIDAcrossRegistries() throws {
+        let first = try makePluginRegistryFixture()
+        let second = try makePluginRegistryFixture()
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) }, readInputLine: { nil })
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "plugins", "install", "hello", "--yes",
+            "--registry", first.absoluteString,
+            "--registry", second.absoluteString,
+        ]), 1)
+        XCTAssertTrue(output.contains("omux error: package id is ambiguous across registries: hello"))
+    }
+
+    func testCLIHookInstallUsesExistingHookDirectoryLayout() throws {
+        let registry = try makeHookRegistryFixture()
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: registry)
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) }, readInputLine: { nil })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "hooks", "install", "fail-notify", "--yes", "--registry", registry.absoluteString]), 0)
+        let hookURL = home.appendingPathComponent("hooks/terminal-command-finished/20-notify")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: hookURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("installed/hook/fail-notify.json").path))
+        XCTAssertTrue(output.contains("Installed hook fail-notify 0.1.0."))
+    }
+
+    func testCLIInstallRejectsUnsafePackagePaths() throws {
+        let registry = try makePluginRegistryFixture(targetPath: "../evil")
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: registry)
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) }, readInputLine: { nil })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "install", "hello", "--yes", "--registry", registry.absoluteString]), 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("evil").path))
+        XCTAssertTrue(output.contains(where: { $0.contains("unsafe package path") }))
+    }
+
+    func testCLIUninstallRefusesUnmanagedPackage() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "uninstall", "hello"]), 1)
+        XCTAssertTrue(output.contains("omux error: package is not managed by OpenMUX receipts: hello"))
+    }
+
     func testCLIPluginPickerTogglesMarkdownPreviewAndReloads() throws {
         let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
@@ -1933,6 +2081,79 @@ final class OmuxCLITests: XCTestCase {
 
     private func pickerTheme(name: String, displayName: String) -> OmuxTheme {
         OmuxTheme(schema: 1, name: name, displayName: displayName, tokens: [:])
+    }
+
+    private func makePluginRegistryFixture(targetPath: String = "plugin") throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let package = root.appendingPathComponent("plugins/hello", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [packages.hello]
+        kind = "plugin"
+        name = "Hello Pane"
+        description = "Creates a sample extension pane."
+        version = "0.1.0"
+        path = "plugins/hello/omux-plugin.toml"
+        tags = ["demo"]
+        """.write(to: root.appendingPathComponent("catalog.toml"), atomically: true, encoding: .utf8)
+        try """
+        schema = 1
+        id = "hello"
+        name = "Hello Pane"
+        description = "Creates a sample extension pane."
+        version = "0.1.0"
+        license = "Apache-2.0"
+        kind = "plugin"
+
+        [plugin]
+        command = "hello"
+        entrypoint = "plugin"
+
+        [files.plugin]
+        source = "plugin"
+        target = "\(targetPath)"
+        executable = true
+        """.write(to: package.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 0\n".write(to: package.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        return root
+    }
+
+    private func makeHookRegistryFixture() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let package = root.appendingPathComponent("hooks/fail-notify", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [packages.fail-notify]
+        kind = "hook"
+        name = "Notify on failure"
+        description = "Notifies when a command fails."
+        version = "0.1.0"
+        path = "hooks/fail-notify/omux-hook.toml"
+        """.write(to: root.appendingPathComponent("catalog.toml"), atomically: true, encoding: .utf8)
+        try """
+        schema = 1
+        id = "fail-notify"
+        name = "Notify on failure"
+        description = "Notifies when a command fails."
+        version = "0.1.0"
+        license = "Apache-2.0"
+        kind = "hook"
+
+        [hook]
+        name = "terminal-command-finished"
+        category = "command"
+
+        [files.handler]
+        source = "20-notify"
+        target = "20-notify"
+        executable = true
+        """.write(to: package.appendingPathComponent("omux-hook.toml"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 0\n".write(to: package.appendingPathComponent("20-notify"), atomically: true, encoding: .utf8)
+        return root
     }
 
     func testCLIInstallCommandPrefersInstalledAppCLIWhenLaunchedFromDevBuild() throws {

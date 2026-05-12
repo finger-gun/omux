@@ -51,6 +51,63 @@ omux plugins
 
 `omux plugins` opens an interactive picker with fuzzy search. Press Enter on a configurable bundled plugin to toggle it enabled or disabled. External executable plugins are listed as externally registered and remain managed by their files in `~/.omux/plugins/`.
 
+## Registry discovery and install
+
+OpenMUX can discover and install plugin packages from TOML registries. The official default registry is:
+
+```text
+https://github.com/finger-gun/omux-plugins
+```
+
+Remote registry commands are explicit so the existing picker remains the default for `omux plugins`:
+
+```sh
+omux plugins discover
+omux plugins discover --json
+omux plugins install <plugin-id>
+omux plugins update <plugin-id>
+omux plugins uninstall <plugin-id>
+```
+
+Use `--registry <url>` to discover or install from a custom registry for one command. Registry-installed plugins are copied into `~/.omux/plugins/<command>/` and then discovered by the same local plugin registry as manually installed plugins.
+
+A registry root contains `catalog.toml`:
+
+```toml
+schema = 1
+
+[packages.hello-pane]
+kind = "plugin"
+name = "Hello Pane"
+description = "Creates a sample extension pane."
+version = "0.1.0"
+path = "plugins/hello-pane/omux-plugin.toml"
+tags = ["demo"]
+```
+
+The package manifest declares the command, entrypoint, and files:
+
+```toml
+schema = 1
+id = "hello-pane"
+name = "Hello Pane"
+description = "Creates a sample extension pane."
+version = "0.1.0"
+license = "Apache-2.0"
+kind = "plugin"
+
+[plugin]
+command = "hello-pane"
+entrypoint = "plugin"
+
+[files.entrypoint]
+source = "plugin"
+target = "plugin"
+executable = true
+```
+
+Installing a plugin installs executable local code. OpenMUX prints the source registry, package version, and target paths before install; use `--yes` for non-interactive installs. Installed package receipts live under `~/.omux/installed/` so update and uninstall only remove files OpenMUX installed.
+
 ## Plugin process environment
 
 When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchanged and adds these environment variables:
