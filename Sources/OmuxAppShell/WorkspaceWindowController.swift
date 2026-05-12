@@ -302,6 +302,9 @@ final class WorkspaceShellViewController: NSViewController {
             onToggleWorkspaceExpansion: { [weak self] workspaceID in
                 self?.toggleWorkspaceExpansion(workspaceID)
             },
+            onRenameWorkspace: { [weak self] workspaceID, newName in
+                _ = try? self?.controller.renameWorkspace(workspaceID, to: newName)
+            },
             onSelectPane: { [weak self] paneID in
                 _ = self?.controller.focus(paneID: paneID)
             }
@@ -491,7 +494,7 @@ final class WorkspaceShellViewController: NSViewController {
                 action: .workspace(workspace.id),
                 contextMenuProvider: { [weak self] in
                     guard let self else { return NSMenu() }
-                    return makeWorkspaceContextMenu(for: workspace)
+                    return makeWorkspaceContextMenu(for: workspace, onBeginRename: nil)
                 }
             )
 
@@ -777,10 +780,14 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
-    private func makeWorkspaceContextMenu(for workspace: Workspace) -> NSMenu {
+    private func makeWorkspaceContextMenu(for workspace: Workspace, onBeginRename: (() -> Void)?) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Rename…", action: nil, keyEquivalent: "").onSelect { [weak self] in
-            self?.presentRenameWorkspacePrompt(workspaceID: workspace.id)
+            if let onBeginRename {
+                onBeginRename()
+            } else {
+                self?.presentRenameWorkspacePrompt(workspaceID: workspace.id)
+            }
         }
         let expansionTitle = collapsedWorkspaceIDs.contains(workspace.id)
             ? "Expand Workspace Panes"
@@ -1383,6 +1390,7 @@ final class WorkspaceSidebarView: NSView {
         updateAvailability: OpenMUXUpdateAvailability?,
         onMoveWorkspace: @escaping @MainActor (WorkspaceID, Int) -> Void,
         onToggleWorkspaceExpansion: @escaping @MainActor (WorkspaceID) -> Void,
+        onRenameWorkspace: @escaping @MainActor (WorkspaceID, String) -> Void,
         onSelectPane: @escaping @MainActor (PaneID) -> Void
     ) {
         apply(theme: theme)
@@ -1407,6 +1415,7 @@ final class WorkspaceSidebarView: NSView {
             ],
             onMoveWorkspace: onMoveWorkspace,
             onToggleWorkspaceExpansion: onToggleWorkspaceExpansion,
+            onRenameWorkspace: onRenameWorkspace,
             buttonHandler: { item in
                 switch item.action {
                 case .workspace(let workspaceID):
@@ -1568,6 +1577,7 @@ private final class WorkspaceSidebarSectionView: NSView {
         accessories: [SidebarSectionAccessory],
         onMoveWorkspace: @escaping (WorkspaceID, Int) -> Void,
         onToggleWorkspaceExpansion: @escaping (WorkspaceID) -> Void,
+        onRenameWorkspace: @escaping (WorkspaceID, String) -> Void,
         buttonHandler: @escaping (SidebarItem) -> Void
     ) {
         titleLabel.stringValue = "\(title) · \(count)"
@@ -1620,6 +1630,23 @@ private final class WorkspaceSidebarSectionView: NSView {
             button.contextMenuProvider = item.contextMenuProvider
             if let workspaceID = item.workspaceID {
                 button.workspaceID = workspaceID
+                button.onRename = { newName in
+                    onRenameWorkspace(workspaceID, newName)
+                }
+                button.onBeginRename = { [weak button] in
+                    button?.beginInlineRename()
+                }
+                // Override context menu to wire Rename… to inline rename
+                let itemProvider = item.contextMenuProvider
+                button.contextMenuProvider = { [weak button] in
+                    guard let menu = itemProvider?() else { return nil }
+                    if let renameItem = menu.item(withTitle: "Rename…") {
+                        renameItem.onSelect { [weak button] in
+                            button?.beginInlineRename()
+                        }
+                    }
+                    return menu
+                }
                 workspaceButtons.append(button)
                 workspaceDragGroups.append(WorkspaceDragGroup(workspaceID: workspaceID, buttons: [button]))
                 button.onDragStarted = { [weak self] button, _ in
@@ -3176,34 +3203,14 @@ private class ChromePillButton: NSControl {
         }
     }
 
-    override var acceptsFirstResponder: Bool { false }
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {
-        guard isEnabled else {
-            return
-        }
-
-        onPress?()
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        guard isEnabled else {
-            return
-        }
-
-        if let menu = menu ?? contextMenuProvider?() {
-            NSMenu.popUpContextMenu(menu, with: event, for: self)
-        } else {
-            super.rightMouseDown(with: event)
-        }
-    }
 }
 
 @MainActor
-final class SidebarItemButton: NSView {
+final class SidebarItemButton: NSView, NSTextFieldDelegate {
     var onPress: (() -> Void)?
     var onToggleExpansion: (() -> Void)?
+    var onRename: ((String) -> Void)?
+    var onBeginRename: (() -> Void)?
     var workspaceID: WorkspaceID?
     var onDragStarted: ((SidebarItemButton, NSEvent) -> Void)?
     var onDragMoved: ((SidebarItemButton, NSEvent) -> Void)?
@@ -3226,6 +3233,8 @@ final class SidebarItemButton: NSView {
     private var iconSide = CGFloat(13)
     private var progress: PaneProgress?
     private var showsDisclosure = false
+    private var isActive = false
+    private var isRenaming = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3285,6 +3294,7 @@ final class SidebarItemButton: NSView {
         }
 
         titleField.stringValue = item.title
+        isActive = item.isActive
         progress = item.progress
         progressOrb.configure(progress: item.progress, theme: theme)
         renderedIcon = item.icon
@@ -3421,7 +3431,7 @@ final class SidebarItemButton: NSView {
         }
     }
 
-    override var acceptsFirstResponder: Bool { false }
+    override var acceptsFirstResponder: Bool { isRenaming }
     override var mouseDownCanMoveWindow: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
@@ -3432,20 +3442,33 @@ final class SidebarItemButton: NSView {
         }
 
         guard onDragStarted != nil || onDragMoved != nil || onDragEnded != nil else {
-            onPress?()
+            if event.clickCount == 2, onRename != nil {
+                onBeginRename?()
+            } else {
+                onPress?()
+            }
             return
         }
 
         let initialLocation = convert(event.locationInWindow, from: nil)
         var didStartDragging = false
+        var pendingPress = false
 
         while let nextEvent = window?.nextEvent(
-            matching: [.leftMouseDragged, .leftMouseUp],
+            matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown],
             until: .distantFuture,
             inMode: .eventTracking,
             dequeue: true
         ) {
             switch nextEvent.type {
+            case .leftMouseDown:
+                if nextEvent.clickCount == 2, onRename != nil {
+                    onBeginRename?()
+                } else if pendingPress {
+                    onPress?()
+                }
+                return
+
             case .leftMouseDragged:
                 let location = convert(nextEvent.locationInWindow, from: nil)
                 let delta = hypot(location.x - initialLocation.x, location.y - initialLocation.y)
@@ -3462,9 +3485,31 @@ final class SidebarItemButton: NSView {
             case .leftMouseUp:
                 if didStartDragging {
                     onDragEnded?(self, nextEvent)
-                } else {
-                    onPress?()
+                    return
                 }
+                // Only wait for a possible double-click if this workspace is already active.
+                // If it's inactive, fire onPress immediately — no delay on workspace switching.
+                if onRename != nil, isActive {
+                    pendingPress = true
+                    let doubleClickInterval = NSEvent.doubleClickInterval
+                    if let secondClick = window?.nextEvent(
+                        matching: [.leftMouseDown],
+                        until: Date(timeIntervalSinceNow: doubleClickInterval),
+                        inMode: .eventTracking,
+                        dequeue: true
+                    ) {
+                        if secondClick.clickCount == 2 {
+                            onBeginRename?()
+                        } else {
+                            onPress?()
+                            NSApp.postEvent(secondClick, atStart: true)
+                        }
+                    } else {
+                        onPress?()
+                    }
+                    return
+                }
+                onPress?()
                 return
 
             default:
@@ -3481,12 +3526,71 @@ final class SidebarItemButton: NSView {
         }
     }
 
+    func beginInlineRename() {
+        guard !isRenaming else { return }
+        isRenaming = true
+
+        titleField.isEditable = true
+        titleField.isSelectable = true
+        titleField.isBezeled = false
+        titleField.focusRingType = .none
+        titleField.drawsBackground = false
+        titleField.delegate = self
+        window?.makeFirstResponder(titleField)
+        titleField.currentEditor()?.selectAll(nil)
+    }
+
+    private func commitInlineRename() {
+        guard isRenaming else { return }
+        let newName = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        endInlineRename()
+        if !newName.isEmpty {
+            onRename?(newName)
+        }
+    }
+
+    private func cancelInlineRename() {
+        endInlineRename()
+    }
+
+    private func endInlineRename() {
+        guard isRenaming else { return }
+        isRenaming = false
+        titleField.isEditable = false
+        titleField.isSelectable = false
+        titleField.delegate = nil
+        window?.makeFirstResponder(nil)
+    }
+
     func setDropTarget(_ isDropTarget: Bool, theme: WorkspaceShellTheme?) {
         guard let theme else {
             return
         }
         layer?.borderWidth = isDropTarget ? 1 : 0
         layer?.borderColor = isDropTarget ? theme.shell.selection.cgColor : nil
+    }
+
+    nonisolated func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        MainActor.assumeIsolated {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                commitInlineRename()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                cancelInlineRename()
+                return true
+            }
+            return false
+        }
+    }
+
+    nonisolated func controlTextDidEndEditing(_ obj: Notification) {
+        MainActor.assumeIsolated {
+            // only commit if we initiated this — avoids acting on unrelated end-editing events
+            if isRenaming {
+                commitInlineRename()
+            }
+        }
     }
 
     func setDraggingPreview(_ isDragging: Bool, theme: WorkspaceShellTheme?) {
