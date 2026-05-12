@@ -338,16 +338,6 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
 
         for (index, result) in results.enumerated() {
-<<<<<<< HEAD
-            let row = CommandPaletteResultRow(result: result, isSelected: index == selectedIndex, theme: currentTheme)
-            row.clickHandler = { [weak self] clickedRow in
-                self?.resultRowClicked(clickedRow)
-            }
-            row.hoverHandler = { [weak self] hoveredRow in
-                self?.updateSelection(to: hoveredRow.rowIndex)
-            }
-            row.rowIndex = index
-=======
             let row = CommandPaletteResultRow(result: result, isSelected: index == selectedIndex, theme: currentTheme, iconProvider: iconProvider)
             row.clickHandler = { [weak self] clickedRow in
                 self?.resultRowClicked(clickedRow)
