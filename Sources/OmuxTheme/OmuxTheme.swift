@@ -319,8 +319,8 @@ public struct OmuxThemeRegistry {
         for entry in document.entries() where allowedRootKeys.contains(entry.key) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
-                    severity: .error,
-                    message: "Unknown top-level theme key '\(entry.key)'.",
+                    severity: .warning,
+                    message: "Unknown top-level theme key '\(entry.key)' will be ignored.",
                     filePath: sourceURL.path,
                     line: entry.line
                 )
