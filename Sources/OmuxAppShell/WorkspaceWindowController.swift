@@ -593,15 +593,6 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
-    private func terminalScreenText(for pane: Pane) -> String? {
-        let snapshot = controller.terminalBridge.terminalTextSnapshot(
-            for: pane.id,
-            maxBytes: 4_096,
-            maxLines: 40
-        )
-        return snapshot.text.isEmpty ? nil : snapshot.text
-    }
-
     private func iconKindSignature(for workspace: Workspace) -> [PaneID: OmuxSemanticIcon.Kind] {
         Dictionary(
             uniqueKeysWithValues: workspace.tabs
@@ -613,6 +604,15 @@ final class WorkspaceShellViewController: NSViewController {
                     )
                 }
         )
+    }
+
+    private func terminalScreenText(for pane: Pane) -> String? {
+        let snapshot = controller.terminalBridge.terminalTextSnapshot(
+            for: pane.id,
+            maxBytes: 4_096,
+            maxLines: 40
+        )
+        return snapshot.text.isEmpty ? nil : snapshot.text
     }
 
     private func startTerminalIconRefreshTimer() {
@@ -826,15 +826,11 @@ final class WorkspaceShellViewController: NSViewController {
             self?.presentPaneFind(mode: newMode, initialQuery: query)
         }
 
-        findBar.onFocusPaneForSearch = { [weak self] paneID, query in
-            _ = self?.controller.focus(paneID: paneID)
-            self?.presentPaneFind(mode: .currentPane, initialQuery: query)
-        }
-
         // Observe Ghostty search callbacks to update match count label
         let token = controller.terminalBridge.addTerminalActionObserver { [weak findBar] event in
             guard case .searchMatchesUpdated(let total, let selected) = event.action else { return }
             DispatchQueue.main.async {
+                guard findBar?.mode == .currentPane else { return }
                 findBar?.updateMatchCount(total: total, selected: selected)
             }
         }
@@ -857,19 +853,16 @@ final class WorkspaceShellViewController: NSViewController {
             guard let pane = currentWorkspace?.focusedPane else { return }
             try? bridge.search(paneID: pane.id, needle: query)
         case .allPanes:
-            let allPanes = controller.allWorkspaces().flatMap { ws in ws.tabs.flatMap(\.panes).map { (ws, $0) } }
-            for (_, pane) in allPanes {
+            let allPanes = controller.allWorkspaces().flatMap { workspace in workspace.tabs.flatMap(\.panes) }
+            for pane in allPanes {
                 try? bridge.search(paneID: pane.id, needle: query)
             }
-            // Build per-pane summary using text search for count display
-            let summaryItems: [(paneID: PaneID, title: String, count: Int)] = allPanes.compactMap { ws, pane in
+            let total = allPanes.reduce(0) { count, pane in
                 let snapshot = bridge.terminalTextSnapshot(for: pane.id)
-                guard snapshot.isAvailable else { return nil }
-                let count = PaneFindSearch.matchCount(query: query, in: snapshot.text)
-                guard count > 0 else { return nil }
-                return (paneID: pane.id, title: "\(ws.name) › \(pane.title)", count: count)
+                guard snapshot.isAvailable else { return count }
+                return count + PaneFindSearch.matchCount(query: query, in: snapshot.text)
             }
-            findBar.setPaneSummary(summaryItems)
+            findBar.updateMatchCount(total: total, selected: total > 0 ? 0 : -1)
         }
     }
 
@@ -1048,6 +1041,9 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func logReconciliationMetricsIfNeeded(_ metrics: WorkspaceReconciliationMetrics) {
         #if DEBUG
+        guard ProcessInfo.processInfo.environment["OMUX_DEBUG_RECONCILE"] == "1" else {
+            return
+        }
         guard metrics.reusedHostViews > 0 || metrics.rebuiltHostViews > 0 else {
             return
         }

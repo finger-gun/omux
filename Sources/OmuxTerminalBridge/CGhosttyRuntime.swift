@@ -642,7 +642,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
         }
         mainActorValue {
-            let action = forward ? "search_next" : "search_prev"
+            let action = forward ? "navigate_search:next" : "navigate_search:previous"
             action.withCString { ptr in
                 _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
             }

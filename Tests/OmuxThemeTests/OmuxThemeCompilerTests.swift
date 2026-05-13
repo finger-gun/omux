@@ -88,6 +88,19 @@ struct OmuxThemeCompilerTests {
     }
 
     @Test
+    func compilerEmitsBrighterSelectedSearchHighlight() {
+        let output = OmuxThemeCompiler(buildVersion: "test-build").compile(
+            theme: makeTheme(name: "test"),
+            config: OmuxConfig.defaults
+        )
+
+        #expect(output.contents.contains("search-background = #6b5a24"))
+        #expect(output.contents.contains("search-foreground = #fff3bf"))
+        #expect(output.contents.contains("search-selected-background = #fff176"))
+        #expect(output.contents.contains("search-selected-foreground = #000000"))
+    }
+
+    @Test
     func compilerKeepsShellIntegrationEnabledForCwdReporting() {
         let theme = makeTheme(name: "test")
         let config = OmuxConfig(

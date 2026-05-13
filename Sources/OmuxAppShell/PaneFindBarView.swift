@@ -1,5 +1,4 @@
 import AppKit
-import OmuxCore
 
 // MARK: - Find bar
 
@@ -15,18 +14,12 @@ final class PaneFindBarView: NSView {
     var onSearch: ((String) -> Void)?
     var onNavigate: ((Bool) -> Void)?   // true = forward
     var onModeToggle: ((Mode, String) -> Void)?
-    var onFocusPaneForSearch: ((PaneID, String) -> Void)?
 
     private let searchField = NSSearchField()
     private let matchCountLabel = NSTextField(labelWithString: "")
     private let prevButton = NSButton()
     private let nextButton = NSButton()
     private let allPanesButton = NSButton()
-
-    // Per-pane summary shown in all-panes mode
-    private var paneSummaryStack: NSStackView?
-    private var paneSummaryItems: [(paneID: PaneID, label: NSButton)] = []
-    private var heightConstraint: NSLayoutConstraint?
 
     private(set) var mode: Mode = .currentPane
 
@@ -64,56 +57,6 @@ final class PaneFindBarView: NSView {
         if total >= 0 { searchTotal = total }
         if selected >= 0 { searchSelected = selected }
         updateMatchUI()
-    }
-
-    /// Called by the controller to populate the per-pane summary in all-panes mode.
-    func setPaneSummary(_ items: [(paneID: PaneID, title: String, count: Int)]) {
-        paneSummaryStack?.removeFromSuperview()
-        paneSummaryStack = nil
-        paneSummaryItems = []
-        guard mode == .allPanes, !items.isEmpty else {
-            updateHeight(showSummary: false)
-            return
-        }
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.spacing = 2
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.alignment = .leading
-
-        for item in items {
-            let btn = NSButton(title: "\(item.title): \(item.count) match\(item.count == 1 ? "" : "es")",
-                               target: self, action: #selector(paneSummaryTapped(_:)))
-            btn.bezelStyle = .inline
-            btn.isBordered = false
-            btn.alignment = .left
-            btn.font = .systemFont(ofSize: 11)
-            btn.contentTintColor = .secondaryLabelColor
-            btn.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(btn)
-            paneSummaryItems.append((paneID: item.paneID, label: btn))
-        }
-
-        let separatorBox = NSBox()
-        separatorBox.boxType = .separator
-        separatorBox.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(separatorBox)
-        addSubview(stack)
-        paneSummaryStack = stack
-
-        NSLayoutConstraint.activate([
-            separatorBox.topAnchor.constraint(equalTo: topAnchor, constant: 44),
-            separatorBox.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separatorBox.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            stack.topAnchor.constraint(equalTo: separatorBox.bottomAnchor, constant: 4),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-        ])
-
-        updateHeight(showSummary: true, rowCount: items.count)
     }
 
     // MARK: - View setup
@@ -196,7 +139,6 @@ final class PaneFindBarView: NSView {
         addSubview(controlsRow)
 
         let hc = heightAnchor.constraint(equalToConstant: 44)
-        heightConstraint = hc
 
         NSLayoutConstraint.activate([
             blurView.topAnchor.constraint(equalTo: topAnchor),
@@ -223,14 +165,6 @@ final class PaneFindBarView: NSView {
         ])
     }
 
-    private func updateHeight(showSummary: Bool, rowCount: Int = 0) {
-        let base: CGFloat = 44
-        let extraPerRow: CGFloat = 22
-        let separatorHeight: CGFloat = 10
-        let newHeight = showSummary ? base + separatorHeight + extraPerRow * CGFloat(rowCount) : base
-        heightConstraint?.constant = newHeight
-    }
-
     // MARK: - Match count UI
 
     private func updateMatchUI() {
@@ -245,6 +179,14 @@ final class PaneFindBarView: NSView {
             prevButton.isEnabled = false
             nextButton.isEnabled = false
         } else {
+            if mode == .allPanes {
+                matchCountLabel.stringValue = "\(searchTotal) result\(searchTotal == 1 ? "" : "s")"
+                matchCountLabel.textColor = .secondaryLabelColor
+                prevButton.isEnabled = searchTotal > 1
+                nextButton.isEnabled = searchTotal > 1
+                return
+            }
+
             let idx = searchSelected >= 0 ? searchSelected + 1 : 1
             matchCountLabel.stringValue = "\(idx) of \(searchTotal)"
             matchCountLabel.textColor = .secondaryLabelColor
@@ -274,11 +216,6 @@ final class PaneFindBarView: NSView {
 
     @objc private func closeFind(_ sender: Any?) {
         onDismiss?()
-    }
-
-    @objc private func paneSummaryTapped(_ sender: NSButton) {
-        guard let item = paneSummaryItems.first(where: { $0.label === sender }) else { return }
-        onFocusPaneForSearch?(item.paneID, searchField.stringValue)
     }
 
     // MARK: - Key handling
@@ -318,16 +255,17 @@ extension PaneFindBarView: NSSearchFieldDelegate {
     }
 }
 
-// MARK: - Text search helper (used for all-panes match counting)
+// MARK: - Text search helper
 
 enum PaneFindSearch {
     static func matchCount(query: String, in text: String) -> Int {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return 0 }
-        let lower = text.lowercased()
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return 0 }
+
+        let text = text.lowercased()
         var count = 0
-        var start = lower.startIndex
-        while let range = lower.range(of: q, range: start..<lower.endIndex) {
+        var start = text.startIndex
+        while let range = text.range(of: query, range: start..<text.endIndex) {
             count += 1
             start = range.upperBound
         }
