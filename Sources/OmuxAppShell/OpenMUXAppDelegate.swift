@@ -911,10 +911,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     private func restoreInitialWorkspace() throws -> Workspace {
-        if let snapshot = workspacePersistenceStore.load() {
+        if let snapshot = workspacePersistenceStore.load(scrollbackPayloadResolution: .initiallyVisible) {
             do {
                 if let restoredWorkspace = try workspaceController.restorePersistedState(snapshot) {
-                    persistWorkspaceStateIncludingScrollback()
                     return restoredWorkspace
             }
         } catch {
@@ -923,7 +922,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
         let workspace = try workspaceController.createWorkspace()
-        persistWorkspaceStateIncludingScrollback()
+        persistWorkspaceLayoutStateNow()
         return workspace
     }
 

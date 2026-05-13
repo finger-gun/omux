@@ -147,6 +147,66 @@ final class WorkspacePersistenceStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
     }
 
+    func testWorkspacePersistenceStartupLoadOnlyResolvesInitiallyVisibleScrollbackPayloads() throws {
+        let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspacePersistenceStoreTests-\(UUID().uuidString)", isDirectory: true)
+        let stateFileURL = root
+            .appendingPathComponent("WorkspaceState", isDirectory: true)
+            .appendingPathComponent("current.json", isDirectory: false)
+        let scrollbackDirectory = root.appendingPathComponent("Scrollback", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let store = WorkspacePersistenceStore(
+            defaults: defaults,
+            stateFileURL: stateFileURL,
+            scrollbackPayloadStore: WorkspaceScrollbackPayloadStore(directoryURL: scrollbackDirectory)
+        )
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible"),
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "visible output", truncated: false))
+        )
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/hidden"),
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "hidden output", truncated: false))
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab, visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let snapshot = WorkspacePersistenceSnapshot(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+
+        store.save(snapshot)
+
+        let startupSnapshot = try XCTUnwrap(store.load(scrollbackPayloadResolution: .initiallyVisible))
+        let startupWorkspace = try XCTUnwrap(startupSnapshot.workspaces.first)
+        let startupHiddenPane = try XCTUnwrap(startupWorkspace.tabs.first(where: { $0.id == hiddenTab.id })?.panes.first)
+        let startupVisiblePane = try XCTUnwrap(startupWorkspace.tabs.first(where: { $0.id == visibleTab.id })?.panes.first)
+
+        XCTAssertEqual(startupVisiblePane.terminalState.restoredScrollback?.text, "visible output")
+        XCTAssertNotNil(startupVisiblePane.terminalState.restoredScrollback?.storageIdentifier)
+        XCTAssertEqual(startupHiddenPane.terminalState.restoredScrollback?.text, "")
+        XCTAssertNotNil(startupHiddenPane.terminalState.restoredScrollback?.storageIdentifier)
+
+        let fullSnapshot = try XCTUnwrap(store.load())
+        let fullHiddenPane = try XCTUnwrap(fullSnapshot.workspaces.first?.tabs.first(where: { $0.id == hiddenTab.id })?.panes.first)
+        XCTAssertEqual(fullHiddenPane.terminalState.restoredScrollback?.text, "hidden output")
+    }
+
     func testWorkspacePersistenceStorePreservesFloatingPaneModalsWhenPersistingScrollbackPayloads() throws {
         let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
