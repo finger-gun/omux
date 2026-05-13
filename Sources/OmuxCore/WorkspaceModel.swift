@@ -2159,9 +2159,21 @@ public struct Workspace: Equatable, Codable, Sendable {
         sourceStackID: PaneStackID,
         frame: FloatingPaneModalFrame = FloatingPaneModalFrame()
     ) -> FloatingPaneModal? {
-        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil && $0.rootLayout.containsPane(id: paneID) }),
-              let pane = tabs[tabIndex].removePane(paneID)
-        else {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil && $0.rootLayout.containsPane(id: paneID) }) else {
+            return nil
+        }
+        let pane: Pane
+        if let removedPane = tabs[tabIndex].removePane(paneID) {
+            pane = removedPane
+        } else if tabs[tabIndex].rootLayout.containsPane(id: paneID),
+                  tabs[tabIndex].panes.count == 1,
+                  tabs[tabIndex].panes.first?.id == paneID {
+            let removedTab = tabs.remove(at: tabIndex)
+            pane = removedTab.panes[0]
+            if tabs.isEmpty == false, focusedTabID == removedTab.id {
+                focusedTabID = tabs[min(tabIndex, tabs.count - 1)].id
+            }
+        } else {
             return nil
         }
         let modal = createFloatingPaneModal(containing: pane, frame: frame)

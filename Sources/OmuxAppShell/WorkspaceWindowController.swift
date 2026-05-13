@@ -893,7 +893,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         let popOutItem = menu.addItem(withTitle: "Pop Out to Modal", action: nil, keyEquivalent: "")
-        popOutItem.isEnabled = canPopOutPaneTab(paneID: pane.id, sourceStackID: paneStack.id)
+        popOutItem.isEnabled = canPopOutPaneTab(paneID: pane.id, sourceStackID: paneStack.id, allowSinglePane: true)
         popOutItem.onSelect { [weak self] in
             _ = self?.controller.movePaneTabToFloatingModal(
                 paneID: pane.id,
@@ -1543,7 +1543,11 @@ final class WorkspaceShellViewController: NSViewController {
         )
     }
 
-    private func canPopOutPaneTab(paneID: PaneID, sourceStackID: PaneStackID) -> Bool {
+    private func canPopOutPaneTab(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        allowSinglePane: Bool = false
+    ) -> Bool {
         guard let workspace = currentWorkspace,
               let tab = workspace.tabs.first(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil })
         else {
@@ -1553,7 +1557,8 @@ final class WorkspaceShellViewController: NSViewController {
             paneID: paneID,
             sourceStackID: sourceStackID,
             in: tab,
-            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
+            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil,
+            allowSinglePane: allowSinglePane
         )
     }
 
@@ -1658,7 +1663,8 @@ enum PaneTabDragReadiness {
         paneID: PaneID,
         sourceStackID: PaneStackID,
         in tab: Tab,
-        attachedSessionExists: Bool
+        attachedSessionExists: Bool,
+        allowSinglePane: Bool = false
     ) -> Bool {
         guard let sourceStack = tab.rootLayout.paneStack(id: sourceStackID),
               let pane = sourceStack.panes.first(where: { $0.id == paneID })
@@ -1667,7 +1673,7 @@ enum PaneTabDragReadiness {
         }
 
         // Don't drag if this is the only tab in the only pane stack — nothing to split into.
-        if sourceStack.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
+        if allowSinglePane == false, sourceStack.panes.count == 1, tab.rootLayout.visiblePaneIDs.count == 1 {
             return false
         }
 
@@ -3502,6 +3508,7 @@ final class PaneStackView: NSView {
     }
 
     func isWindowPointInHeader(_ windowPoint: NSPoint) -> Bool {
+        guard showsHeader else { return false }
         let localPoint = convert(windowPoint, from: nil)
         guard bounds.contains(localPoint) else { return false }
         let threshold = ShellLayoutMetrics.paneHeaderHeight + 4
