@@ -2984,7 +2984,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 if shouldApplyTerminalDisplayTitleUpdateLocked(for: event.paneID, at: Date()) {
                     deliveredTerminalDisplayTitleByPane[event.paneID] = displayTitle
                     lastTerminalDisplayTitleUpdateByPane[event.paneID] = Date()
-                    if WorkspaceIconResolver.terminalApplicationIcon(forTitle: displayTitle) == nil,
+                    if Self.shouldPromoteTerminalDisplayTitleToPaneTitle(displayTitle),
                        pane.title != displayTitle {
                         pane.title = displayTitle
                     }
@@ -3111,6 +3111,16 @@ public final class WorkspaceController: @unchecked Sendable {
         return date.timeIntervalSince(lastUpdate) >= terminalDisplayTitleUpdateMinimumInterval
     }
 
+    private static func shouldPromoteTerminalDisplayTitleToPaneTitle(_ title: String) -> Bool {
+        if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil {
+            return true
+        }
+
+        let lowercased = title.localizedLowercase
+        let aiTerms = ["copilot", "github copilot", "claude", "chatgpt", "openai", "codex"]
+        return aiTerms.contains { lowercased.contains($0) }
+    }
+
     private func scheduleTerminalDisplayTitleUpdate() {
         lock.lock()
         guard terminalDisplayTitleUpdateScheduled == false else {
@@ -3148,7 +3158,7 @@ public final class WorkspaceController: @unchecked Sendable {
             deliveredTerminalDisplayTitleByPane[paneID] = displayTitle
             lastTerminalDisplayTitleUpdateByPane[paneID] = now
             _ = workspaces[location.workspaceIndex].updatePane(paneID) { pane in
-                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: displayTitle) == nil,
+                if Self.shouldPromoteTerminalDisplayTitleToPaneTitle(displayTitle),
                    pane.title != displayTitle {
                     pane.title = displayTitle
                 }
