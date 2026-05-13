@@ -36,7 +36,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
     private weak var commandPaletteCommandMenuItem: NSMenuItem?
     private weak var findInPaneMenuItem: NSMenuItem?
-    private weak var findInAllPanesMenuItem: NSMenuItem?
     private weak var installCLIMenuItem: NSMenuItem?
     private weak var previousWorkspaceMenuItem: NSMenuItem?
     private weak var moveWorkspaceUpMenuItem: NSMenuItem?
@@ -363,12 +362,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     @objc private func findInPaneFromMenu(_ sender: Any?) {
         _ = sender
-        windowController?.presentPaneFind(mode: .currentPane)
-    }
-
-    @objc private func findInAllPanesFromMenu(_ sender: Any?) {
-        _ = sender
-        windowController?.presentPaneFind(mode: .allPanes)
+        windowController?.presentPaneFind()
     }
 
     @objc private func focusPreviousWorkspaceFromMenu(_ sender: Any?) {
@@ -542,13 +536,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         findInPaneMenuItem.target = self
         editMenu.addItem(findInPaneMenuItem)
-        let findInAllPanesMenuItem = NSMenuItem(
-            title: "Find Across All Panes…",
-            action: #selector(findInAllPanesFromMenu(_:)),
-            keyEquivalent: ""
-        )
-        findInAllPanesMenuItem.target = self
-        editMenu.addItem(findInAllPanesMenuItem)
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
@@ -827,7 +814,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
         self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
         self.findInPaneMenuItem = findInPaneMenuItem
-        self.findInAllPanesMenuItem = findInAllPanesMenuItem
         self.installCLIMenuItem = installCLIMenuItem
         self.previousWorkspaceMenuItem = previousWorkspaceMenuItem
         self.moveWorkspaceUpMenuItem = moveWorkspaceUpMenuItem
@@ -901,7 +887,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)
         setShortcut(for: commandPaletteCommandMenuItem, action: .commandPaletteCommand)
         setShortcut(for: findInPaneMenuItem, action: .paneFind)
-        setShortcut(for: findInAllPanesMenuItem, action: .paneFindAll)
         setShortcut(for: previousWorkspaceMenuItem, action: .workspacePrevious)
         setShortcut(for: moveWorkspaceUpMenuItem, action: .workspaceMoveUp)
         setShortcut(for: moveWorkspaceDownMenuItem, action: .workspaceMoveDown)

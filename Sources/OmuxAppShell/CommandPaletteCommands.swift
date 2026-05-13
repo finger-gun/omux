@@ -160,8 +160,6 @@ struct CommandPaletteCommandCatalog {
             return controller.canFocusPaneTab()
         case .paneFind:
             return controller.activeWorkspace()?.focusedPane != nil
-        case .paneFindAll:
-            return controller.activeWorkspace() != nil
         }
     }
 }
@@ -243,7 +241,7 @@ extension WorkspaceController {
                 guard focusNextPaneTab() != nil else { return .failed("No next pane tab") }
             case .paneTabPrevious:
                 guard focusPreviousPaneTab() != nil else { return .failed("No previous pane tab") }
-            case .paneFind, .paneFindAll:
+            case .paneFind:
                 return .failed("Pane find is handled by the app shell")
             }
             return .invoked

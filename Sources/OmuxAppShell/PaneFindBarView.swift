@@ -4,24 +4,15 @@ import AppKit
 
 @MainActor
 final class PaneFindBarView: NSView {
-    enum Mode {
-        case currentPane
-        case allPanes
-    }
-
     // Callbacks wired by WorkspaceWindowController
     var onDismiss: (() -> Void)?
     var onSearch: ((String) -> Void)?
     var onNavigate: ((Bool) -> Void)?   // true = forward
-    var onModeToggle: ((Mode, String) -> Void)?
 
     private let searchField = NSSearchField()
     private let matchCountLabel = NSTextField(labelWithString: "")
     private let prevButton = NSButton()
     private let nextButton = NSButton()
-    private let allPanesButton = NSButton()
-
-    private(set) var mode: Mode = .currentPane
 
     private var searchTotal: Int = 0
     private var searchSelected: Int = 0
@@ -36,16 +27,13 @@ final class PaneFindBarView: NSView {
 
     // MARK: - Public interface
 
-    func present(mode: Mode, existingQuery: String = "") {
-        self.mode = mode
-        allPanesButton.state = mode == .allPanes ? .on : .off
-        allPanesButton.toolTip = mode == .allPanes ? "Searching all panes" : "Search all panes"
-        searchTotal = 0
-        searchSelected = 0
-        updateMatchUI()
+    func present(existingQuery: String = "") {
         if !existingQuery.isEmpty {
             searchField.stringValue = existingQuery
         }
+        searchTotal = 0
+        searchSelected = 0
+        updateMatchUI()
         window?.makeFirstResponder(searchField)
     }
 
@@ -104,16 +92,6 @@ final class PaneFindBarView: NSView {
         nextButton.contentTintColor = .secondaryLabelColor
         nextButton.isEnabled = false
 
-        allPanesButton.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Search all panes")
-        allPanesButton.bezelStyle = .regularSquare
-        allPanesButton.isBordered = false
-        allPanesButton.setButtonType(.toggle)
-        allPanesButton.target = self
-        allPanesButton.action = #selector(toggleAllPanes(_:))
-        allPanesButton.translatesAutoresizingMaskIntoConstraints = false
-        allPanesButton.toolTip = "Search all panes"
-        allPanesButton.contentTintColor = .secondaryLabelColor
-
         let closeButton = NSButton()
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close find bar")
         closeButton.bezelStyle = .regularSquare
@@ -124,7 +102,7 @@ final class PaneFindBarView: NSView {
         closeButton.contentTintColor = .secondaryLabelColor
 
         let controlsRow = NSStackView(views: [
-            searchField, matchCountLabel, prevButton, nextButton, allPanesButton, closeButton
+            searchField, matchCountLabel, prevButton, nextButton, closeButton
         ])
         controlsRow.orientation = .horizontal
         controlsRow.spacing = 4
@@ -133,7 +111,6 @@ final class PaneFindBarView: NSView {
         controlsRow.setHuggingPriority(.defaultLow, for: .horizontal)
         controlsRow.setCustomSpacing(8, after: matchCountLabel)
         controlsRow.setCustomSpacing(12, after: nextButton)
-        controlsRow.setCustomSpacing(8, after: allPanesButton)
 
         addSubview(blurView)
         addSubview(controlsRow)
@@ -155,8 +132,6 @@ final class PaneFindBarView: NSView {
             prevButton.heightAnchor.constraint(equalToConstant: 20),
             nextButton.widthAnchor.constraint(equalToConstant: 20),
             nextButton.heightAnchor.constraint(equalToConstant: 20),
-            allPanesButton.widthAnchor.constraint(equalToConstant: 20),
-            allPanesButton.heightAnchor.constraint(equalToConstant: 20),
             closeButton.widthAnchor.constraint(equalToConstant: 20),
             closeButton.heightAnchor.constraint(equalToConstant: 20),
             matchCountLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 52),
@@ -179,14 +154,6 @@ final class PaneFindBarView: NSView {
             prevButton.isEnabled = false
             nextButton.isEnabled = false
         } else {
-            if mode == .allPanes {
-                matchCountLabel.stringValue = "\(searchTotal) result\(searchTotal == 1 ? "" : "s")"
-                matchCountLabel.textColor = .secondaryLabelColor
-                prevButton.isEnabled = searchTotal > 1
-                nextButton.isEnabled = searchTotal > 1
-                return
-            }
-
             let idx = searchSelected >= 0 ? searchSelected + 1 : 1
             matchCountLabel.stringValue = "\(idx) of \(searchTotal)"
             matchCountLabel.textColor = .secondaryLabelColor
@@ -207,11 +174,6 @@ final class PaneFindBarView: NSView {
 
     @objc func previousMatch(_ sender: Any?) {
         onNavigate?(false)
-    }
-
-    @objc private func toggleAllPanes(_ sender: Any?) {
-        let newMode: Mode = allPanesButton.state == .on ? .allPanes : .currentPane
-        onModeToggle?(newMode, searchField.stringValue)
     }
 
     @objc private func closeFind(_ sender: Any?) {

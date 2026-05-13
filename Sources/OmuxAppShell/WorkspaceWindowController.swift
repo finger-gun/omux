@@ -134,8 +134,8 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.presentCommandPalette(initialQuery: initialQuery, keyBindings: keyBindings)
     }
 
-    func presentPaneFind(mode: PaneFindBarView.Mode) {
-        rootViewController.presentPaneFind(mode: mode)
+    func presentPaneFind() {
+        rootViewController.presentPaneFind()
     }
 
     func dismissPaneFind() {
@@ -328,6 +328,7 @@ final class WorkspaceShellViewController: NSViewController {
             collapsedWorkspaceIDs.remove(workspace.id)
         }
         currentWorkspace = workspace
+        let focusedPaneID = workspace.focusedPane?.id
         apply(theme: currentTheme)
         let terminalTextCache = TerminalTextRenderCache()
         let terminalTextProvider: @MainActor (Pane) -> String? = { [weak self] pane in
@@ -446,6 +447,10 @@ final class WorkspaceShellViewController: NSViewController {
                     self.view.window?.makeFirstResponder(self.focusTarget(for: focusedPaneView))
                 }
             }
+        }
+
+        if previousWorkspaceID != workspace.id || previousFocusedPaneID != focusedPaneID {
+            reapplyActiveFindSearch(previousPaneID: previousFocusedPaneID)
         }
     }
 
@@ -806,12 +811,7 @@ final class WorkspaceShellViewController: NSViewController {
             }
             if result.invocationTarget == .action(.paneFind) {
                 commandPaletteView?.dismissAndRestoreFocus()
-                presentPaneFind(mode: .currentPane)
-                return .invoked
-            }
-            if result.invocationTarget == .action(.paneFindAll) {
-                commandPaletteView?.dismissAndRestoreFocus()
-                presentPaneFind(mode: .allPanes)
+                presentPaneFind()
                 return .invoked
             }
             if result.invocationTarget == .themeSwitch {
@@ -854,9 +854,9 @@ final class WorkspaceShellViewController: NSViewController {
         paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
     }
 
-    func presentPaneFind(mode: PaneFindBarView.Mode, initialQuery: String = "") {
+    func presentPaneFind(initialQuery: String = "") {
         if let existing = paneFindBarView {
-            existing.present(mode: mode, existingQuery: initialQuery)
+            existing.present(existingQuery: initialQuery)
             applySearch(to: existing, query: initialQuery)
             return
         }
@@ -888,21 +888,16 @@ final class WorkspaceShellViewController: NSViewController {
             navigateSearch(in: findBar, forward: forward)
         }
 
-        findBar.onModeToggle = { [weak self] newMode, query in
-            self?.presentPaneFind(mode: newMode, initialQuery: query)
-        }
-
         // Observe Ghostty search callbacks to update match count label
         let token = controller.terminalBridge.addTerminalActionObserver { [weak findBar] event in
             guard case .searchMatchesUpdated(let total, let selected) = event.action else { return }
             DispatchQueue.main.async {
-                guard findBar?.mode == .currentPane else { return }
                 findBar?.updateMatchCount(total: total, selected: selected)
             }
         }
         findSearchObserverToken = token
 
-        findBar.present(mode: mode, existingQuery: initialQuery)
+        findBar.present(existingQuery: initialQuery)
         if !initialQuery.isEmpty {
             applySearch(to: findBar, query: initialQuery)
         }
@@ -914,35 +909,29 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func applySearch(to findBar: PaneFindBarView, query: String) {
         let bridge = controller.terminalBridge
-        switch findBar.mode {
-        case .currentPane:
-            guard let pane = currentWorkspace?.focusedPane else { return }
-            try? bridge.search(paneID: pane.id, needle: query)
-        case .allPanes:
-            let allPanes = controller.allWorkspaces().flatMap { workspace in workspace.tabs.flatMap(\.panes) }
-            for pane in allPanes {
-                try? bridge.search(paneID: pane.id, needle: query)
-            }
-            let total = allPanes.reduce(0) { count, pane in
-                let snapshot = bridge.terminalTextSnapshot(for: pane.id)
-                guard snapshot.isAvailable else { return count }
-                return count + PaneFindSearch.matchCount(query: query, in: snapshot.text)
-            }
+        guard let pane = currentWorkspace?.focusedPane else { return }
+        try? bridge.search(paneID: pane.id, needle: query)
+        let snapshot = bridge.terminalTextSnapshot(for: pane.id)
+        if snapshot.isAvailable {
+            let total = PaneFindSearch.matchCount(query: query, in: snapshot.text)
             findBar.updateMatchCount(total: total, selected: total > 0 ? 0 : -1)
         }
     }
 
     private func navigateSearch(in findBar: PaneFindBarView, forward: Bool) {
         let bridge = controller.terminalBridge
-        switch findBar.mode {
-        case .currentPane:
-            guard let pane = currentWorkspace?.focusedPane else { return }
-            try? bridge.navigateSearch(paneID: pane.id, forward: forward)
-        case .allPanes:
-            // Navigate in the focused pane only
-            guard let pane = currentWorkspace?.focusedPane else { return }
-            try? bridge.navigateSearch(paneID: pane.id, forward: forward)
+        guard let pane = currentWorkspace?.focusedPane else { return }
+        try? bridge.navigateSearch(paneID: pane.id, forward: forward)
+    }
+
+    private func reapplyActiveFindSearch(previousPaneID: PaneID?) {
+        guard let findBar = paneFindBarView else { return }
+        let query = findBar.currentQuery
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
+        if let previousPaneID, previousPaneID != currentWorkspace?.focusedPane?.id {
+            try? controller.terminalBridge.endSearch(paneID: previousPaneID)
         }
+        applySearch(to: findBar, query: query)
     }
 
     private func stopFindSearch() {

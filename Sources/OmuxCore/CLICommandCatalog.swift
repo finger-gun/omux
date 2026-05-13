@@ -501,14 +501,6 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["find in pane", "search pane", "find pane"],
             paletteExecution: .keyBindingAction(.paneFind)
         ),
-        OpenMUXCLICommandSpec(
-            id: "omux.pane-find-all",
-            usage: "omux pane-find-all",
-            title: "omux: Find Across All Panes",
-            summary: "Search the scrollback of every pane in all workspaces",
-            aliases: ["find all panes", "search all panes", "find across panes"],
-            paletteExecution: .keyBindingAction(.paneFindAll)
-        ),
     ]
 
     public static let usage: String = {
