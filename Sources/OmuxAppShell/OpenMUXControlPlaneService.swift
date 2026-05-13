@@ -4,24 +4,50 @@ import OmuxConfig
 import OmuxCore
 
 final class OpenMUXControlPlaneService: @unchecked Sendable {
+    private struct EventQueue<Element> {
+        private var storage: [Element] = []
+        private var headIndex = 0
+
+        var isEmpty: Bool {
+            headIndex >= storage.count
+        }
+
+        mutating func append(_ value: Element) {
+            storage.append(value)
+        }
+
+        mutating func popFirst() -> Element? {
+            guard headIndex < storage.count else {
+                storage.removeAll(keepingCapacity: true)
+                headIndex = 0
+                return nil
+            }
+
+            let value = storage[headIndex]
+            headIndex += 1
+
+            if headIndex > 64, headIndex * 2 >= storage.count {
+                storage.removeFirst(headIndex)
+                headIndex = 0
+            }
+
+            return value
+        }
+    }
+
     private final class TerminalEventSubscription {
-        private let lock = NSLock()
         private let condition = NSCondition()
-        private var queue: [ControlPlaneTerminalEvent] = []
+        private var queue = EventQueue<ControlPlaneTerminalEvent>()
         private var cancelled = false
 
         func push(_ event: ControlPlaneTerminalEvent) {
-            lock.lock()
-            let isCancelled = cancelled
-            lock.unlock()
-            guard isCancelled == false else {
+            condition.lock()
+            defer { condition.unlock() }
+            guard cancelled == false else {
                 return
             }
-
-            condition.lock()
             queue.append(event)
             condition.signal()
-            condition.unlock()
         }
 
         func nextEvent(timeout: TimeInterval = 0.5) -> ControlPlaneTerminalEvent? {
@@ -38,15 +64,12 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return nil
             }
 
-            return queue.removeFirst()
+            return queue.popFirst()
         }
 
         func cancel() {
-            lock.lock()
-            cancelled = true
-            lock.unlock()
-
             condition.lock()
+            cancelled = true
             condition.broadcast()
             condition.unlock()
         }

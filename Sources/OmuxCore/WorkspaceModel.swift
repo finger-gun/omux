@@ -1041,6 +1041,53 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
         return true
     }
 
+    /// Reorders `paneID` within an existing stack to a destination insertion index.
+    /// Returns false when the stack or pane is missing, or when the resulting order is unchanged.
+    @discardableResult
+    public mutating func reorderPaneInStack(
+        paneID: PaneID,
+        stackID: PaneStackID,
+        insertionIndex: Int
+    ) -> Bool {
+        switch self {
+        case .paneStack(var stack):
+            guard stack.id == stackID,
+                  let fromIndex = stack.panes.firstIndex(where: { $0.id == paneID })
+            else {
+                return false
+            }
+
+            let clampedInsertionIndex = max(0, min(insertionIndex, stack.panes.count))
+            var destinationIndex = clampedInsertionIndex
+            if destinationIndex > fromIndex {
+                destinationIndex -= 1
+            }
+
+            guard destinationIndex != fromIndex else {
+                return false
+            }
+
+            let pane = stack.panes.remove(at: fromIndex)
+            stack.panes.insert(pane, at: destinationIndex)
+            stack.focusedPaneID = paneID
+            self = .paneStack(stack)
+            return true
+
+        case .split(let axis, let proportions, var children):
+            for index in children.indices {
+                if children[index].reorderPaneInStack(
+                    paneID: paneID,
+                    stackID: stackID,
+                    insertionIndex: insertionIndex
+                ) {
+                    self = Self.makeSplit(axis: axis, proportions: proportions, children: children)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
     private mutating func appendPane(_ pane: Pane, toStackID targetStackID: PaneStackID) -> Bool {
         switch self {
         case .paneStack(var stack):
@@ -1818,6 +1865,26 @@ public struct Workspace: Equatable, Codable, Sendable {
             targetStackID: targetStackID
         )
         guard moved else { return false }
+        focus(paneID: paneID)
+        return true
+    }
+
+    /// Reorders a pane tab within its current pane stack.
+    @discardableResult
+    public mutating func reorderPaneTabInStack(
+        paneID: PaneID,
+        stackID: PaneStackID,
+        insertionIndex: Int
+    ) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+            return false
+        }
+        let reordered = tabs[tabIndex].rootLayout.reorderPaneInStack(
+            paneID: paneID,
+            stackID: stackID,
+            insertionIndex: insertionIndex
+        )
+        guard reordered else { return false }
         focus(paneID: paneID)
         return true
     }

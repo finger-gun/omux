@@ -25,6 +25,10 @@ The system SHALL allow extension panes to appear inside workspace tabs, split-tr
 - **WHEN** a user or control-plane action focuses an extension pane
 - **THEN** the workspace focus model records that pane as the focused pane without resolving a terminal session target
 
+#### Scenario: Identity-stable extension pane keeps host continuity during shell updates
+- **WHEN** an extension pane remains in the same pane identity while non-structural workspace updates occur
+- **THEN** OpenMUX preserves host continuity for that pane instead of replacing its host view instance
+
 ### Requirement: Extension pane rendering SHALL stay outside the terminal bridge
 The system SHALL render extension panes through shell-owned content hosts and SHALL NOT route extension pane rendering through `OmuxTerminalBridge` or libghostty surfaces.
 

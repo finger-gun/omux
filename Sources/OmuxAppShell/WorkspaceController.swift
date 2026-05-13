@@ -25,6 +25,12 @@ private struct PaneHistoryTarget: Sendable {
     let persistedHistory: PaneScrollbackSnapshot?
 }
 
+private struct WorkspaceLookupLocation: Sendable {
+    let workspaceIndex: Int
+    let tabIndex: Int
+    let paneIndex: Int
+}
+
 public struct ExtensionPaneActionResult: Sendable {
     public let workspace: Workspace
     public let tabID: TabID?
@@ -42,7 +48,9 @@ public final class WorkspaceController: @unchecked Sendable {
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
-    private var workspaces: [Workspace] = []
+    private var workspaces: [Workspace] = [] {
+        didSet { lookupIndexesDirty = true }
+    }
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
     private var lastNotification: NotificationRequest?
@@ -51,6 +59,11 @@ public final class WorkspaceController: @unchecked Sendable {
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
+    private var workspaceIndexByID: [WorkspaceID: Int] = [:]
+    private var tabLocationByID: [TabID: (workspaceIndex: Int, tabIndex: Int)] = [:]
+    private var paneLocationByID: [PaneID: WorkspaceLookupLocation] = [:]
+    private var sessionLocationByID: [SessionID: WorkspaceLookupLocation] = [:]
+    private var lookupIndexesDirty = true
     private let progressIdleClearDelay: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
@@ -870,6 +883,31 @@ public final class WorkspaceController: @unchecked Sendable {
             paneID: paneID,
             sourceStackID: sourceStackID,
             targetStackID: targetStackID
+        )
+        let updatedWorkspace = success ? workspaces[index] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func reorderPaneTabInStack(
+        paneID: PaneID,
+        stackID: PaneStackID,
+        insertionIndex: Int
+    ) -> Workspace? {
+        lock.lock()
+        guard let index = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[index].reorderPaneTabInStack(
+            paneID: paneID,
+            stackID: stackID,
+            insertionIndex: insertionIndex
         )
         let updatedWorkspace = success ? workspaces[index] : nil
         lock.unlock()
@@ -1816,17 +1854,23 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func moveActiveWorkspaceUp() -> Workspace? {
+        lock.lock()
         guard let activeWorkspaceID, let activeWorkspaceIndex else {
+            lock.unlock()
             return nil
         }
+        lock.unlock()
         return moveWorkspace(activeWorkspaceID, toDisplayIndex: activeWorkspaceIndex - 1)
     }
 
     @discardableResult
     public func moveActiveWorkspaceDown() -> Workspace? {
+        lock.lock()
         guard let activeWorkspaceID, let activeWorkspaceIndex else {
+            lock.unlock()
             return nil
         }
+        lock.unlock()
         return moveWorkspace(activeWorkspaceID, toDisplayIndex: activeWorkspaceIndex + 1)
     }
 
@@ -1916,12 +1960,131 @@ public final class WorkspaceController: @unchecked Sendable {
         onChange?(workspace)
     }
 
+    private func rebuildLookupIndexesLocked() {
+        workspaceIndexByID.removeAll(keepingCapacity: true)
+        tabLocationByID.removeAll(keepingCapacity: true)
+        paneLocationByID.removeAll(keepingCapacity: true)
+        sessionLocationByID.removeAll(keepingCapacity: true)
+
+        for (workspaceIndex, workspace) in workspaces.enumerated() {
+            workspaceIndexByID[workspace.id] = workspaceIndex
+            for (tabIndex, tab) in workspace.tabs.enumerated() {
+                tabLocationByID[tab.id] = (workspaceIndex: workspaceIndex, tabIndex: tabIndex)
+                for (paneIndex, pane) in tab.panes.enumerated() {
+                    let location = WorkspaceLookupLocation(
+                        workspaceIndex: workspaceIndex,
+                        tabIndex: tabIndex,
+                        paneIndex: paneIndex
+                    )
+                    paneLocationByID[pane.id] = location
+                    if let sessionID = pane.terminalSession?.id {
+                        sessionLocationByID[sessionID] = location
+                    }
+                }
+            }
+        }
+        lookupIndexesDirty = false
+    }
+
+    private func ensureLookupIndexesLocked() {
+        guard lookupIndexesDirty else {
+            return
+        }
+        rebuildLookupIndexesLocked()
+    }
+
+    private func workspaceTabPaneLocked(
+        at location: WorkspaceLookupLocation
+    ) -> (workspace: Workspace, tab: Tab, pane: Pane)? {
+        guard workspaces.indices.contains(location.workspaceIndex) else {
+            return nil
+        }
+        let workspace = workspaces[location.workspaceIndex]
+        guard workspace.tabs.indices.contains(location.tabIndex) else {
+            return nil
+        }
+        let tab = workspace.tabs[location.tabIndex]
+        guard tab.panes.indices.contains(location.paneIndex) else {
+            return nil
+        }
+        let pane = tab.panes[location.paneIndex]
+        return (workspace: workspace, tab: tab, pane: pane)
+    }
+
+    private func paneLocationLocked(for paneID: PaneID) -> WorkspaceLookupLocation? {
+        ensureLookupIndexesLocked()
+        guard let location = paneLocationByID[paneID],
+              workspaceTabPaneLocked(at: location)?.pane.id == paneID
+        else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = paneLocationByID[paneID],
+                  workspaceTabPaneLocked(at: rebuilt)?.pane.id == paneID
+            else {
+                return nil
+            }
+            return rebuilt
+        }
+        return location
+    }
+
+    private func sessionLocationLocked(for sessionID: SessionID) -> WorkspaceLookupLocation? {
+        ensureLookupIndexesLocked()
+        guard let location = sessionLocationByID[sessionID],
+              workspaceTabPaneLocked(at: location)?.pane.terminalSession?.id == sessionID
+        else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = sessionLocationByID[sessionID],
+                  workspaceTabPaneLocked(at: rebuilt)?.pane.terminalSession?.id == sessionID
+            else {
+                return nil
+            }
+            return rebuilt
+        }
+        return location
+    }
+
+    private func workspaceIndexLocked(for workspaceID: WorkspaceID) -> Int? {
+        ensureLookupIndexesLocked()
+        guard let index = workspaceIndexByID[workspaceID], workspaces.indices.contains(index) else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = workspaceIndexByID[workspaceID], workspaces.indices.contains(rebuilt) else {
+                return nil
+            }
+            return rebuilt
+        }
+        return index
+    }
+
+    private func tabLocationLocked(for tabID: TabID) -> (workspaceIndex: Int, tabIndex: Int)? {
+        ensureLookupIndexesLocked()
+        guard let location = tabLocationByID[tabID],
+              workspaces.indices.contains(location.workspaceIndex),
+              workspaces[location.workspaceIndex].tabs.indices.contains(location.tabIndex),
+              workspaces[location.workspaceIndex].tabs[location.tabIndex].id == tabID
+        else {
+            lookupIndexesDirty = true
+            ensureLookupIndexesLocked()
+            guard let rebuilt = tabLocationByID[tabID],
+                  workspaces.indices.contains(rebuilt.workspaceIndex),
+                  workspaces[rebuilt.workspaceIndex].tabs.indices.contains(rebuilt.tabIndex),
+                  workspaces[rebuilt.workspaceIndex].tabs[rebuilt.tabIndex].id == tabID
+            else {
+                return nil
+            }
+            return rebuilt
+        }
+        return location
+    }
+
     private var activeWorkspaceIndex: Int? {
+        // Lock must be held by caller.
         guard let activeWorkspaceID else {
             return nil
         }
-
-        return workspaces.firstIndex(where: { $0.id == activeWorkspaceID })
+        return workspaceIndexLocked(for: activeWorkspaceID)
     }
 
     private func setActiveWorkspaceID(_ workspaceID: WorkspaceID, recordPrevious: Bool = true) {
@@ -1934,10 +2097,10 @@ public final class WorkspaceController: @unchecked Sendable {
     private func pane(for sessionID: SessionID) -> Pane? {
         lock.lock()
         defer { lock.unlock() }
-        return workspaces
-            .flatMap(\.tabs)
-            .flatMap(\.panes)
-            .first(where: { $0.terminalSession?.id == sessionID })
+        guard let location = sessionLocationLocked(for: sessionID) else {
+            return nil
+        }
+        return workspaceTabPaneLocked(at: location)?.pane
     }
 
     private func controlPlaneContext(
@@ -1945,63 +2108,65 @@ public final class WorkspaceController: @unchecked Sendable {
     ) -> (workspaceID: WorkspaceID, tabID: TabID?, paneID: PaneID)? {
         lock.lock()
         defer { lock.unlock() }
-
-        for workspace in workspaces {
-            for tab in workspace.tabs {
-                if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
-                    return (workspaceID: workspace.id, tabID: tab.id, paneID: pane.id)
-                }
-            }
+        guard let location = sessionLocationLocked(for: sessionID),
+              let resolved = workspaceTabPaneLocked(at: location)
+        else {
+            return nil
         }
-
-        return nil
+        return (workspaceID: resolved.workspace.id, tabID: resolved.tab.id, paneID: resolved.pane.id)
     }
 
     private func resolveTerminalTargetLocked(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
         switch target {
         case .session(let sessionID):
-            for workspace in workspaces {
-                for tab in workspace.tabs {
-                    if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
-                        return terminalContext(workspace: workspace, tab: tab, pane: pane)
-                    }
-                }
+            guard let location = sessionLocationLocked(for: sessionID),
+                  let resolved = workspaceTabPaneLocked(at: location)
+            else {
+                return nil
             }
+            return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
         case .pane(let paneID):
-            for workspace in workspaces {
-                for tab in workspace.tabs {
-                    if let pane = tab.panes.first(where: { $0.id == paneID }) {
-                        return terminalContext(workspace: workspace, tab: tab, pane: pane)
-                    }
-                }
+            guard let location = paneLocationLocked(for: paneID),
+                  let resolved = workspaceTabPaneLocked(at: location)
+            else {
+                return nil
             }
+            return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
         case .tab(let tabID):
-            for workspace in workspaces {
-                if let tab = workspace.tabs.first(where: { $0.id == tabID }),
-                   let pane = tab.focusedPane {
-                    return terminalContext(workspace: workspace, tab: tab, pane: pane)
-                }
+            guard let location = tabLocationLocked(for: tabID) else {
+                return nil
             }
+            let workspace = workspaces[location.workspaceIndex]
+            let tab = workspace.tabs[location.tabIndex]
+            guard let pane = tab.focusedPane else {
+                return nil
+            }
+            return terminalContext(workspace: workspace, tab: tab, pane: pane)
         case .workspace(let workspaceID):
-            guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
-                  let tab = workspace.focusedTab,
+            guard let workspaceIndex = workspaceIndexLocked(for: workspaceID) else {
+                return nil
+            }
+            let workspace = workspaces[workspaceIndex]
+            guard let tab = workspace.focusedTab,
                   let pane = tab.focusedPane
             else {
                 return nil
             }
             return terminalContext(workspace: workspace, tab: tab, pane: pane)
         case .focused:
-            guard let activeWorkspaceID,
-                  let workspace = workspaces.first(where: { $0.id == activeWorkspaceID }),
-                  let tab = workspace.focusedTab,
+            guard let activeWorkspaceIndex,
+                  workspaces.indices.contains(activeWorkspaceIndex)
+            else {
+                return nil
+            }
+            let workspace = workspaces[activeWorkspaceIndex]
+            guard let tab = workspace.focusedTab,
                   let pane = tab.focusedPane
             else {
                 return nil
             }
             return terminalContext(workspace: workspace, tab: tab, pane: pane)
         }
-
-        return nil
     }
 
     private func historyClearPaneIDsLocked(target: ControlPlaneTerminalTarget?) -> [PaneID]? {
@@ -2013,16 +2178,17 @@ public final class WorkspaceController: @unchecked Sendable {
         case .session, .pane, .focused:
             return resolveTerminalTargetLocked(target).map { [$0.paneID] }
         case .tab(let tabID):
-            for workspace in workspaces {
-                if let tab = workspace.tabs.first(where: { $0.id == tabID }) {
-                    return tab.panes.filter(\.isTerminal).map(\.id)
-                }
-            }
-            return nil
-        case .workspace(let workspaceID):
-            guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
+            guard let location = tabLocationLocked(for: tabID) else {
                 return nil
             }
+            let workspace = workspaces[location.workspaceIndex]
+            let tab = workspace.tabs[location.tabIndex]
+            return tab.panes.filter(\.isTerminal).map(\.id)
+        case .workspace(let workspaceID):
+            guard let workspaceIndex = workspaceIndexLocked(for: workspaceID) else {
+                return nil
+            }
+            let workspace = workspaces[workspaceIndex]
             return workspace.tabs.flatMap(\.panes).filter(\.isTerminal).map(\.id)
         }
     }
@@ -2043,16 +2209,12 @@ public final class WorkspaceController: @unchecked Sendable {
     private func terminalContext(for paneID: PaneID) -> ControlPlaneTerminalContext? {
         lock.lock()
         defer { lock.unlock() }
-
-        for workspace in workspaces {
-            for tab in workspace.tabs {
-                guard let pane = tab.panes.first(where: { $0.id == paneID }) else {
-                    continue
-                }
-                return terminalContext(workspace: workspace, tab: tab, pane: pane)
-            }
+        guard let location = paneLocationLocked(for: paneID),
+              let resolved = workspaceTabPaneLocked(at: location)
+        else {
+            return nil
         }
-        return nil
+        return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
     }
 
     private static func historyTargets(in workspace: Workspace) -> [PaneHistoryTarget] {
@@ -2084,12 +2246,12 @@ public final class WorkspaceController: @unchecked Sendable {
     private func workingDirectory(for paneID: PaneID) -> String? {
         lock.lock()
         defer { lock.unlock() }
-
-        for pane in workspaces.flatMap(\.tabs).flatMap(\.panes) where pane.id == paneID {
-            return pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory
+        guard let location = paneLocationLocked(for: paneID),
+              let pane = workspaceTabPaneLocked(at: location)?.pane
+        else {
+            return nil
         }
-
-        return nil
+        return pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory
     }
 
     private func terminalTextActivationContext(

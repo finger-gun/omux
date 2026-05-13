@@ -42,6 +42,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var workspaceJumpMenuItems: [NSMenuItem] = []
     private var keyBindingRegistry: OpenMUXKeyBindingRegistry
     private var scrollbackAutosaveTask: Task<Void, Never>?
+    private lazy var layoutPersistenceCoordinator = WorkspaceLayoutPersistenceCoordinator { [weak self] in
+        self?.persistWorkspaceLayoutStateNow()
+    }
     private let autoCheckUpdate: Bool
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
@@ -97,7 +100,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         _ = notification
         configureMenus()
         workspaceController.onChange = { [weak self] workspace in
-            self?.persistWorkspaceLayoutState()
+            self?.scheduleWorkspaceLayoutStatePersistence()
             Task { @MainActor in
                 self?.windowController?.update(workspace: workspace)
                 self?.refreshMenuValidation()
@@ -924,11 +927,20 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         return workspace
     }
 
-    private func persistWorkspaceLayoutState() {
+    private func scheduleWorkspaceLayoutStatePersistence() {
+        layoutPersistenceCoordinator.scheduleLayoutSave()
+    }
+
+    private func flushWorkspaceLayoutStatePersistence() {
+        layoutPersistenceCoordinator.flushLayoutSave()
+    }
+
+    private func persistWorkspaceLayoutStateNow() {
         workspacePersistenceStore.save(workspaceController.persistenceSnapshot(mode: .layoutOnly))
     }
 
     private func persistWorkspaceStateIncludingScrollback() {
+        flushWorkspaceLayoutStatePersistence()
         workspacePersistenceStore.save(workspaceController.persistenceSnapshotForConfiguredPersistence())
     }
 
