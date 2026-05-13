@@ -35,6 +35,7 @@ public struct ExtensionPaneActionResult: Sendable {
     public let workspace: Workspace
     public let tabID: TabID?
     public let paneStackID: PaneStackID?
+    public let floatingPaneModalID: FloatingPaneModalID?
     public let pane: Pane
 }
 
@@ -918,6 +919,75 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
+    public func updateFloatingPaneModalFrame(
+        modalID: FloatingPaneModalID,
+        frame: FloatingPaneModalFrame
+    ) -> Workspace? {
+        lock.lock()
+        guard let workspaceIndex = workspaces.firstIndex(where: { workspace in
+            workspace.floatingPaneModals.contains(where: { $0.id == modalID })
+        }),
+        workspaces[workspaceIndex].updateFloatingPaneModalFrame(modalID: modalID, frame: frame)
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        let updatedWorkspace = workspaces[workspaceIndex]
+        lock.unlock()
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func dockFloatingPaneModalToRootSplit(
+        modalID: FloatingPaneModalID,
+        direction: PaneSplitDropDirection
+    ) -> Workspace? {
+        lock.lock()
+        guard let workspaceIndex = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let success = workspaces[workspaceIndex].moveFloatingPaneModalToRootSplit(
+            modalID: modalID,
+            direction: direction
+        )
+        let updatedWorkspace = success ? workspaces[workspaceIndex] : nil
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func movePaneTabToFloatingModal(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        frame: FloatingPaneModalFrame = FloatingPaneModalFrame()
+    ) -> Workspace? {
+        lock.lock()
+        guard let workspaceIndex = activeWorkspaceIndex else {
+            lock.unlock()
+            return nil
+        }
+
+        let movedModal = workspaces[workspaceIndex].moveDockedPaneToFloatingModal(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            frame: frame
+        )
+        let updatedWorkspace = movedModal == nil ? nil : workspaces[workspaceIndex]
+        lock.unlock()
+
+        guard let updatedWorkspace else { return nil }
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
     public func movePaneTabToRootSplit(
         paneID: PaneID,
         sourceStackID: PaneStackID,
@@ -985,17 +1055,26 @@ public final class WorkspaceController: @unchecked Sendable {
         )
 
         lock.lock()
-        guard let index = activeWorkspaceIndex,
-              workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
-        else {
+        guard let index = activeWorkspaceIndex else {
             lock.unlock()
             return nil
+        }
+        let createdInModal: FloatingPaneModal?
+        if descriptor.presentationStyle == .modal {
+            createdInModal = workspaces[index].createFloatingPaneModal(containing: pane)
+        } else {
+            guard workspaces[index].appendPaneToFocusedTab(pane, axis: axis) else {
+                lock.unlock()
+                return nil
+            }
+            createdInModal = nil
         }
         let updatedWorkspace = workspaces[index]
         let result = ExtensionPaneActionResult(
             workspace: updatedWorkspace,
-            tabID: updatedWorkspace.focusedTabID,
-            paneStackID: updatedWorkspace.focusedPaneStack?.id,
+            tabID: createdInModal == nil ? updatedWorkspace.focusedTabID : nil,
+            paneStackID: createdInModal?.paneStack.id ?? updatedWorkspace.focusedPaneStack?.id,
+            floatingPaneModalID: createdInModal?.id,
             pane: pane
         )
         lock.unlock()
@@ -1026,6 +1105,10 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         var result: ExtensionPaneActionResult?
         for workspaceIndex in workspaces.indices {
+            let wasFloating = workspaces[workspaceIndex].floatingPaneModals.contains(where: { modal in
+                modal.paneStack.panes.contains(where: { $0.id == paneID })
+            })
+            let sourceStackID = paneStackID(for: paneID, in: workspaces[workspaceIndex])
             guard workspaces[workspaceIndex].updatePane(paneID, transform: { pane in
                 guard pane.extensionPane != nil else {
                     return
@@ -1038,16 +1121,43 @@ public final class WorkspaceController: @unchecked Sendable {
                 continue
             }
 
-            guard let pane = workspaces[workspaceIndex].tabs.flatMap(\.panes).first(where: { $0.id == paneID }),
+            if descriptor.presentationStyle == .modal,
+               wasFloating == false,
+               let sourceStackID {
+                _ = workspaces[workspaceIndex].moveDockedPaneToFloatingModal(
+                    paneID: paneID,
+                    sourceStackID: sourceStackID
+                )
+            } else if descriptor.presentationStyle == .paneTab,
+                      wasFloating,
+                      let sourceStackID {
+                if let targetStackID = dockedTargetPaneStackID(in: workspaces[workspaceIndex]) {
+                    _ = workspaces[workspaceIndex].movePaneTabToExistingStack(
+                        paneID: paneID,
+                        sourceStackID: sourceStackID,
+                        targetStackID: targetStackID
+                    )
+                } else {
+                    _ = workspaces[workspaceIndex].movePaneTabToRootSplit(
+                        paneID: paneID,
+                        sourceStackID: sourceStackID,
+                        direction: .right
+                    )
+                }
+            }
+
+            guard let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }),
                   pane.extensionPane != nil
             else {
                 break
             }
             let workspace = workspaces[workspaceIndex]
+            let floatingPaneModalID = floatingPaneModalID(for: paneID, in: workspace)
             result = ExtensionPaneActionResult(
                 workspace: workspace,
                 tabID: workspace.tabs.first(where: { $0.panes.contains(where: { $0.id == paneID }) })?.id,
                 paneStackID: paneStackID(for: paneID, in: workspace),
+                floatingPaneModalID: floatingPaneModalID,
                 pane: pane
             )
             break
@@ -1079,19 +1189,23 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         var result: ExtensionPaneActionResult?
         for workspaceIndex in workspaces.indices {
-            guard let pane = workspaces[workspaceIndex].tabs.flatMap(\.panes).first(where: { $0.id == paneID }),
+            guard let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }),
                   pane.extensionPane != nil
             else {
                 continue
             }
 
             let workspaceBeforeClose = workspaces[workspaceIndex]
-            guard let tabIndex = workspaceBeforeClose.tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
-                break
-            }
-            let tabID = workspaceBeforeClose.tabs[tabIndex].id
+            let tabIndex = workspaceBeforeClose.tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) })
+            let tabID = tabIndex.map { workspaceBeforeClose.tabs[$0].id }
             let paneStackID = paneStackID(for: paneID, in: workspaceBeforeClose)
-            guard let removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID),
+            let floatingPaneModalID = floatingPaneModalID(for: paneID, in: workspaceBeforeClose)
+            let removedPane = if let tabIndex {
+                workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID)
+            } else {
+                workspaces[workspaceIndex].closePane(paneID)
+            }
+            guard let removedPane,
                   removedPane.extensionPane != nil
             else {
                 break
@@ -1101,6 +1215,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 workspace: workspaces[workspaceIndex],
                 tabID: tabID,
                 paneStackID: paneStackID,
+                floatingPaneModalID: floatingPaneModalID,
                 pane: removedPane
             )
             break
@@ -1305,23 +1420,28 @@ public final class WorkspaceController: @unchecked Sendable {
         var closedPaneTab = false
 
         for workspaceIndex in workspaces.indices {
-            guard let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }),
-                  let paneStack = workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: paneID)
-            else {
+            if let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: { $0.panes.contains(where: { $0.id == paneID }) }),
+               let paneStack = workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: paneID) {
+                workspaceID = workspaces[workspaceIndex].id
+                tabID = workspaces[workspaceIndex].tabs[tabIndex].id
+                paneStackID = paneStack.id
+
+                if paneStack.panes.count > 1 {
+                    removedPane = workspaces[workspaceIndex].tabs[tabIndex].closePane(paneID)
+                    closedPaneTab = true
+                } else if workspaces[workspaceIndex].tabs[tabIndex].panes.count > 1 {
+                    removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID)
+                } else if workspaces[workspaceIndex].tabs.count > 1 {
+                    removedPane = workspaces[workspaceIndex].closeTab(workspaces[workspaceIndex].tabs[tabIndex].id)?.panes.first
+                }
+            } else if let modal = workspaces[workspaceIndex].floatingPaneModals.first(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) }) {
+                workspaceID = workspaces[workspaceIndex].id
+                tabID = nil
+                paneStackID = modal.paneStack.id
+                closedPaneTab = modal.paneStack.panes.count > 1
+                removedPane = workspaces[workspaceIndex].closePane(paneID)
+            } else {
                 continue
-            }
-
-            workspaceID = workspaces[workspaceIndex].id
-            tabID = workspaces[workspaceIndex].tabs[tabIndex].id
-            paneStackID = paneStack.id
-
-            if paneStack.panes.count > 1 {
-                removedPane = workspaces[workspaceIndex].tabs[tabIndex].closePane(paneID)
-                closedPaneTab = true
-            } else if workspaces[workspaceIndex].tabs[tabIndex].panes.count > 1 {
-                removedPane = workspaces[workspaceIndex].tabs[tabIndex].removePane(paneID)
-            } else if workspaces[workspaceIndex].tabs.count > 1 {
-                removedPane = workspaces[workspaceIndex].closeTab(workspaces[workspaceIndex].tabs[tabIndex].id)?.panes.first
             }
 
             if removedPane != nil {
@@ -1332,8 +1452,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
         guard let removedPane,
               let updatedWorkspace,
-              let workspaceID,
-              let tabID
+              let workspaceID
         else {
             lock.unlock()
             return nil
@@ -1498,7 +1617,7 @@ public final class WorkspaceController: @unchecked Sendable {
         var updatedWorkspace: Workspace?
         lock.lock()
         for index in workspaces.indices {
-            guard workspaces[index].tabs.contains(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
+            guard workspaces[index].panes.contains(where: { $0.id == paneID }) else {
                 continue
             }
 
@@ -2339,13 +2458,15 @@ public final class WorkspaceController: @unchecked Sendable {
         do {
             markdown = try String(contentsOf: fileURL, encoding: .utf8)
         } catch {
+            let presentationStyle = ExtensionPanePresentationStyle(rawValue: markdownPreviewConfiguration.presentation) ?? .paneTab
             let descriptor = ExtensionPaneDescriptor(
                 pluginID: OmuxMarkdownPreviewPlugin.pluginID,
                 contentKind: .html,
                 source: path,
                 html: "",
                 status: .error,
-                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
+                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)",
+                presentationStyle: presentationStyle
             )
             if let paneID = markdownPreviewPaneID(for: path) {
                 _ = updateExtensionPane(paneID: paneID, descriptor: descriptor, title: fileURL.lastPathComponent)
@@ -2358,7 +2479,8 @@ public final class WorkspaceController: @unchecked Sendable {
         let descriptor = markdownPreviewDescriptor(
             markdown: markdown,
             fileURL: fileURL,
-            theme: markdownPreviewConfiguration.theme
+            theme: markdownPreviewConfiguration.theme,
+            presentation: markdownPreviewConfiguration.presentation
         )
         var paneID = markdownPreviewPaneID(for: path)
         if let paneID {
@@ -2378,7 +2500,8 @@ public final class WorkspaceController: @unchecked Sendable {
         return markdownPreviewConfiguration
     }
 
-    private func markdownPreviewDescriptor(markdown: String, fileURL: URL, theme: String) -> ExtensionPaneDescriptor {
+    private func markdownPreviewDescriptor(markdown: String, fileURL: URL, theme: String, presentation: String) -> ExtensionPaneDescriptor {
+        let presentationStyle = ExtensionPanePresentationStyle(rawValue: presentation) ?? .paneTab
         do {
             let html = try OmuxMarkdownPreviewRenderer(theme: theme).render(
                 markdown: markdown,
@@ -2390,7 +2513,8 @@ public final class WorkspaceController: @unchecked Sendable {
                 contentKind: .html,
                 source: fileURL.path,
                 html: html,
-                status: .ready
+                status: .ready,
+                presentationStyle: presentationStyle
             )
         } catch {
             return ExtensionPaneDescriptor(
@@ -2399,7 +2523,8 @@ public final class WorkspaceController: @unchecked Sendable {
                 source: fileURL.path,
                 html: "",
                 status: .error,
-                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)"
+                message: "Unable to render \(fileURL.lastPathComponent): \(error.localizedDescription)",
+                presentationStyle: presentationStyle
             )
         }
     }
@@ -2456,7 +2581,12 @@ public final class WorkspaceController: @unchecked Sendable {
 
     private func updateMarkdownPreview(paneID: PaneID, sourceURL: URL, markdown: String) -> Bool {
         let markdownPreviewConfiguration = markdownPreviewConfigurationSnapshot()
-        let descriptor = markdownPreviewDescriptor(markdown: markdown, fileURL: sourceURL, theme: markdownPreviewConfiguration.theme)
+        let descriptor = markdownPreviewDescriptor(
+            markdown: markdown,
+            fileURL: sourceURL,
+            theme: markdownPreviewConfiguration.theme,
+            presentation: markdownPreviewConfiguration.presentation
+        )
         return updateExtensionPane(paneID: paneID, descriptor: descriptor, title: sourceURL.lastPathComponent) != nil
     }
 
@@ -2554,6 +2684,25 @@ public final class WorkspaceController: @unchecked Sendable {
     private func paneStackID(for paneID: PaneID, in workspace: Workspace) -> PaneStackID? {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(containingPaneID: paneID)?.id }
+            .first
+        ?? workspace.floatingPaneModals.first(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) })?.paneStack.id
+    }
+
+    private func floatingPaneModalID(for paneID: PaneID, in workspace: Workspace) -> FloatingPaneModalID? {
+        workspace.floatingPaneModals
+            .first(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) })?
+            .id
+    }
+
+    private func dockedTargetPaneStackID(in workspace: Workspace) -> PaneStackID? {
+        if let focusedStackID = workspace.tabs
+            .first(where: { $0.id == workspace.focusedTabID })?
+            .focusedPaneStack?.id {
+            return focusedStackID
+        }
+
+        return workspace.tabs
+            .compactMap { $0.focusedPaneStack?.id }
             .first
     }
 

@@ -10,6 +10,7 @@ Plugins can:
 
 - register top-level `omux` commands
 - create, update, and close extension panes
+- choose whether extension panes open as docked pane tabs or floating modals
 - opt extension panes into host-mediated action callbacks
 - contribute native app menu items from installed manifests
 - mark terminal pane status with `omux pane-status`
@@ -166,6 +167,7 @@ Use `omux extension-pane` to create, update, and close plugin-owned panes:
 
 ```sh
 omux extension-pane create --plugin dev.example.preview --title "Preview" --source ./README.md --html-file /tmp/preview.html
+omux extension-pane create --plugin dev.example.preview --title "Preview" --source ./README.md --html-file /tmp/preview.html --presentation modal
 omux extension-pane update --pane <pane-id> --plugin dev.example.preview --status ready --html-file /tmp/preview.html
 omux extension-pane update --pane <pane-id> --plugin dev.example.preview --status error --message "render failed"
 omux extension-pane close --pane <pane-id>
@@ -183,9 +185,12 @@ The control plane accepts these fields:
 | `--status ready\|disabled\|error` | Rendering state. Non-ready states show placeholder copy. |
 | `--message <text>` | Placeholder or error message. |
 | `--axis columns\|rows` | Split direction for new panes. |
+| `--presentation pane-tab\|modal` | Initial host presentation for new or updated extension panes. |
 | `--actions` | Opt the pane into the host-mediated JavaScript action bridge. |
 
 Extension panes are shell-owned content panes. They are not terminal sessions, do not allocate Ghostty surfaces, and terminal-only actions such as `omux run`, `send-text`, and history operations reject or ignore them.
+
+The shell may also move a pane between docked and modal presentation after creation. Plugins should treat pane identity as stable and presentation as host-managed state.
 
 ### Extension pane action bridge
 

@@ -142,6 +142,7 @@ final class WorkspaceShellViewController: NSViewController {
     private let iconResolver = WorkspaceIconResolver()
     private let sidebarView = WorkspaceSidebarView()
     private let canvasView = WorkspaceCanvasView()
+    private let floatingModalOverlayView = FloatingModalOverlayView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
     private var sidebarWidthConstraint: NSLayoutConstraint?
     private var mainColumnLeadingConstraint: NSLayoutConstraint?
@@ -205,6 +206,7 @@ final class WorkspaceShellViewController: NSViewController {
 
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
+        view.addSubview(floatingModalOverlayView)
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
         let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
@@ -225,6 +227,11 @@ final class WorkspaceShellViewController: NSViewController {
             mainColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -ShellLayoutMetrics.outerPadding),
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
             canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
+
+            floatingModalOverlayView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
+            floatingModalOverlayView.leadingAnchor.constraint(equalTo: mainColumn.leadingAnchor),
+            floatingModalOverlayView.trailingAnchor.constraint(equalTo: mainColumn.trailingAnchor),
+            floatingModalOverlayView.bottomAnchor.constraint(equalTo: mainColumn.bottomAnchor),
         ])
 
         applySidebarVisibility()
@@ -362,7 +369,8 @@ final class WorkspaceShellViewController: NSViewController {
         logReconciliationMetricsIfNeeded(reconciliationMetrics)
         renderedIconKindByPaneID = iconKindSignature(for: workspace)
 
-        let focusedPaneView = reconciledFocusedPaneView ?? layout?.focusedPaneView
+        let floatingFocusedPaneView = renderFloatingPaneModals(workspace: workspace)
+        let focusedPaneView = floatingFocusedPaneView ?? reconciledFocusedPaneView ?? layout?.focusedPaneView
         if shouldRestoreFocus, let focusedPaneView {
             focusRestoreGeneration &+= 1
             let generation = focusRestoreGeneration
@@ -441,6 +449,7 @@ final class WorkspaceShellViewController: NSViewController {
         sidebarView.apply(theme: theme)
         canvasView.apply(theme: theme)
         commandPaletteView?.apply(theme: theme)
+        floatingModalOverlayView.apply(theme: theme)
     }
 
     private func shouldRestoreFocus(
@@ -460,6 +469,7 @@ final class WorkspaceShellViewController: NSViewController {
         guard let paneID,
               let firstResponder = view.window?.firstResponder as? NSView,
               let paneView = findHostedPaneView(in: canvasView, paneID: paneID)
+                ?? findHostedPaneView(in: floatingModalOverlayView, paneID: paneID)
         else {
             return false
         }
@@ -882,6 +892,15 @@ final class WorkspaceShellViewController: NSViewController {
             self?.presentRenamePanePrompt(paneID: pane.id, currentTitle: pane.title)
         }
 
+        let popOutItem = menu.addItem(withTitle: "Pop Out to Modal", action: nil, keyEquivalent: "")
+        popOutItem.isEnabled = canPopOutPaneTab(paneID: pane.id, sourceStackID: paneStack.id)
+        popOutItem.onSelect { [weak self] in
+            _ = self?.controller.movePaneTabToFloatingModal(
+                paneID: pane.id,
+                sourceStackID: paneStack.id
+            )
+        }
+
         let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
         closeItem.isEnabled = paneStack.panes.count > 1 || canCloseSinglePaneStack
         closeItem.onSelect { [weak self] in
@@ -1147,6 +1166,130 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    private func renderFloatingPaneModals(workspace: Workspace) -> NSView? {
+        let orderedModals = workspace.floatingPaneModals.sorted { lhs, rhs in
+            if workspace.focusedFloatingPaneModalID == lhs.id { return false }
+            if workspace.focusedFloatingPaneModalID == rhs.id { return true }
+            return lhs.id.rawValue < rhs.id.rawValue
+        }
+
+        var focusedPaneView: NSView?
+        let modalViews = orderedModals.map { modal -> FloatingPaneModalView in
+            let layout = PaneStackView(
+                paneStack: modal.paneStack,
+                focusedPaneID: modal.paneStack.focusedPaneID,
+                windowIsKey: windowIsKey,
+                inactiveOpacity: currentPanes.inactiveOpacity,
+                bridge: controller.terminalBridge,
+                theme: currentTheme,
+                iconResolver: iconResolver,
+                iconConfiguration: currentIcons,
+                onSelectPaneTab: { [weak self] paneID in
+                    _ = self?.controller.focusPaneTab(paneID: paneID)
+                },
+                onCreatePaneTab: { [weak self] in
+                    _ = try self?.controller.createPaneTab(in: modal.paneStack.id)
+                },
+                canCloseSinglePaneStack: true,
+                onClosePane: { [weak self] paneID in
+                    _ = try self?.controller.closePane(paneID: paneID)
+                },
+                contextMenuProvider: { [weak self] pane in
+                    guard let self else { return NSMenu() }
+                    return makePaneTabContextMenu(
+                        pane: pane,
+                        paneStack: modal.paneStack,
+                        canCloseSinglePaneStack: true
+                    )
+                },
+                onFocus: { [weak self] paneID in
+                    _ = self?.controller.focus(paneID: paneID)
+                },
+                canStartPaneTabDrag: { _ in false },
+                onTextActivation: { [weak self] request in
+                    self?.controller.handleTerminalTextActivation(request) ?? false
+                },
+                onTextActivationHover: { [weak self] request in
+                    self?.controller.canHandleTerminalTextActivation(request) ?? false
+                },
+                onExtensionPaneAction: { [weak self] request in
+                    self?.onExtensionPaneAction(request)
+                },
+                showsHeader: false
+            )
+            if workspace.focusedFloatingPaneModalID == modal.id {
+                focusedPaneView = layout.focusedPaneView
+            }
+            return FloatingPaneModalView(
+                modalID: modal.id,
+                paneID: modal.paneStack.focusedPaneID,
+                title: modal.paneStack.focusedPane?.title ?? "Pane",
+                contentView: layout,
+                frameModel: modal.frame,
+                theme: currentTheme,
+                onFocus: { [weak self] paneID in
+                    _ = self?.controller.focus(paneID: paneID)
+                },
+                onClose: { [weak self] paneID in
+                    _ = try? self?.controller.closePane(paneID: paneID)
+                },
+                onDragChanged: { [weak self] _, frame, allowsDocking in
+                    self?.updateFloatingModalDragPreview(frame: frame, allowsDocking: allowsDocking)
+                },
+                onDragEnded: { [weak self] modalID, frame, allowsDocking in
+                    self?.finishFloatingModalDrag(modalID: modalID, frame: frame, allowsDocking: allowsDocking)
+                }
+            )
+        }
+
+        floatingModalOverlayView.render(modalViews: modalViews)
+        return focusedPaneView
+    }
+
+    private func updateFloatingModalDragPreview(frame: NSRect, allowsDocking: Bool) {
+        clearPaneTabSplitPreview()
+        guard allowsDocking else {
+            return
+        }
+        guard let direction = floatingModalRootSplitDirection(for: frame) else {
+            return
+        }
+        canvasView.setRootSplitPreview(direction, theme: currentTheme)
+    }
+
+    private func finishFloatingModalDrag(
+        modalID: FloatingPaneModalID,
+        frame: NSRect,
+        allowsDocking: Bool
+    ) {
+        defer { clearPaneTabSplitPreview() }
+        if allowsDocking, let direction = floatingModalRootSplitDirection(for: frame) {
+            _ = controller.dockFloatingPaneModalToRootSplit(modalID: modalID, direction: direction)
+        } else {
+            _ = controller.updateFloatingPaneModalFrame(
+                modalID: modalID,
+                frame: FloatingPaneModalFrame(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+            )
+        }
+    }
+
+    private func floatingModalRootSplitDirection(for frame: NSRect) -> PaneSplitDropDirection? {
+        let bounds = floatingModalOverlayView.bounds
+        guard bounds.width > 0, bounds.height > 0 else {
+            return nil
+        }
+
+        let threshold = PaneSplitDropIntentResolver.outerEdgeThreshold
+        let candidates: [(PaneSplitDropDirection, CGFloat)] = [
+            (.left, frame.minX),
+            (.right, bounds.maxX - frame.maxX),
+            (.up, frame.minY),
+            (.down, bounds.maxY - frame.maxY),
+        ].filter { $0.1 <= threshold }
+
+        return candidates.min { $0.1 < $1.1 }?.0
+    }
+
     // MARK: - Pane Tab Drag
 
     private enum PaneTabDropIntent {
@@ -1154,6 +1297,7 @@ final class WorkspaceShellViewController: NSViewController {
         case splitAtRoot(PaneSplitDropDirection)
         case merge
         case reorder(Int)
+        case tearOut(FloatingPaneModalFrame)
     }
 
     private struct PaneTabDragState {
@@ -1167,15 +1311,25 @@ final class WorkspaceShellViewController: NSViewController {
     private var paneTabDragState: PaneTabDragState?
 
     private func canStartPaneTabDrag(paneID: PaneID, sourceStackID: PaneStackID) -> Bool {
-        guard let tab = currentWorkspace?.focusedTab else {
+        guard let workspace = currentWorkspace else {
             return false
         }
-        return PaneTabDragReadiness.canStart(
-            paneID: paneID,
-            sourceStackID: sourceStackID,
-            in: tab,
-            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
-        )
+        if let tab = workspace.tabs.first(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil }) {
+            return PaneTabDragReadiness.canStart(
+                paneID: paneID,
+                sourceStackID: sourceStackID,
+                in: tab,
+                attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
+            )
+        }
+        guard let pane = workspace.floatingPaneModals
+            .first(where: { $0.paneStack.id == sourceStackID })?
+            .paneStack.panes.first(where: { $0.id == paneID }),
+              let extensionPane = pane.extensionPane
+        else {
+            return false
+        }
+        return extensionPane.status == .ready
     }
 
     private func beginPaneTabDrag(button: NSView, paneID: PaneID, sourceStackID: PaneStackID) {
@@ -1250,6 +1404,14 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
 
+        if canPopOutPaneTab(paneID: dragState.paneID, sourceStackID: dragState.sourceStackID),
+           let tearOutFrame = paneTabTearOutFrame(forWindowLocation: event.locationInWindow) {
+            dragState.targetStackID = nil
+            dragState.dropIntent = .tearOut(tearOutFrame)
+            paneTabDragState = dragState
+            return
+        }
+
         dragState.targetStackID = nil
         dragState.dropIntent = nil
         paneTabDragState = dragState
@@ -1299,6 +1461,12 @@ final class WorkspaceShellViewController: NSViewController {
                 stackID: targetStackID,
                 insertionIndex: insertionIndex
             )
+        case .tearOut(let frame):
+            _ = controller.movePaneTabToFloatingModal(
+                paneID: dragState.paneID,
+                sourceStackID: dragState.sourceStackID,
+                frame: frame
+            )
         }
     }
 
@@ -1310,7 +1478,8 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func paneStackView(atWindowLocation location: NSPoint) -> PaneStackView? {
-        paneStackView(in: canvasView, atWindowLocation: location)
+        paneStackView(in: floatingModalOverlayView, atWindowLocation: location)
+            ?? paneStackView(in: canvasView, atWindowLocation: location)
     }
 
     private func paneStackView(in root: NSView, atWindowLocation location: NSPoint) -> PaneStackView? {
@@ -1327,6 +1496,7 @@ final class WorkspaceShellViewController: NSViewController {
     private func clearPaneTabSplitPreview() {
         canvasView.clearRootSplitPreview()
         clearPaneTabSplitPreview(in: canvasView)
+        clearPaneTabSplitPreview(in: floatingModalOverlayView)
     }
 
     private func clearPaneTabSplitPreview(in root: NSView) {
@@ -1370,6 +1540,43 @@ final class WorkspaceShellViewController: NSViewController {
         ghost.frame.origin = NSPoint(
             x: cursor.x - ghost.frame.width / 2,
             y: cursor.y - ghost.frame.height / 2
+        )
+    }
+
+    private func canPopOutPaneTab(paneID: PaneID, sourceStackID: PaneStackID) -> Bool {
+        guard let workspace = currentWorkspace,
+              let tab = workspace.tabs.first(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil })
+        else {
+            return false
+        }
+        return PaneTabDragReadiness.canStart(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            in: tab,
+            attachedSessionExists: controller.terminalBridge.attachedSession(for: paneID) != nil
+        )
+    }
+
+    private func paneTabTearOutFrame(forWindowLocation location: NSPoint) -> FloatingPaneModalFrame? {
+        let point = floatingModalOverlayView.convert(location, from: nil)
+        let bounds = floatingModalOverlayView.bounds
+        guard bounds.width > 0, bounds.height > 0, bounds.contains(point) else {
+            return nil
+        }
+
+        let inset = CGFloat(20)
+        let defaultFrame = FloatingPaneModalFrame()
+        let width = min(CGFloat(defaultFrame.width), max(320, bounds.width - inset * 2))
+        let height = min(CGFloat(defaultFrame.height), max(220, bounds.height - inset * 2))
+        let maxX = max(inset, bounds.width - width - inset)
+        let maxY = max(inset, bounds.height - height - inset)
+        let originX = min(max(point.x - width / 2, inset), maxX)
+        let originY = min(max(point.y - height / 2, inset), maxY)
+        return FloatingPaneModalFrame(
+            x: originX,
+            y: originY,
+            width: width,
+            height: height
         )
     }
 }
@@ -1468,7 +1675,7 @@ enum PaneTabDragReadiness {
             return extensionPane.status == .ready
         }
 
-        return pane.isTerminal && attachedSessionExists && pane.terminalState.reportedTitle != nil
+        return pane.isTerminal && attachedSessionExists
     }
 }
 
@@ -1991,6 +2198,317 @@ private final class WorkspaceSidebarSectionView: NSView {
             }
             itemStack.layoutSubtreeIfNeeded()
         }
+    }
+}
+
+@MainActor
+final class FloatingModalOverlayView: NSView {
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    private var currentTheme: WorkspaceShellTheme = .defaultTheme
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        currentTheme = theme
+        subviews.compactMap { $0 as? FloatingPaneModalView }.forEach { $0.apply(theme: theme) }
+    }
+
+    func render(modalViews: [FloatingPaneModalView]) {
+        subviews.forEach { $0.removeFromSuperview() }
+        for modalView in modalViews {
+            modalView.apply(theme: currentTheme)
+            addSubview(modalView)
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hitView = super.hitTest(point)
+        return hitView === self ? nil : hitView
+    }
+}
+
+@MainActor
+final class FloatingPaneModalHeaderView: NSView {
+    var onMouseDownEvent: ((NSEvent) -> Void)?
+    var onMouseDraggedEvent: ((NSEvent) -> Void)?
+    var onMouseUpEvent: ((NSEvent) -> Void)?
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDownEvent?(event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onMouseDraggedEvent?(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onMouseUpEvent?(event)
+    }
+}
+
+@MainActor
+final class FloatingPaneModalResizeHandleView: NSView {
+    var onMouseDownEvent: ((NSEvent) -> Void)?
+    var onMouseDraggedEvent: ((NSEvent) -> Void)?
+    var onMouseUpEvent: ((NSEvent) -> Void)?
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDownEvent?(event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onMouseDraggedEvent?(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onMouseUpEvent?(event)
+    }
+}
+
+@MainActor
+final class FloatingPaneModalView: NSView {
+    private static let minimumWidth = CGFloat(360)
+    private static let minimumHeight = CGFloat(240)
+    private static let resizeHandleSide = CGFloat(18)
+
+    private let modalID: FloatingPaneModalID
+    private let paneID: PaneID
+    private let dragHandleView = FloatingPaneModalHeaderView()
+    private let resizeHandleView = FloatingPaneModalResizeHandleView()
+    private let resizeHandleGlyph = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let closeButton = ChromePillButton()
+    private let contentHostView = NSView()
+    private let onFocus: @MainActor (PaneID) -> Void
+    private let onClose: @MainActor (PaneID) -> Void
+    private let onDragChanged: @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
+    private let onDragEnded: @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
+    private var dragOrigin: CGPoint?
+    private var initialFrameOrigin: CGPoint = .zero
+    private var resizeOrigin: CGPoint?
+    private var initialFrameSize: CGSize = .zero
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    init(
+        modalID: FloatingPaneModalID,
+        paneID: PaneID,
+        title: String,
+        contentView: NSView,
+        frameModel: FloatingPaneModalFrame,
+        theme: WorkspaceShellTheme,
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onClose: @escaping @MainActor (PaneID) -> Void,
+        onDragChanged: @escaping @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void,
+        onDragEnded: @escaping @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
+    ) {
+        self.modalID = modalID
+        self.paneID = paneID
+        self.onFocus = onFocus
+        self.onClose = onClose
+        self.onDragChanged = onDragChanged
+        self.onDragEnded = onDragEnded
+        super.init(frame: NSRect(x: frameModel.x, y: frameModel.y, width: frameModel.width, height: frameModel.height))
+        translatesAutoresizingMaskIntoConstraints = true
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.shadowOpacity = 0.22
+        layer?.shadowRadius = 18
+        layer?.shadowOffset = CGSize(width: 0, height: 10)
+        layer?.masksToBounds = false
+
+        dragHandleView.translatesAutoresizingMaskIntoConstraints = false
+        dragHandleView.wantsLayer = true
+        dragHandleView.layer?.cornerRadius = 12
+        dragHandleView.onMouseDownEvent = { [weak self] event in
+            self?.handleHeaderMouseDown(event)
+        }
+        dragHandleView.onMouseDraggedEvent = { [weak self] event in
+            self?.handleHeaderMouseDragged(event)
+        }
+        dragHandleView.onMouseUpEvent = { [weak self] event in
+            self?.handleHeaderMouseUp(event)
+        }
+
+        resizeHandleView.translatesAutoresizingMaskIntoConstraints = false
+        resizeHandleView.onMouseDownEvent = { [weak self] event in
+            self?.handleResizeMouseDown(event)
+        }
+        resizeHandleView.onMouseDraggedEvent = { [weak self] event in
+            self?.handleResizeMouseDragged(event)
+        }
+        resizeHandleView.onMouseUpEvent = { [weak self] event in
+            self?.handleResizeMouseUp(event)
+        }
+        resizeHandleView.toolTip = "Resize modal"
+
+        resizeHandleGlyph.translatesAutoresizingMaskIntoConstraints = false
+        resizeHandleGlyph.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Resize modal")
+        resizeHandleGlyph.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+        resizeHandleGlyph.imageScaling = .scaleProportionallyDown
+        resizeHandleView.addSubview(resizeHandleGlyph)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.stringValue = title
+
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.configure(
+            symbolName: "xmark",
+            accessibilityLabel: "Close modal",
+            active: false,
+            theme: theme,
+            compact: true
+        )
+        closeButton.onPress = { [weak self] in
+            self?.handleClose(nil)
+        }
+
+        contentHostView.translatesAutoresizingMaskIntoConstraints = false
+        contentHostView.wantsLayer = true
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(contentHostView)
+        addSubview(dragHandleView)
+        addSubview(resizeHandleView)
+        contentHostView.addSubview(contentView)
+        dragHandleView.addSubview(titleLabel)
+        dragHandleView.addSubview(closeButton)
+
+        NSLayoutConstraint.activate([
+            dragHandleView.topAnchor.constraint(equalTo: topAnchor),
+            dragHandleView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dragHandleView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dragHandleView.heightAnchor.constraint(equalToConstant: 28),
+
+            closeButton.leadingAnchor.constraint(equalTo: dragHandleView.leadingAnchor, constant: 10),
+            closeButton.centerYAnchor.constraint(equalTo: dragHandleView.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 16),
+            closeButton.heightAnchor.constraint(equalToConstant: 16),
+
+            titleLabel.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: 8),
+            titleLabel.trailingAnchor.constraint(equalTo: dragHandleView.trailingAnchor, constant: -12),
+            titleLabel.centerYAnchor.constraint(equalTo: dragHandleView.centerYAnchor),
+
+            contentHostView.topAnchor.constraint(equalTo: dragHandleView.bottomAnchor, constant: 4),
+            contentHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            contentView.topAnchor.constraint(equalTo: contentHostView.topAnchor),
+            contentView.leadingAnchor.constraint(equalTo: contentHostView.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: contentHostView.trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: contentHostView.bottomAnchor),
+
+            resizeHandleView.widthAnchor.constraint(equalToConstant: Self.resizeHandleSide),
+            resizeHandleView.heightAnchor.constraint(equalToConstant: Self.resizeHandleSide),
+            resizeHandleView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            resizeHandleView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            resizeHandleGlyph.centerXAnchor.constraint(equalTo: resizeHandleView.centerXAnchor),
+            resizeHandleGlyph.centerYAnchor.constraint(equalTo: resizeHandleView.centerYAnchor),
+        ])
+
+        apply(theme: theme)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.shell.paneHeaderBackground.cgColor
+        contentHostView.layer?.cornerRadius = 12
+        contentHostView.layer?.masksToBounds = true
+        contentHostView.layer?.backgroundColor = theme.shell.canvasBackground.cgColor
+        dragHandleView.layer?.backgroundColor = theme.shell.paneHeaderBackground.cgColor
+        titleLabel.textColor = theme.shell.textPrimary
+        closeButton.applyTheme(theme)
+        resizeHandleGlyph.contentTintColor = theme.shell.textMuted
+    }
+
+    private func handleHeaderMouseDown(_ event: NSEvent) {
+        guard let superview else {
+            return
+        }
+        onFocus(paneID)
+        dragOrigin = superview.convert(event.locationInWindow, from: nil)
+        initialFrameOrigin = frame.origin
+    }
+
+    private func handleHeaderMouseDragged(_ event: NSEvent) {
+        guard let superview, let dragOrigin else {
+            return
+        }
+        let location = superview.convert(event.locationInWindow, from: nil)
+        let delta = CGPoint(x: location.x - dragOrigin.x, y: location.y - dragOrigin.y)
+        frame.origin = CGPoint(
+            x: max(0, min(initialFrameOrigin.x + delta.x, superview.bounds.width - frame.width)),
+            y: max(0, min(initialFrameOrigin.y + delta.y, superview.bounds.height - frame.height))
+        )
+        onDragChanged(modalID, frame, event.modifierFlags.contains(.command) == false)
+    }
+
+    private func handleHeaderMouseUp(_ event: NSEvent) {
+        guard dragOrigin != nil else {
+            return
+        }
+        dragOrigin = nil
+        onDragEnded(modalID, frame, event.modifierFlags.contains(.command) == false)
+    }
+
+    private func handleResizeMouseDown(_ event: NSEvent) {
+        guard let superview else {
+            return
+        }
+        onFocus(paneID)
+        resizeOrigin = superview.convert(event.locationInWindow, from: nil)
+        initialFrameSize = frame.size
+        initialFrameOrigin = frame.origin
+    }
+
+    private func handleResizeMouseDragged(_ event: NSEvent) {
+        guard let superview, let resizeOrigin else {
+            return
+        }
+        let location = superview.convert(event.locationInWindow, from: nil)
+        let delta = CGPoint(x: location.x - resizeOrigin.x, y: location.y - resizeOrigin.y)
+        frame.size = CGSize(
+            width: max(Self.minimumWidth, min(initialFrameSize.width + delta.x, superview.bounds.width - initialFrameOrigin.x)),
+            height: max(Self.minimumHeight, min(initialFrameSize.height + delta.y, superview.bounds.height - initialFrameOrigin.y))
+        )
+        onDragChanged(modalID, frame, false)
+    }
+
+    private func handleResizeMouseUp(_ event: NSEvent) {
+        guard resizeOrigin != nil else {
+            return
+        }
+        resizeOrigin = nil
+        onDragEnded(modalID, frame, false)
+    }
+
+    @objc private func handleClose(_ sender: Any?) {
+        onClose(paneID)
     }
 }
 
@@ -2744,6 +3262,7 @@ final class PaneStackView: NSView {
     private var headerView: PaneHeaderView?
     private var splitPreviewView: PaneSplitPreviewView?
     private var mergePreviewView: PaneMergePreviewView?
+    private let showsHeader: Bool
 
     var paneStackID: PaneStackID?
 
@@ -2769,8 +3288,10 @@ final class PaneStackView: NSView {
         onPaneTabDragCancelled: (() -> Void)? = nil,
         onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
         onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
-        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void,
+        showsHeader: Bool = true
     ) {
+        self.showsHeader = showsHeader
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
         if let descriptor = activePane.extensionPane {
             let extensionPaneView = ExtensionPaneHostView(
@@ -2799,7 +3320,7 @@ final class PaneStackView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         self.paneStackID = paneStack.id
 
-        let headerView = PaneHeaderView(
+        let headerView = showsHeader ? PaneHeaderView(
             paneStack: paneStack,
             theme: theme,
             iconResolver: iconResolver,
@@ -2820,8 +3341,8 @@ final class PaneStackView: NSView {
             onPaneTabDragStarted: onPaneTabDragStarted,
             onPaneTabDragMoved: onPaneTabDragMoved,
             onPaneTabDragEnded: onPaneTabDragEnded,
-                onPaneTabDragCancelled: onPaneTabDragCancelled
-        )
+            onPaneTabDragCancelled: onPaneTabDragCancelled
+        ) : nil
         self.headerView = headerView
         paneCardView.configure(
             headerView: headerView,
@@ -2873,8 +3394,10 @@ final class PaneStackView: NSView {
         onPaneTabDragCancelled: (() -> Void)? = nil,
         onTextActivation: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
         onTextActivationHover: @escaping @MainActor (TerminalTextActivationRequest) -> Bool,
-        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
+        onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void,
+        showsHeader: Bool = true
     ) {
+        precondition(showsHeader == self.showsHeader, "PaneStackView header visibility cannot change during reconciliation.")
         self.paneStackID = paneStack.id
         let activePane = paneStack.focusedPane ?? paneStack.panes[0]
 
@@ -2912,7 +3435,7 @@ final class PaneStackView: NSView {
             )
         }
 
-        let headerView = PaneHeaderView(
+        let headerView = showsHeader ? PaneHeaderView(
             paneStack: paneStack,
             theme: theme,
             iconResolver: iconResolver,
@@ -2934,7 +3457,7 @@ final class PaneStackView: NSView {
             onPaneTabDragMoved: onPaneTabDragMoved,
             onPaneTabDragEnded: onPaneTabDragEnded,
             onPaneTabDragCancelled: onPaneTabDragCancelled
-        )
+        ) : nil
         self.headerView = headerView
         paneRenderer.updateFocusState(activePane.id == focusedPaneID)
         paneCardView.configure(
@@ -3091,7 +3614,7 @@ final class PaneCardView: NSView {
     }
 
     fileprivate func configure(
-        headerView: PaneHeaderView,
+        headerView: PaneHeaderView?,
         statusText: String?,
         paneRenderer: any WorkspacePaneRendering,
         theme: WorkspaceShellTheme,
@@ -3108,13 +3631,15 @@ final class PaneCardView: NSView {
         let paneView = paneRenderer.rootPaneView
         paneView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         paneView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        headerView.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
+        headerView?.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
         statusLabel.stringValue = statusText ?? ""
         statusLabel.textColor = theme.shell.textMuted
         statusLabel.isHidden = statusText == nil
 
-        container.addArrangedSubview(headerView)
-        headerView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        if let headerView {
+            container.addArrangedSubview(headerView)
+            headerView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        }
         if statusText != nil {
             container.addArrangedSubview(statusLabel)
             statusLabel.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true

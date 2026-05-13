@@ -464,6 +464,7 @@ struct OmuxConfigTests {
             enabled = true
             renderer = "builtin"
             theme = "dark"
+            presentation = "modal"
             """,
             to: home.appendingPathComponent("config.toml")
         )
@@ -473,6 +474,7 @@ struct OmuxConfigTests {
         #expect(result.config.plugins.markdownPreview.enabled)
         #expect(result.config.plugins.markdownPreview.renderer == "builtin")
         #expect(result.config.plugins.markdownPreview.theme == "dark")
+        #expect(result.config.plugins.markdownPreview.presentation == "modal")
     }
 
     @Test
@@ -483,6 +485,7 @@ struct OmuxConfigTests {
         #expect(result.config.plugins.markdownPreview.enabled)
         #expect(result.config.plugins.markdownPreview.renderer == "builtin")
         #expect(result.config.plugins.markdownPreview.theme == "auto")
+        #expect(result.config.plugins.markdownPreview.presentation == "pane-tab")
     }
 
     @Test
@@ -491,6 +494,7 @@ struct OmuxConfigTests {
             ("enabled = \"yes\"", "plugins.markdown-preview.enabled must be a boolean"),
             ("renderer = \"external\"", "plugins.markdown-preview.renderer must be"),
             ("theme = \"sepia\"", "plugins.markdown-preview.theme must be"),
+            ("presentation = \"floating\"", "plugins.markdown-preview.presentation must be"),
             ("unknown = true", "Unknown [plugins.markdown-preview] key"),
         ]
 
@@ -646,6 +650,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("enabled = true"))
         #expect(contents.contains("renderer = \"builtin\""))
         #expect(contents.contains("theme = \"auto\""))
+        #expect(contents.contains("presentation = \"pane-tab\""))
         #expect(contents.contains("[registries]"))
         #expect(contents.contains("hooks = [\"https://github.com/finger-gun/omux-hooks\"]"))
         #expect(contents.contains("plugins = [\"https://github.com/finger-gun/omux-plugins\"]"))

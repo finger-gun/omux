@@ -11,6 +11,7 @@ Markdown Preview is enabled by default.
 enabled = true
 renderer = "builtin"
 theme = "auto"
+presentation = "pane-tab"
 ```
 
 Set `enabled = false` to disable the `omux markdown-preview` command and Command-click Markdown path activation.
@@ -20,6 +21,7 @@ Set `enabled = false` to disable the `omux markdown-preview` command and Command
 | `enabled` | boolean | Enables the bundled preview command and terminal-path activation. Defaults to `true`. |
 | `renderer` | `"builtin"` | Selects the built-in Markdown renderer. |
 | `theme` | `"auto"` \| `"light"` \| `"dark"` | Chooses preview colors. `auto` follows the system color scheme. |
+| `presentation` | `"pane-tab"` \| `"modal"` | Chooses whether new previews open docked in the pane layout or as a floating modal. Defaults to `"pane-tab"`. |
 
 Use the interactive plugin picker to toggle it:
 
@@ -36,6 +38,18 @@ omux markdown-preview README.md --watch
 ```
 
 The command renders the file to local HTML, opens an extension pane beside the current terminal, and updates the pane when the file changes.
+
+Use `--modal` to open the preview as a floating modal instead:
+
+```sh
+omux markdown-preview README.md --watch --modal
+```
+
+Or force the docked behavior explicitly:
+
+```sh
+omux markdown-preview README.md --watch --pane-tab
+```
 
 To reuse an existing preview pane:
 
@@ -63,6 +77,8 @@ docs/getting-started.md
 ```
 
 Paths resolve relative to the terminal pane's current working directory when possible. Plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting.
+
+Once opened, previews follow normal pane presentation behavior: docked pane tabs can be popped out to modal presentation, and floating preview modals can be dragged to a workspace edge to dock them back into the pane layout.
 
 ## Rendering behavior
 

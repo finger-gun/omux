@@ -15,6 +15,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let markdownPreviewEnabled: Bool
         public let markdownPreviewRenderer: String
         public let markdownPreviewTheme: String
+        public let markdownPreviewPresentation: String
         public let hookRegistries: [String]
         public let pluginRegistries: [String]
         public let persistedScrollbackEnabled: Bool
@@ -76,6 +77,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let enabled: Bool
         public let renderer: String
         public let theme: String
+        public let presentation: String
     }
 
     public struct Registries: Codable, Equatable, Sendable {
@@ -133,6 +135,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var enabled: Bool?
         public var renderer: String?
         public var theme: String?
+        public var presentation: String?
     }
 
     public struct Registries: Codable, Equatable, Sendable {
@@ -320,7 +323,8 @@ public struct OmuxConfigEditor {
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: markdownPreviewPayload?.enabled ?? current.plugins.markdownPreview.enabled,
                     renderer: markdownPreviewPayload?.renderer ?? current.plugins.markdownPreview.renderer,
-                    theme: markdownPreviewPayload?.theme ?? current.plugins.markdownPreview.theme
+                    theme: markdownPreviewPayload?.theme ?? current.plugins.markdownPreview.theme,
+                    presentation: markdownPreviewPayload?.presentation ?? current.plugins.markdownPreview.presentation
                 )
             ),
             registries: OmuxConfigRegistries(
@@ -411,6 +415,7 @@ public struct OmuxConfigEditor {
                     "enabled": true,
                     "renderer": true,
                     "theme": true,
+                    "presentation": true,
                 ],
             ],
             "registries": [
@@ -486,6 +491,7 @@ public enum OmuxConfigRenderer {
         lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
         lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
         lines.append("theme = \(render(.string(markdownPreview.theme)))")
+        lines.append("presentation = \(render(.string(markdownPreview.presentation)))")
         lines.append("")
         lines.append("[registries]")
         lines.append("hooks = \(render(.array(config.registries.hooks.map(OmuxTOMLValue.string))))")
@@ -566,6 +572,7 @@ private extension OmuxConfigExport.Defaults {
             markdownPreviewEnabled: config.plugins.markdownPreview.enabled,
             markdownPreviewRenderer: config.plugins.markdownPreview.renderer,
             markdownPreviewTheme: config.plugins.markdownPreview.theme,
+            markdownPreviewPresentation: config.plugins.markdownPreview.presentation,
             hookRegistries: config.registries.hooks,
             pluginRegistries: config.registries.plugins,
             persistedScrollbackEnabled: config.terminal.persistedScrollback.enabled,
@@ -627,7 +634,8 @@ private extension OmuxConfigExport.Plugins {
             markdownPreview: .init(
                 enabled: config.markdownPreview.enabled,
                 renderer: config.markdownPreview.renderer,
-                theme: config.markdownPreview.theme
+                theme: config.markdownPreview.theme,
+                presentation: config.markdownPreview.presentation
             )
         )
     }

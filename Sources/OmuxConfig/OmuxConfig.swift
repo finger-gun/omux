@@ -293,15 +293,18 @@ public struct OmuxConfigPlugins: Equatable, Sendable {
         public let enabled: Bool
         public let renderer: String
         public let theme: String
+        public let presentation: String
 
         public init(
             enabled: Bool = true,
             renderer: String = "builtin",
-            theme: String = "auto"
+            theme: String = "auto",
+            presentation: String = "pane-tab"
         ) {
             self.enabled = enabled
             self.renderer = renderer
             self.theme = theme
+            self.presentation = presentation
         }
     }
 
@@ -497,6 +500,7 @@ public enum OmuxConfigTemplate {
         enabled = true
         renderer = "builtin"
         theme = "auto"
+        presentation = "pane-tab"
 
         [registries]
         hooks = ["https://github.com/finger-gun/omux-hooks"]
@@ -1339,10 +1343,11 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme"]
+        let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme", "presentation"]
         var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
         var markdownPreviewRenderer = config.plugins.markdownPreview.renderer
         var markdownPreviewTheme = config.plugins.markdownPreview.theme
+        var markdownPreviewPresentation = config.plugins.markdownPreview.presentation
         for entry in document.entries(in: "plugins.markdown-preview") {
             guard markdownPreviewAllowedKeys.contains(entry.key) else {
                 diagnostics.append(
@@ -1396,6 +1401,19 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 markdownPreviewTheme = value
+            case "presentation":
+                guard let value = entry.value.stringValue, ["pane-tab", "modal"].contains(value) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.markdown-preview.presentation must be \"pane-tab\" or \"modal\".",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                markdownPreviewPresentation = value
             default:
                 break
             }
@@ -1544,7 +1562,8 @@ public struct OmuxConfigLoader {
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: markdownPreviewEnabled,
                     renderer: markdownPreviewRenderer,
-                    theme: markdownPreviewTheme
+                    theme: markdownPreviewTheme,
+                    presentation: markdownPreviewPresentation
                 )
             ),
             registries: OmuxConfigRegistries(
