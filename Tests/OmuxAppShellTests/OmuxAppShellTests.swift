@@ -3583,7 +3583,8 @@ final class OmuxAppShellTests: XCTestCase {
         let controller = WorkspaceController(
             bridge: bridge,
             hookRunner: ExternalHookRunner(),
-            terminalStateChangeCoalescingDelay: 0.01
+            terminalStateChangeCoalescingDelay: 0.01,
+            terminalDisplayTitleUpdateMinimumInterval: 0
         )
 
         let workspace = try controller.openWorkspace(at: "/tmp")
@@ -3613,6 +3614,85 @@ final class OmuxAppShellTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertEqual(changeCount, 1)
+    }
+
+    func testTerminalTitleSpinnerFramesDoNotTriggerWorkspaceUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "initial title update delivered")
+        var changeCount = 0
+        controller.onChange = { _ in
+            changeCount += 1
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("⠋ Codex"), on: runtimeSurfaceID)
+
+        wait(for: [firstChangeDelivered], timeout: 1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "⠋ Codex")
+
+        runtime.emit(.titleChanged("⠙ Codex"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("• Codex"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "• Codex")
+    }
+
+    func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01,
+            terminalDisplayTitleUpdateMinimumInterval: 0.08
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "initial title update delivered")
+        let trailingChangeDelivered = expectation(description: "trailing title update delivered")
+        var changeCount = 0
+        controller.onChange = { _ in
+            changeCount += 1
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            } else if changeCount == 2 {
+                trailingChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("Codex reading"), on: runtimeSurfaceID)
+        wait(for: [firstChangeDelivered], timeout: 1)
+
+        runtime.emit(.titleChanged("Codex thinking"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex writing"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex writing")
+
+        wait(for: [trailingChangeDelivered], timeout: 1)
+        XCTAssertEqual(changeCount, 2)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
     }
 
     @MainActor
@@ -4776,68 +4856,6 @@ final class OmuxAppShellTests: XCTestCase {
         defer {
             service.stop()
             try? FileManager.default.removeItem(at: socketURL)
-        }
-
-        @MainActor
-        func testControlPlaneCreatesExtensionPaneModal() throws {
-            let runtime = ActionEmittingGhosttyRuntime()
-            let bridge = GhosttyTerminalBridge(runtime: runtime)
-            let controller = WorkspaceController(
-                bridge: bridge,
-                hookRunner: ExternalHookRunner(),
-                defaultWorkspaceRootPath: "/tmp"
-            )
-            let configurationCoordinator = OpenMUXConfigurationCoordinator(
-                bridge: bridge,
-                initialState: OpenMUXPreparedConfiguration(
-                    theme: .defaultTheme,
-                    defaultWorkspaceRootPath: "/tmp",
-                    keyBindingRegistry: .defaults,
-                    compiledConfigURL: nil,
-                    compiledHash: nil,
-                    diagnostics: []
-                )
-            )
-            let socketURL = URL(fileURLWithPath: "/tmp/omux-ext-modal-\(UUID().uuidString).sock")
-            let service = OpenMUXControlPlaneService(
-                controller: controller,
-                configurationCoordinator: configurationCoordinator,
-                socketPath: socketURL.path(percentEncoded: false)
-            )
-            defer {
-                service.stop()
-                try? FileManager.default.removeItem(at: socketURL)
-            }
-
-            try service.start()
-            _ = try controller.openWorkspace(at: "/tmp")
-
-            let createResponse = try requestControlMethod(
-                .createExtensionPane,
-                socketPath: socketURL.path(percentEncoded: false),
-                params: .object([
-                    "pluginID": .string("dev.fingergun.markdown-preview"),
-                    "title": .string("README.md"),
-                    "source": .string("/tmp/README.md"),
-                    "html": .string("<h1>README</h1>"),
-                    "presentation": .string("modal"),
-                ])
-            )
-
-            XCTAssertNil(createResponse.error)
-            guard case .object(let created)? = createResponse.result,
-                  case .string(let paneIDRaw)? = created["paneID"],
-                  case .string(let modalIDRaw)? = created["floatingPaneModalID"],
-                  case .string("modal")? = created["presentation"]
-            else {
-                return XCTFail("expected floating extension pane result")
-            }
-
-            let paneID = PaneID(rawValue: paneIDRaw)
-            let modalID = FloatingPaneModalID(rawValue: modalIDRaw)
-            let workspace = try XCTUnwrap(controller.activeWorkspace())
-            XCTAssertTrue(workspace.floatingPaneModals.contains(where: { $0.id == modalID }))
-            XCTAssertTrue(workspace.floatingPaneModals.contains(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) }))
         }
 
         try service.start()

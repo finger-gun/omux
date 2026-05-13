@@ -69,6 +69,10 @@ public final class WorkspaceController: @unchecked Sendable {
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
     private var pendingTerminalStateWorkspaceIDs: Set<WorkspaceID> = []
     private var terminalStateChangeUpdateScheduled = false
+    private var deliveredTerminalDisplayTitleByPane: [PaneID: String] = [:]
+    private var lastTerminalDisplayTitleUpdateByPane: [PaneID: Date] = [:]
+    private var pendingTerminalDisplayTitlePaneIDs: Set<PaneID> = []
+    private var terminalDisplayTitleUpdateScheduled = false
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var workspaceIndexByID: [WorkspaceID: Int] = [:]
     private var tabLocationByID: [TabID: (workspaceIndex: Int, tabIndex: Int)] = [:]
@@ -77,6 +81,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var lookupIndexesDirty = true
     private let progressIdleClearDelay: TimeInterval
     private let terminalStateChangeCoalescingDelay: TimeInterval
+    private let terminalDisplayTitleUpdateMinimumInterval: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
@@ -104,7 +109,8 @@ public final class WorkspaceController: @unchecked Sendable {
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
         progressIdleClearDelay: TimeInterval = 3,
-        terminalStateChangeCoalescingDelay: TimeInterval = 0.05
+        terminalStateChangeCoalescingDelay: TimeInterval = 0.05,
+        terminalDisplayTitleUpdateMinimumInterval: TimeInterval = 0.5
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
@@ -116,6 +122,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.progressIdleClearDelay = progressIdleClearDelay
         self.terminalStateChangeCoalescingDelay = terminalStateChangeCoalescingDelay
+        self.terminalDisplayTitleUpdateMinimumInterval = terminalDisplayTitleUpdateMinimumInterval
         _ = terminalActionCoordinator
     }
 
@@ -2922,6 +2929,7 @@ public final class WorkspaceController: @unchecked Sendable {
     func applyTerminalActionState(_ event: TerminalActionEvent) -> ControlPlaneTerminalContext? {
         var updatedWorkspace: Workspace?
         var context: ControlPlaneTerminalContext?
+        var shouldScheduleTrailingTitleUpdate = false
 
         lock.lock()
         guard let location = paneLocationLocked(for: event.paneID),
@@ -2961,19 +2969,32 @@ public final class WorkspaceController: @unchecked Sendable {
                 updatedWorkspace = workspaces[workspaceIndex]
             }
         case .titleChanged(let title):
-            var didChange = false
+            var shouldUpdateWorkspace = false
+            let displayTitle = Self.displayTitle(forReportedTerminalTitle: title)
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                 if pane.terminalState.reportedTitle != title {
                     pane.terminalState.reportedTitle = title
-                    didChange = true
                 }
-                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil,
-                   pane.title != title {
-                    pane.title = title
-                    didChange = true
+                guard let displayTitle,
+                      deliveredTerminalDisplayTitleByPane[event.paneID] != displayTitle
+                else {
+                    return
+                }
+
+                if shouldApplyTerminalDisplayTitleUpdateLocked(for: event.paneID, at: Date()) {
+                    deliveredTerminalDisplayTitleByPane[event.paneID] = displayTitle
+                    lastTerminalDisplayTitleUpdateByPane[event.paneID] = Date()
+                    if WorkspaceIconResolver.terminalApplicationIcon(forTitle: displayTitle) == nil,
+                       pane.title != displayTitle {
+                        pane.title = displayTitle
+                    }
+                    shouldUpdateWorkspace = true
+                } else {
+                    pendingTerminalDisplayTitlePaneIDs.insert(event.paneID)
+                    shouldScheduleTrailingTitleUpdate = true
                 }
             }
-            if didChange {
+            if shouldUpdateWorkspace {
                 updatedWorkspace = workspaces[workspaceIndex]
             }
         case .tabTitleChanged(let title):
@@ -3044,6 +3065,9 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         lock.unlock()
+        if shouldScheduleTrailingTitleUpdate {
+            scheduleTerminalDisplayTitleUpdate()
+        }
         if let updatedWorkspace {
             scheduleTerminalStateChangeUpdate(for: updatedWorkspace.id)
         }
@@ -3063,6 +3087,78 @@ public final class WorkspaceController: @unchecked Sendable {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.flushTerminalStateChangeUpdates()
+        }
+    }
+
+    private static func displayTitle(forReportedTerminalTitle title: String) -> String? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedTitle.isEmpty == false else {
+            return nil
+        }
+
+        let strippedTitle = String(trimmedTitle.drop { character in
+            character.isWhitespace || character.isTerminalTitleSpinnerGlyph
+        })
+        let displayTitle = strippedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return displayTitle.isEmpty ? trimmedTitle : displayTitle
+    }
+
+    private func shouldApplyTerminalDisplayTitleUpdateLocked(for paneID: PaneID, at date: Date) -> Bool {
+        guard let lastUpdate = lastTerminalDisplayTitleUpdateByPane[paneID] else {
+            return true
+        }
+
+        return date.timeIntervalSince(lastUpdate) >= terminalDisplayTitleUpdateMinimumInterval
+    }
+
+    private func scheduleTerminalDisplayTitleUpdate() {
+        lock.lock()
+        guard terminalDisplayTitleUpdateScheduled == false else {
+            lock.unlock()
+            return
+        }
+        terminalDisplayTitleUpdateScheduled = true
+        let delay = terminalDisplayTitleUpdateMinimumInterval
+        lock.unlock()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.flushTerminalDisplayTitleUpdates()
+        }
+    }
+
+    private func flushTerminalDisplayTitleUpdates() {
+        var updatedWorkspaceIDs = Set<WorkspaceID>()
+        let now = Date()
+
+        lock.lock()
+        let paneIDs = pendingTerminalDisplayTitlePaneIDs
+        pendingTerminalDisplayTitlePaneIDs.removeAll()
+        terminalDisplayTitleUpdateScheduled = false
+
+        for paneID in paneIDs {
+            guard let location = paneLocationLocked(for: paneID),
+                  let resolved = workspacePaneLocked(at: location),
+                  let reportedTitle = resolved.pane.terminalState.reportedTitle,
+                  let displayTitle = Self.displayTitle(forReportedTerminalTitle: reportedTitle),
+                  deliveredTerminalDisplayTitleByPane[paneID] != displayTitle
+            else {
+                continue
+            }
+
+            deliveredTerminalDisplayTitleByPane[paneID] = displayTitle
+            lastTerminalDisplayTitleUpdateByPane[paneID] = now
+            _ = workspaces[location.workspaceIndex].updatePane(paneID) { pane in
+                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: displayTitle) == nil,
+                   pane.title != displayTitle {
+                    pane.title = displayTitle
+                }
+            }
+            updatedWorkspaceIDs.insert(workspaces[location.workspaceIndex].id)
+        }
+        lock.unlock()
+
+        for workspaceID in updatedWorkspaceIDs {
+            scheduleTerminalStateChangeUpdate(for: workspaceID)
         }
     }
 
@@ -3639,5 +3735,29 @@ private extension PaneHistoryTarget {
             truncated: truncated,
             unavailable: unavailable
         )
+    }
+}
+
+private extension Character {
+    var isTerminalTitleSpinnerGlyph: Bool {
+        guard unicodeScalars.count == 1,
+              let scalar = unicodeScalars.first
+        else {
+            return false
+        }
+
+        if (0x2800...0x28FF).contains(Int(scalar.value)) {
+            return true
+        }
+
+        switch scalar {
+        case "•", "●", "◦", "○",
+             "◐", "◓", "◑", "◒",
+             "◜", "◠", "◝", "◞", "◡", "◟",
+             "⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈":
+            return true
+        default:
+            return false
+        }
     }
 }
