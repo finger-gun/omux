@@ -3670,8 +3670,12 @@ final class OmuxAppShellTests: XCTestCase {
         let firstChangeDelivered = expectation(description: "initial title update delivered")
         let trailingChangeDelivered = expectation(description: "trailing title update delivered")
         var changeCount = 0
-        controller.onChange = { _ in
+        var deliveredTitles: [String?] = []
+        var deliveredAt: [Date] = []
+        controller.onChange = { workspace in
             changeCount += 1
+            deliveredTitles.append(workspace.focusedPane?.title)
+            deliveredAt.append(Date())
             if changeCount == 1 {
                 firstChangeDelivered.fulfill()
             } else if changeCount == 2 {
@@ -3684,15 +3688,13 @@ final class OmuxAppShellTests: XCTestCase {
 
         runtime.emit(.titleChanged("Codex thinking"), on: runtimeSurfaceID)
         runtime.emit(.titleChanged("Codex writing"), on: runtimeSurfaceID)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
-
-        XCTAssertEqual(changeCount, 1)
-        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex writing")
 
         wait(for: [trailingChangeDelivered], timeout: 1)
         XCTAssertEqual(changeCount, 2)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
+        XCTAssertEqual(deliveredTitles, ["Codex reading", "Codex writing"])
+        XCTAssertGreaterThanOrEqual(deliveredAt[1].timeIntervalSince(deliveredAt[0]), 0.07)
     }
 
     @MainActor
