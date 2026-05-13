@@ -101,8 +101,13 @@ final class WorkspaceWindowController: NSWindowController {
 
     func update(workspace: Workspace) {
         let displayedWorkspace = controller.activeWorkspace() ?? workspace
+        do {
+            _ = try controller.ensureVisibleTerminalSurfaces(for: displayedWorkspace.id)
+        } catch {
+            fputs("warning: failed to ensure visible terminal surfaces: \(error)\n", stderr)
+        }
         window?.title = displayedWorkspace.name
-        rootViewController.update(workspace: displayedWorkspace)
+        rootViewController.update(workspace: controller.activeWorkspace() ?? displayedWorkspace)
     }
 
     func updateTheme(_ theme: WorkspaceShellTheme) {

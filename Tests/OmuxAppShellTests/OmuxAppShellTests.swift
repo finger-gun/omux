@@ -2453,6 +2453,76 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(wrapperScript.contains("export ZDOTDIR=\"$GHOSTTY_RESOURCES_DIR/shell-integration/zsh\""))
     }
 
+    func testWorkspaceRestoreDefersHiddenTabTerminalSurfaceUntilVisible() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/hidden")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab, visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+
+        XCTAssertNotNil(bridge.surface(for: visiblePane.id))
+        XCTAssertNotNil(runtime.session(for: "action:\(visiblePane.id.rawValue)"))
+        XCTAssertNil(bridge.surface(for: hiddenPane.id))
+
+        _ = controller.focus(tabID: hiddenTab.id)
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspace.id)
+
+        XCTAssertNotNil(bridge.surface(for: hiddenPane.id))
+        XCTAssertNotNil(runtime.session(for: "action:\(hiddenPane.id.rawValue)"))
+    }
+
+    func testControlPlaneActionStartsLazyRestoredPaneBeforeSendingInput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/hidden")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab, visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        XCTAssertNil(bridge.surface(for: hiddenPane.id))
+
+        _ = try XCTUnwrap(controller.sendText(target: .pane(hiddenPane.id), text: "echo lazy\n"))
+
+        XCTAssertNotNil(bridge.surface(for: hiddenPane.id))
+        XCTAssertEqual(runtime.currentInputText(), "echo lazy\n")
+    }
+
     func testWorkspaceRestoreSkipsReplayWrapperWhenPersistedScrollbackIsDisabled() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceReplayTests-\(UUID().uuidString)", isDirectory: true)

@@ -323,21 +323,20 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
+        let restoredActiveWorkspaceID = snapshot.activeWorkspaceID.flatMap { activeID in
+            restoredWorkspaces.contains(where: { $0.id == activeID }) ? activeID : nil
+        } ?? restoredWorkspaces.first?.id
+
         let existingPaneIDs = allWorkspaces().flatMap(\.panes).map(\.id)
         for paneID in existingPaneIDs {
             try? bridge.teardown(paneID: paneID)
         }
 
-        for workspace in restoredWorkspaces {
-            for pane in workspace.panes where pane.isTerminal {
-                _ = try bridge.createSurface(for: pane)
-                _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
-            }
+        if let restoredActiveWorkspace = restoredActiveWorkspaceID.flatMap({ activeID in
+            restoredWorkspaces.first(where: { $0.id == activeID })
+        }) {
+            try ensureTerminalSurfaces(for: Self.visibleTerminalPanes(in: restoredActiveWorkspace))
         }
-
-        let restoredActiveWorkspaceID = snapshot.activeWorkspaceID.flatMap { activeID in
-            restoredWorkspaces.contains(where: { $0.id == activeID }) ? activeID : nil
-        } ?? restoredWorkspaces.first?.id
 
         lock.lock()
         workspaces = restoredWorkspaces
@@ -355,6 +354,20 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return updatedWorkspace
+    }
+
+    @discardableResult
+    public func ensureVisibleTerminalSurfaces(for workspaceID: WorkspaceID) throws -> Workspace? {
+        lock.lock()
+        guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
+            lock.unlock()
+            return nil
+        }
+        let visiblePanes = Self.visibleTerminalPanes(in: workspace)
+        lock.unlock()
+
+        try ensureTerminalSurfaces(for: visiblePanes)
+        return workspace
     }
 
     private func launchSession(forRestoredPane pane: Pane) -> SessionDescriptor {
@@ -377,6 +390,45 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return launch.session
+    }
+
+    private func ensureTerminalSurfaces(for panes: [Pane]) throws {
+        for pane in panes {
+            try ensureTerminalSurface(for: pane)
+        }
+    }
+
+    @discardableResult
+    private func ensureTerminalSurface(for pane: Pane) throws -> Bool {
+        guard pane.isTerminal else {
+            return false
+        }
+        guard bridge.surface(for: pane.id) == nil else {
+            return false
+        }
+
+        _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
+        return true
+    }
+
+    @discardableResult
+    private func ensureTerminalSurface(for paneID: PaneID) throws -> Bool {
+        lock.lock()
+        guard let location = paneLocationLocked(for: paneID),
+              let pane = workspacePaneLocked(at: location)?.pane
+        else {
+            lock.unlock()
+            return false
+        }
+        lock.unlock()
+
+        return try ensureTerminalSurface(for: pane)
+    }
+
+    private static func visibleTerminalPanes(in workspace: Workspace) -> [Pane] {
+        let focusedTabPanes = (workspace.focusedTab ?? workspace.tabs.first)?.panes ?? []
+        let floatingPanes = workspace.floatingPaneModals.flatMap(\.panes)
+        return (focusedTabPanes + floatingPanes).filter(\.isTerminal)
     }
 
     private func currentPersistedScrollback() -> OmuxConfigTerminal.PersistedScrollback {
@@ -1734,6 +1786,7 @@ public final class WorkspaceController: @unchecked Sendable {
         guard let context = resolveTerminalTarget(target) else {
             return nil
         }
+        try ensureTerminalSurface(for: context.paneID)
 
         let cwd = workingDirectory(for: context.paneID)
         let payload: OmuxValue = .object([
@@ -1796,6 +1849,7 @@ public final class WorkspaceController: @unchecked Sendable {
         guard let context = resolveTerminalTarget(target) else {
             return nil
         }
+        try ensureTerminalSurface(for: context.paneID)
 
         try bridge.send(text: text, toPane: context.paneID)
         emitInputSent(
@@ -1888,14 +1942,17 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     public func handleInput(_ event: NormalizedKeyEvent, in paneID: PaneID) throws {
+        try ensureTerminalSurface(for: paneID)
         try bridge.handle(event, inPane: paneID)
     }
 
     public func paste(_ text: String, in paneID: PaneID) throws {
+        try ensureTerminalSurface(for: paneID)
         try bridge.send(text: text, toPane: paneID)
     }
 
     public func resize(paneID: PaneID, columns: Int, rows: Int) throws {
+        try ensureTerminalSurface(for: paneID)
         try bridge.resize(paneID: paneID, columns: columns, rows: rows)
     }
 
