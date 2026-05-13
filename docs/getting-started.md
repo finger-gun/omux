@@ -99,6 +99,8 @@ omux send-text --focused -- "echo ready"
 
 Use `run` when you want OpenMUX to submit a command. Use `send-text` when you only want to insert text without pressing Return.
 
+Use `Cmd+F` or **Edit -> Find in Pane...** to search the focused terminal pane's scrollback. Search follows focus: if the find bar is open and you focus another pane, OpenMUX applies the same query to that newly focused pane instead of searching every pane at once.
+
 In the app UI, pane tabs can be dragged:
 - drop on another stack header to merge into that stack
 - drop on the same stack header to reorder tabs in-place
@@ -146,6 +148,7 @@ default_root_path = "~"
 
 [keys]
 "cmd+shift+w" = "pane.remove"
+"cmd+f" = "pane.find"
 "cmd+t" = "pane-tab.create"
 "cmd+w" = "pane-tab.close"
 "ctrl+tab" = "pane-tab.next"

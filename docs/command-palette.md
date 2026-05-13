@@ -102,7 +102,7 @@ action-<verb>-<noun>.json   # for key-binding actions
 workspace.create         workspace.close
 workspace.move-up        workspace.move-down
 pane.split-right         pane.split-down
-pane.remove              pane.next        pane.previous
+pane.remove              pane.find        pane.next        pane.previous
 pane.resize-up           pane.resize-down pane.resize-left pane.resize-right
 pane.resize-equalize     sidebar.toggle
 pane-tab.create          pane-tab.close

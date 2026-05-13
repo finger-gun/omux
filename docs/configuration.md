@@ -82,6 +82,7 @@ plugins = ["https://github.com/finger-gun/omux-plugins"]
 "cmd+d" = "pane.split-right"
 "cmd+shift+d" = "pane.split-down"
 "cmd+shift+w" = "pane.remove"
+"cmd+f" = "pane.find"
 "ctrl+shift+tab" = "pane.next"
 "cmd+ctrl+=" = "pane.resize-equalize"
 "cmd+ctrl+up" = "pane.resize-up"
