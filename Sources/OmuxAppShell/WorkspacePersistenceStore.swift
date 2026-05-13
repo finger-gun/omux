@@ -270,7 +270,23 @@ final class WorkspaceScrollbackPayloadStore {
             customName: workspace.customName,
             rootPath: workspace.rootPath,
             tabs: workspace.tabs.map { persistPayloads(in: $0, workspaceID: workspace.id) },
-            focusedTabID: workspace.focusedTabID
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map {
+                persistPayloads(in: $0, workspaceID: workspace.id)
+            },
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
+        )
+    }
+
+    private func persistPayloads(in modal: FloatingPaneModal, workspaceID: WorkspaceID) -> FloatingPaneModal {
+        FloatingPaneModal(
+            id: modal.id,
+            paneStack: PaneStack(
+                id: modal.paneStack.id,
+                panes: modal.paneStack.panes.map { persistPayloads(in: $0, workspaceID: workspaceID) },
+                focusedPaneID: modal.paneStack.focusedPaneID
+            ),
+            frame: modal.frame
         )
     }
 
@@ -312,7 +328,21 @@ final class WorkspaceScrollbackPayloadStore {
             customName: workspace.customName,
             rootPath: workspace.rootPath,
             tabs: workspace.tabs.map(resolvePayloads(in:)),
-            focusedTabID: workspace.focusedTabID
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map(resolvePayloads(in:)),
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
+        )
+    }
+
+    private func resolvePayloads(in modal: FloatingPaneModal) -> FloatingPaneModal {
+        FloatingPaneModal(
+            id: modal.id,
+            paneStack: PaneStack(
+                id: modal.paneStack.id,
+                panes: modal.paneStack.panes.map(resolvePayloads(in:)),
+                focusedPaneID: modal.paneStack.focusedPaneID
+            ),
+            frame: modal.frame
         )
     }
 
@@ -408,11 +438,9 @@ final class WorkspaceScrollbackPayloadStore {
     private func referencedPayloadIdentifiers(in snapshot: WorkspacePersistenceSnapshot) -> Set<String> {
         var identifiers = Set<String>()
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                for pane in tab.panes {
-                    if let storageIdentifier = pane.terminalState.restoredScrollback?.storageIdentifier {
-                        identifiers.insert(storageIdentifier)
-                    }
+            for pane in workspace.panes {
+                if let storageIdentifier = pane.terminalState.restoredScrollback?.storageIdentifier {
+                    identifiers.insert(storageIdentifier)
                 }
             }
         }
