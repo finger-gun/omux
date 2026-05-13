@@ -2789,6 +2789,32 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowCachesTerminalSnapshotsAcrossInitialRender() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let workspaceRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        let workspace = try controller.openWorkspace(at: workspaceRoot.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.transcript = "vim - Vi IMproved"
+
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(surfaceID, "action:\(pane.id.rawValue)")
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, 1)
+    }
+
+    @MainActor
     func testWorkspaceRowContextMenuIncludesResetOnlyForCustomNames() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),

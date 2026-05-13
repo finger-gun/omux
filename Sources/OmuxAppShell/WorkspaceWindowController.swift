@@ -137,6 +137,24 @@ final class WorkspaceWindowController: NSWindowController {
 
 @MainActor
 final class WorkspaceShellViewController: NSViewController {
+    private enum CachedTerminalText {
+        case loaded(String?)
+    }
+
+    private final class TerminalTextRenderCache {
+        private var cachedTextByPaneID: [PaneID: CachedTerminalText] = [:]
+
+        func text(for pane: Pane, load: () -> String?) -> String? {
+            if case .loaded(let text)? = cachedTextByPaneID[pane.id] {
+                return text
+            }
+
+            let text = load()
+            cachedTextByPaneID[pane.id] = .loaded(text)
+            return text
+        }
+    }
+
     private let controller: WorkspaceController
     private let metadataResolver = TerminalSidebarMetadataResolver()
     private let iconResolver = WorkspaceIconResolver()
@@ -263,11 +281,17 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard windowIsKey == false else {
+            return
+        }
         windowIsKey = true
         if let workspace = currentWorkspace { update(workspace: workspace) }
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
+        guard windowIsKey else {
+            return
+        }
         windowIsKey = false
         if let workspace = currentWorkspace { update(workspace: workspace) }
     }
@@ -290,10 +314,20 @@ final class WorkspaceShellViewController: NSViewController {
         }
         currentWorkspace = workspace
         apply(theme: currentTheme)
+        let terminalTextCache = TerminalTextRenderCache()
+        let terminalTextProvider: @MainActor (Pane) -> String? = { [weak self] pane in
+            guard let self else {
+                return nil
+            }
+            return terminalTextCache.text(for: pane) {
+                self.terminalScreenText(for: pane)
+            }
+        }
 
         let workspaceItems = makeWorkspaceSidebarItems(
             workspaces: allWorkspaces,
-            activeWorkspace: workspace
+            activeWorkspace: workspace,
+            terminalTextProvider: terminalTextProvider
         )
         sidebarView.render(
             workspaceItems: workspaceItems,
@@ -345,7 +379,8 @@ final class WorkspaceShellViewController: NSViewController {
                focusedPaneID: focusedTab.focusedPaneID,
                windowIsKey: windowIsKey,
                inactiveOpacity: currentPanes.inactiveOpacity,
-               canCloseSinglePaneStack: focusedTab.panes.count > 1 || workspace.tabs.count > 1
+               canCloseSinglePaneStack: focusedTab.panes.count > 1 || workspace.tabs.count > 1,
+               terminalTextProvider: terminalTextProvider
            ),
            reconciliation.success {
             layout = nil
@@ -359,7 +394,8 @@ final class WorkspaceShellViewController: NSViewController {
                     focusedPaneID: $0.focusedPaneID,
                     windowIsKey: windowIsKey,
                     inactiveOpacity: currentPanes.inactiveOpacity,
-                    canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1
+                    canCloseSinglePaneStack: $0.panes.count > 1 || workspace.tabs.count > 1,
+                    terminalTextProvider: terminalTextProvider
                 )
             }
             canvasView.render(layoutView: layout?.view, theme: currentTheme)
@@ -367,9 +403,15 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         logReconciliationMetricsIfNeeded(reconciliationMetrics)
-        renderedIconKindByPaneID = iconKindSignature(for: workspace)
+        renderedIconKindByPaneID = iconKindSignature(
+            for: workspace,
+            terminalTextProvider: terminalTextProvider
+        )
 
-        let floatingFocusedPaneView = renderFloatingPaneModals(workspace: workspace)
+        let floatingFocusedPaneView = renderFloatingPaneModals(
+            workspace: workspace,
+            terminalTextProvider: terminalTextProvider
+        )
         let focusedPaneView = floatingFocusedPaneView ?? reconciledFocusedPaneView ?? layout?.focusedPaneView
         if shouldRestoreFocus, let focusedPaneView {
             focusRestoreGeneration &+= 1
@@ -510,18 +552,9 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func makeWorkspaceSidebarItems(
         workspaces: [Workspace],
-        activeWorkspace: Workspace
+        activeWorkspace: Workspace,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?
     ) -> [SidebarItem] {
-        var terminalTextByPaneID: [PaneID: String?] = [:]
-        let terminalText: (Pane) -> String? = { [weak self] pane in
-            if let cached = terminalTextByPaneID[pane.id] {
-                return cached
-            }
-            let text = self?.terminalScreenText(for: pane)
-            terminalTextByPaneID[pane.id] = text
-            return text
-        }
-
         return workspaces.flatMap { workspace in
             let panes = workspace.tabs.flatMap(\.panes)
             let isExpanded = collapsedWorkspaceIDs.contains(workspace.id) == false
@@ -532,7 +565,7 @@ final class WorkspaceShellViewController: NSViewController {
                     for: iconResolver.icon(
                         for: panes,
                         focusedPaneID: workspace.focusedPane?.id,
-                        terminalText: terminalText
+                        terminalText: terminalTextProvider
                     ),
                     pointSize: 13,
                     weight: .semibold
@@ -552,7 +585,7 @@ final class WorkspaceShellViewController: NSViewController {
             let terminalItems = isExpanded ? workspace.tabs
                 .flatMap { tab in
                     tab.panes.map { pane -> SidebarItem in
-                        let paneIcon = iconResolver.icon(for: pane, terminalText: terminalText(pane))
+                        let paneIcon = iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))
                         let metadata = metadataResolver.metadata(for: pane, icon: paneIcon)
                         let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
                         return SidebarItem(
@@ -594,6 +627,9 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func terminalScreenText(for pane: Pane) -> String? {
+        guard pane.isTerminal else {
+            return nil
+        }
         let snapshot = controller.terminalBridge.terminalTextSnapshot(
             for: pane.id,
             maxBytes: 4_096,
@@ -602,14 +638,17 @@ final class WorkspaceShellViewController: NSViewController {
         return snapshot.text.isEmpty ? nil : snapshot.text
     }
 
-    private func iconKindSignature(for workspace: Workspace) -> [PaneID: OmuxSemanticIcon.Kind] {
+    private func iconKindSignature(
+        for workspace: Workspace,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?
+    ) -> [PaneID: OmuxSemanticIcon.Kind] {
         Dictionary(
             uniqueKeysWithValues: workspace.tabs
                 .flatMap(\.panes)
                 .map { pane in
                     (
                         pane.id,
-                        iconResolver.icon(for: pane, terminalText: terminalScreenText(for: pane)).kind
+                        iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane)).kind
                     )
                 }
         )
@@ -629,7 +668,19 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
 
-        let currentSignature = iconKindSignature(for: currentWorkspace)
+        let terminalTextCache = TerminalTextRenderCache()
+        let terminalTextProvider: @MainActor (Pane) -> String? = { [weak self] pane in
+            guard let self else {
+                return nil
+            }
+            return terminalTextCache.text(for: pane) {
+                self.terminalScreenText(for: pane)
+            }
+        }
+        let currentSignature = iconKindSignature(
+            for: currentWorkspace,
+            terminalTextProvider: terminalTextProvider
+        )
         guard currentSignature != renderedIconKindByPaneID else {
             return
         }
@@ -949,7 +1000,8 @@ final class WorkspaceShellViewController: NSViewController {
         focusedPaneID: PaneID,
         windowIsKey: Bool,
         inactiveOpacity: Double,
-        canCloseSinglePaneStack: Bool
+        canCloseSinglePaneStack: Bool,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?
     ) -> (success: Bool, focusedPaneView: NSView?, reusedPaneStackViews: Int)? {
         switch node {
         case .paneStack(let paneStack):
@@ -965,6 +1017,7 @@ final class WorkspaceShellViewController: NSViewController {
                 theme: currentTheme,
                 iconResolver: iconResolver,
                 iconConfiguration: currentIcons,
+                terminalTextProvider: terminalTextProvider,
                 onSelectPaneTab: { [weak self] paneID in
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
@@ -1036,7 +1089,8 @@ final class WorkspaceShellViewController: NSViewController {
                     focusedPaneID: focusedPaneID,
                     windowIsKey: windowIsKey,
                     inactiveOpacity: inactiveOpacity,
-                    canCloseSinglePaneStack: canCloseSinglePaneStack
+                    canCloseSinglePaneStack: canCloseSinglePaneStack,
+                    terminalTextProvider: terminalTextProvider
                 ) else {
                     return nil
                 }
@@ -1062,7 +1116,8 @@ final class WorkspaceShellViewController: NSViewController {
         focusedPaneID: PaneID,
         windowIsKey: Bool,
         inactiveOpacity: Double,
-        canCloseSinglePaneStack: Bool
+        canCloseSinglePaneStack: Bool,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?
     ) -> (view: NSView, focusedPaneView: NSView?, representativePaneID: PaneID?) {
         switch node {
         case .paneStack(let paneStack):
@@ -1075,6 +1130,7 @@ final class WorkspaceShellViewController: NSViewController {
                 theme: currentTheme,
                 iconResolver: iconResolver,
                 iconConfiguration: currentIcons,
+                terminalTextProvider: terminalTextProvider,
                 onSelectPaneTab: { [weak self] paneID in
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
@@ -1138,7 +1194,8 @@ final class WorkspaceShellViewController: NSViewController {
                     focusedPaneID: focusedPaneID,
                     windowIsKey: windowIsKey,
                     inactiveOpacity: inactiveOpacity,
-                    canCloseSinglePaneStack: canCloseSinglePaneStack
+                    canCloseSinglePaneStack: canCloseSinglePaneStack,
+                    terminalTextProvider: terminalTextProvider
                 )
                 if focusedPaneView == nil {
                     focusedPaneView = childLayout.focusedPaneView
@@ -1166,7 +1223,10 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
-    private func renderFloatingPaneModals(workspace: Workspace) -> NSView? {
+    private func renderFloatingPaneModals(
+        workspace: Workspace,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?
+    ) -> NSView? {
         let orderedModals = workspace.floatingPaneModals.sorted { lhs, rhs in
             if workspace.focusedFloatingPaneModalID == lhs.id { return false }
             if workspace.focusedFloatingPaneModalID == rhs.id { return true }
@@ -1184,6 +1244,7 @@ final class WorkspaceShellViewController: NSViewController {
                 theme: currentTheme,
                 iconResolver: iconResolver,
                 iconConfiguration: currentIcons,
+                terminalTextProvider: terminalTextProvider,
                 onSelectPaneTab: { [weak self] paneID in
                     _ = self?.controller.focusPaneTab(paneID: paneID)
                 },
@@ -3275,6 +3336,7 @@ final class PaneStackView: NSView {
         theme: WorkspaceShellTheme,
         iconResolver: WorkspaceIconResolver,
         iconConfiguration: OmuxConfigUI.Icons,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         canCloseSinglePaneStack: Bool,
@@ -3325,13 +3387,7 @@ final class PaneStackView: NSView {
             theme: theme,
             iconResolver: iconResolver,
             iconConfiguration: iconConfiguration,
-            terminalTextProvider: { pane in
-                guard pane.isTerminal else {
-                    return nil
-                }
-                let snapshot = bridge.terminalTextSnapshot(for: pane.id, maxBytes: 4_096, maxLines: 40)
-                return snapshot.text.isEmpty ? nil : snapshot.text
-            },
+            terminalTextProvider: terminalTextProvider,
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
             canCloseSinglePaneStack: canCloseSinglePaneStack,
@@ -3381,6 +3437,7 @@ final class PaneStackView: NSView {
         theme: WorkspaceShellTheme,
         iconResolver: WorkspaceIconResolver,
         iconConfiguration: OmuxConfigUI.Icons,
+        terminalTextProvider: @escaping @MainActor (Pane) -> String?,
         onSelectPaneTab: @escaping @MainActor (PaneID) -> Void,
         onCreatePaneTab: @escaping @MainActor () throws -> Void,
         canCloseSinglePaneStack: Bool,
@@ -3440,13 +3497,7 @@ final class PaneStackView: NSView {
             theme: theme,
             iconResolver: iconResolver,
             iconConfiguration: iconConfiguration,
-            terminalTextProvider: { pane in
-                guard pane.isTerminal else {
-                    return nil
-                }
-                let snapshot = bridge.terminalTextSnapshot(for: pane.id, maxBytes: 4_096, maxLines: 40)
-                return snapshot.text.isEmpty ? nil : snapshot.text
-            },
+            terminalTextProvider: terminalTextProvider,
             onSelectPaneTab: onSelectPaneTab,
             onCreatePaneTab: onCreatePaneTab,
             canCloseSinglePaneStack: canCloseSinglePaneStack,
