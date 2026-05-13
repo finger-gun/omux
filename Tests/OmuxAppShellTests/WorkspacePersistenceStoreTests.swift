@@ -147,6 +147,61 @@ final class WorkspacePersistenceStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
     }
 
+    func testWorkspacePersistenceStorePreservesFloatingPaneModalsWhenPersistingScrollbackPayloads() throws {
+        let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspacePersistenceStoreTests-\(UUID().uuidString)", isDirectory: true)
+        let stateFileURL = root
+            .appendingPathComponent("WorkspaceState", isDirectory: true)
+            .appendingPathComponent("current.json", isDirectory: false)
+        let scrollbackDirectory = root.appendingPathComponent("Scrollback", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let store = WorkspacePersistenceStore(
+            defaults: defaults,
+            stateFileURL: stateFileURL,
+            scrollbackPayloadStore: WorkspaceScrollbackPayloadStore(directoryURL: scrollbackDirectory)
+        )
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let dockedPane = Pane(title: "main", session: session)
+        let tab = Tab(title: "Main", panes: [dockedPane], focusedPaneID: dockedPane.id)
+        let modalScrollback = PaneScrollbackSnapshot(text: "modal output", truncated: false)
+        let modalPane = Pane(
+            title: "modal",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: modalScrollback)
+        )
+        let modal = FloatingPaneModal(
+            paneStack: PaneStack(panes: [modalPane], focusedPaneID: modalPane.id),
+            frame: FloatingPaneModalFrame(x: 48, y: 64, width: 680, height: 480)
+        )
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [tab],
+            focusedTabID: tab.id,
+            floatingPaneModals: [modal],
+            focusedFloatingPaneModalID: modal.id
+        )
+        let snapshot = WorkspacePersistenceSnapshot(workspaces: [workspace], activeWorkspaceID: workspace.id)
+
+        store.save(snapshot)
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.activeWorkspaceID, snapshot.activeWorkspaceID)
+        XCTAssertEqual(loaded.workspaces.first?.floatingPaneModals.first?.id, modal.id)
+        XCTAssertEqual(loaded.workspaces.first?.focusedFloatingPaneModalID, modal.id)
+        XCTAssertEqual(
+            loaded.workspaces.first?.floatingPaneModals.first?.paneStack.panes.first?.terminalState.restoredScrollback?.text,
+            modalScrollback.text
+        )
+    }
+
     func testWorkspacePersistenceStoreMigratesDefaultsSnapshotToFileBackedState() throws {
         let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

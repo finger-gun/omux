@@ -123,12 +123,11 @@ Identity-preserving movement matches recent pane-tab drag behavior and keeps mod
 3. Extend extension-pane control-plane contracts with explicit presentation metadata.
 4. Add Markdown preview configuration for pane-tab versus modal opening and wire preview creation through the new presentation contract.
 5. Extend pane-tab drag handling with tear-out and dock-in paths for eligible content.
-6. Persist floating modal presentation with workspace state when appropriate and keep fallback behavior explicit if a plugin is disabled on restore.
+6. Persist floating modal presentation with workspace state in the same rollout as modal interaction support, and keep fallback behavior explicit if a plugin is disabled on restore.
 
 Rollback strategy: if modal presentation causes regressions, docked pane behavior remains the stable baseline because pane content and renderers are unchanged; floating presentation can be disabled without removing extension panes entirely.
 
 ## Open Questions
 
 - Should initial drag-out support be limited to extension panes, or should terminal pane tabs be allowed to float in the same first implementation?
-- Should floating modals restore across app restart immediately, or should persistence land after modal interaction stabilizes?
 - What is the smallest inspectable control-plane shape for modal geometry and placement without overdesigning window-management concerns?

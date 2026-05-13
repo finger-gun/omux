@@ -467,6 +467,9 @@ public struct OmuxMarkdownPreviewPlugin {
             "html": .string(html),
             "presentation": request.presentationStyle.map { .string($0.rawValue) } ?? .null,
         ]
+        if let presentation = request.presentationStyle.map({ RPCValue.string($0.rawValue) }) {
+            params["presentation"] = presentation
+        }
         if let message {
             params["message"] = .string(message)
         }

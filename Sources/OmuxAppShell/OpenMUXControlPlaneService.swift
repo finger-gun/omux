@@ -699,14 +699,32 @@ private extension Workspace {
                     "workingDirectory": .string(session.workingDirectory),
                     "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
                     "progress": pane.terminalState.progress.rpcValue,
-                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                    "focused": .bool(focusedFloatingPaneModalID == nil && focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                ]
+            }
+        } + floatingPaneModals.flatMap { modal in
+            modal.paneStack.panes.compactMap { pane in
+                guard let session = pane.terminalSession else {
+                    return nil
+                }
+                return [
+                    "workspaceID": .string(id.rawValue),
+                    "tabID": .null,
+                    "paneStackID": .string(modal.paneStack.id.rawValue),
+                    "floatingPaneModalID": .string(modal.id.rawValue),
+                    "paneID": .string(pane.id.rawValue),
+                    "sessionID": .string(session.id.rawValue),
+                    "workingDirectory": .string(session.workingDirectory),
+                    "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+                    "progress": pane.terminalState.progress.rpcValue,
+                    "focused": .bool(focusedFloatingPaneModalID == modal.id && modal.paneStack.focusedPaneID == pane.id),
                 ]
             }
         }
     }
 
     var paneRPCObjects: [[String: RPCValue]] {
-        tabs.flatMap { tab in
+        let dockedPanes: [[String: RPCValue]] = tabs.flatMap { tab in
             tab.panes.map { pane in
                 [
                     "workspaceID": .string(id.rawValue),
@@ -720,10 +738,11 @@ private extension Workspace {
                     "presentation": pane.extensionPane.map { .string($0.presentationStyle.rawValue) } ?? .null,
                     "title": .string(pane.title),
                     "progress": pane.terminalState.progress.rpcValue,
-                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                    "focused": .bool(focusedFloatingPaneModalID == nil && focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
             }
-        } + floatingPaneModals.flatMap { modal in
+        }
+        let floatingPanes: [[String: RPCValue]] = floatingPaneModals.flatMap { modal in
             modal.panes.map { pane in
                 [
                     "workspaceID": .string(id.rawValue),
@@ -741,6 +760,7 @@ private extension Workspace {
                 ]
             }
         }
+        return dockedPanes + floatingPanes
     }
 }
 

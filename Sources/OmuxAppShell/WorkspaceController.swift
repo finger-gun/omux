@@ -27,8 +27,16 @@ private struct PaneHistoryTarget: Sendable {
 
 private struct WorkspaceLookupLocation: Sendable {
     let workspaceIndex: Int
-    let tabIndex: Int
+    let tabIndex: Int?
+    let floatingPaneModalIndex: Int?
     let paneIndex: Int
+}
+
+private struct WorkspacePaneResolution: Sendable {
+    let workspace: Workspace
+    let tab: Tab?
+    let floatingPaneModal: FloatingPaneModal?
+    let pane: Pane
 }
 
 public struct ExtensionPaneActionResult: Sendable {
@@ -315,13 +323,13 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
-        let existingPaneIDs = allWorkspaces().flatMap { $0.tabs.flatMap(\.panes) }.map(\.id)
+        let existingPaneIDs = allWorkspaces().flatMap(\.panes).map(\.id)
         for paneID in existingPaneIDs {
             try? bridge.teardown(paneID: paneID)
         }
 
         for workspace in restoredWorkspaces {
-            for pane in workspace.tabs.flatMap(\.panes) where pane.isTerminal {
+            for pane in workspace.panes where pane.isTerminal {
                 _ = try bridge.createSurface(for: pane)
                 _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
             }
@@ -2093,6 +2101,21 @@ public final class WorkspaceController: @unchecked Sendable {
                     let location = WorkspaceLookupLocation(
                         workspaceIndex: workspaceIndex,
                         tabIndex: tabIndex,
+                        floatingPaneModalIndex: nil,
+                        paneIndex: paneIndex
+                    )
+                    paneLocationByID[pane.id] = location
+                    if let sessionID = pane.terminalSession?.id {
+                        sessionLocationByID[sessionID] = location
+                    }
+                }
+            }
+            for (modalIndex, modal) in workspace.floatingPaneModals.enumerated() {
+                for (paneIndex, pane) in modal.paneStack.panes.enumerated() {
+                    let location = WorkspaceLookupLocation(
+                        workspaceIndex: workspaceIndex,
+                        tabIndex: nil,
+                        floatingPaneModalIndex: modalIndex,
                         paneIndex: paneIndex
                     )
                     paneLocationByID[pane.id] = location
@@ -2112,33 +2135,47 @@ public final class WorkspaceController: @unchecked Sendable {
         rebuildLookupIndexesLocked()
     }
 
-    private func workspaceTabPaneLocked(
+    private func workspacePaneLocked(
         at location: WorkspaceLookupLocation
-    ) -> (workspace: Workspace, tab: Tab, pane: Pane)? {
+    ) -> WorkspacePaneResolution? {
         guard workspaces.indices.contains(location.workspaceIndex) else {
             return nil
         }
         let workspace = workspaces[location.workspaceIndex]
-        guard workspace.tabs.indices.contains(location.tabIndex) else {
-            return nil
+        if let tabIndex = location.tabIndex {
+            guard workspace.tabs.indices.contains(tabIndex) else {
+                return nil
+            }
+            let tab = workspace.tabs[tabIndex]
+            guard tab.panes.indices.contains(location.paneIndex) else {
+                return nil
+            }
+            let pane = tab.panes[location.paneIndex]
+            return WorkspacePaneResolution(workspace: workspace, tab: tab, floatingPaneModal: nil, pane: pane)
         }
-        let tab = workspace.tabs[location.tabIndex]
-        guard tab.panes.indices.contains(location.paneIndex) else {
-            return nil
+        if let floatingPaneModalIndex = location.floatingPaneModalIndex {
+            guard workspace.floatingPaneModals.indices.contains(floatingPaneModalIndex) else {
+                return nil
+            }
+            let modal = workspace.floatingPaneModals[floatingPaneModalIndex]
+            guard modal.paneStack.panes.indices.contains(location.paneIndex) else {
+                return nil
+            }
+            let pane = modal.paneStack.panes[location.paneIndex]
+            return WorkspacePaneResolution(workspace: workspace, tab: nil, floatingPaneModal: modal, pane: pane)
         }
-        let pane = tab.panes[location.paneIndex]
-        return (workspace: workspace, tab: tab, pane: pane)
+        return nil
     }
 
     private func paneLocationLocked(for paneID: PaneID) -> WorkspaceLookupLocation? {
         ensureLookupIndexesLocked()
         guard let location = paneLocationByID[paneID],
-              workspaceTabPaneLocked(at: location)?.pane.id == paneID
+              workspacePaneLocked(at: location)?.pane.id == paneID
         else {
             lookupIndexesDirty = true
             ensureLookupIndexesLocked()
             guard let rebuilt = paneLocationByID[paneID],
-                  workspaceTabPaneLocked(at: rebuilt)?.pane.id == paneID
+                  workspacePaneLocked(at: rebuilt)?.pane.id == paneID
             else {
                 return nil
             }
@@ -2150,12 +2187,12 @@ public final class WorkspaceController: @unchecked Sendable {
     private func sessionLocationLocked(for sessionID: SessionID) -> WorkspaceLookupLocation? {
         ensureLookupIndexesLocked()
         guard let location = sessionLocationByID[sessionID],
-              workspaceTabPaneLocked(at: location)?.pane.terminalSession?.id == sessionID
+              workspacePaneLocked(at: location)?.pane.terminalSession?.id == sessionID
         else {
             lookupIndexesDirty = true
             ensureLookupIndexesLocked()
             guard let rebuilt = sessionLocationByID[sessionID],
-                  workspaceTabPaneLocked(at: rebuilt)?.pane.terminalSession?.id == sessionID
+                  workspacePaneLocked(at: rebuilt)?.pane.terminalSession?.id == sessionID
             else {
                 return nil
             }
@@ -2219,7 +2256,7 @@ public final class WorkspaceController: @unchecked Sendable {
         guard let location = sessionLocationLocked(for: sessionID) else {
             return nil
         }
-        return workspaceTabPaneLocked(at: location)?.pane
+        return workspacePaneLocked(at: location)?.pane
     }
 
     private func controlPlaneContext(
@@ -2228,29 +2265,39 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let location = sessionLocationLocked(for: sessionID),
-              let resolved = workspaceTabPaneLocked(at: location)
+              let resolved = workspacePaneLocked(at: location)
         else {
             return nil
         }
-        return (workspaceID: resolved.workspace.id, tabID: resolved.tab.id, paneID: resolved.pane.id)
+        return (workspaceID: resolved.workspace.id, tabID: resolved.tab?.id, paneID: resolved.pane.id)
     }
 
     private func resolveTerminalTargetLocked(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
         switch target {
         case .session(let sessionID):
             guard let location = sessionLocationLocked(for: sessionID),
-                  let resolved = workspaceTabPaneLocked(at: location)
+                  let resolved = workspacePaneLocked(at: location)
             else {
                 return nil
             }
-            return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
+            return terminalContext(
+                workspace: resolved.workspace,
+                tabID: resolved.tab?.id,
+                paneStackID: resolved.tab?.rootLayout.paneStack(containingPaneID: resolved.pane.id)?.id ?? resolved.floatingPaneModal?.paneStack.id,
+                pane: resolved.pane
+            )
         case .pane(let paneID):
             guard let location = paneLocationLocked(for: paneID),
-                  let resolved = workspaceTabPaneLocked(at: location)
+                  let resolved = workspacePaneLocked(at: location)
             else {
                 return nil
             }
-            return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
+            return terminalContext(
+                workspace: resolved.workspace,
+                tabID: resolved.tab?.id,
+                paneStackID: resolved.tab?.rootLayout.paneStack(containingPaneID: resolved.pane.id)?.id ?? resolved.floatingPaneModal?.paneStack.id,
+                pane: resolved.pane
+            )
         case .tab(let tabID):
             guard let location = tabLocationLocked(for: tabID) else {
                 return nil
@@ -2266,12 +2313,16 @@ public final class WorkspaceController: @unchecked Sendable {
                 return nil
             }
             let workspace = workspaces[workspaceIndex]
-            guard let tab = workspace.focusedTab,
-                  let pane = tab.focusedPane
+            guard let pane = workspace.focusedPane
             else {
                 return nil
             }
-            return terminalContext(workspace: workspace, tab: tab, pane: pane)
+            return terminalContext(
+                workspace: workspace,
+                tabID: workspace.focusedFloatingPaneModalID == nil ? workspace.focusedTabID : nil,
+                paneStackID: paneStackID(for: pane.id, in: workspace),
+                pane: pane
+            )
         case .focused:
             guard let activeWorkspaceIndex,
                   workspaces.indices.contains(activeWorkspaceIndex)
@@ -2279,18 +2330,22 @@ public final class WorkspaceController: @unchecked Sendable {
                 return nil
             }
             let workspace = workspaces[activeWorkspaceIndex]
-            guard let tab = workspace.focusedTab,
-                  let pane = tab.focusedPane
+            guard let pane = workspace.focusedPane
             else {
                 return nil
             }
-            return terminalContext(workspace: workspace, tab: tab, pane: pane)
+            return terminalContext(
+                workspace: workspace,
+                tabID: workspace.focusedFloatingPaneModalID == nil ? workspace.focusedTabID : nil,
+                paneStackID: paneStackID(for: pane.id, in: workspace),
+                pane: pane
+            )
         }
     }
 
     private func historyClearPaneIDsLocked(target: ControlPlaneTerminalTarget?) -> [PaneID]? {
         guard let target else {
-            return workspaces.flatMap { $0.tabs.flatMap(\.panes).filter(\.isTerminal).map(\.id) }
+            return workspaces.flatMap { $0.panes.filter(\.isTerminal).map(\.id) }
         }
 
         switch target {
@@ -2308,18 +2363,32 @@ public final class WorkspaceController: @unchecked Sendable {
                 return nil
             }
             let workspace = workspaces[workspaceIndex]
-            return workspace.tabs.flatMap(\.panes).filter(\.isTerminal).map(\.id)
+            return workspace.panes.filter(\.isTerminal).map(\.id)
         }
     }
 
     private func terminalContext(workspace: Workspace, tab: Tab, pane: Pane) -> ControlPlaneTerminalContext? {
+        terminalContext(
+            workspace: workspace,
+            tabID: tab.id,
+            paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+            pane: pane
+        )
+    }
+
+    private func terminalContext(
+        workspace: Workspace,
+        tabID: TabID?,
+        paneStackID: PaneStackID?,
+        pane: Pane
+    ) -> ControlPlaneTerminalContext? {
         guard let session = pane.terminalSession else {
             return nil
         }
         return ControlPlaneTerminalContext(
             workspaceID: workspace.id,
-            tabID: tab.id,
-            paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+            tabID: tabID,
+            paneStackID: paneStackID,
             paneID: pane.id,
             sessionID: session.id
         )
@@ -2329,11 +2398,16 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let location = paneLocationLocked(for: paneID),
-              let resolved = workspaceTabPaneLocked(at: location)
+              let resolved = workspacePaneLocked(at: location)
         else {
             return nil
         }
-        return terminalContext(workspace: resolved.workspace, tab: resolved.tab, pane: resolved.pane)
+        return terminalContext(
+            workspace: resolved.workspace,
+            tabID: resolved.tab?.id,
+            paneStackID: resolved.tab?.rootLayout.paneStack(containingPaneID: resolved.pane.id)?.id ?? resolved.floatingPaneModal?.paneStack.id,
+            pane: resolved.pane
+        )
     }
 
     private static func historyTargets(in workspace: Workspace) -> [PaneHistoryTarget] {
@@ -2355,6 +2429,27 @@ public final class WorkspaceController: @unchecked Sendable {
                     persistedHistory: pane.terminalState.restoredScrollback
                 )
             }
+        } + workspace.floatingPaneModals.flatMap { modal in
+            modal.paneStack.panes.compactMap { pane in
+                guard let session = pane.terminalSession else {
+                    return nil
+                }
+                guard let fallbackTab = workspace.focusedTab ?? workspace.tabs.first else {
+                    return nil
+                }
+                return PaneHistoryTarget(
+                    workspaceID: workspace.id,
+                    workspaceName: workspace.name,
+                    tabID: fallbackTab.id,
+                    tabTitle: fallbackTab.title,
+                    paneStackID: modal.paneStack.id,
+                    paneID: pane.id,
+                    paneTitle: pane.title,
+                    sessionID: session.id,
+                    workingDirectory: pane.terminalState.reportedWorkingDirectory ?? session.workingDirectory,
+                    persistedHistory: pane.terminalState.restoredScrollback
+                )
+            }
         }
     }
 
@@ -2366,7 +2461,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let location = paneLocationLocked(for: paneID),
-              let pane = workspaceTabPaneLocked(at: location)?.pane
+              let pane = workspacePaneLocked(at: location)?.pane
         else {
             return nil
         }
@@ -2613,12 +2708,10 @@ public final class WorkspaceController: @unchecked Sendable {
         defer { lock.unlock() }
 
         return workspaces.contains { workspace in
-            workspace.tabs.contains { tab in
-                tab.panes.contains { pane in
-                    pane.id == paneID
-                        && pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
-                        && pane.extensionPane?.source == sourcePath
-                }
+            workspace.panes.contains { pane in
+                pane.id == paneID
+                    && pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
+                    && pane.extensionPane?.source == sourcePath
             }
         }
     }
@@ -2632,8 +2725,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         return workspaces[activeWorkspaceIndex]
-            .tabs
-            .flatMap(\.panes)
+            .panes
             .first { pane in
                 pane.extensionPane?.pluginID == OmuxMarkdownPreviewPlugin.pluginID
                     && pane.extensionPane?.source == sourcePath
@@ -2710,6 +2802,7 @@ public final class WorkspaceController: @unchecked Sendable {
         workspace.tabs
             .compactMap { $0.rootLayout.paneStack(id: paneStackID) }
             .first
+        ?? workspace.floatingPaneModals.first(where: { $0.paneStack.id == paneStackID })?.paneStack
     }
 
     func terminalActionCoordinatorHandle(_ event: TerminalActionEvent) {
@@ -2769,92 +2862,91 @@ public final class WorkspaceController: @unchecked Sendable {
         var context: ControlPlaneTerminalContext?
 
         lock.lock()
-        for workspaceIndex in workspaces.indices {
-            for tabIndex in workspaces[workspaceIndex].tabs.indices {
-                guard workspaces[workspaceIndex].tabs[tabIndex].panes.contains(where: { $0.id == event.paneID }) else {
-                    continue
-                }
-
-                let workspaceID = workspaces[workspaceIndex].id
-                let tabID = workspaces[workspaceIndex].tabs[tabIndex].id
-                context = ControlPlaneTerminalContext(
-                    workspaceID: workspaceID,
-                    tabID: tabID,
-                    paneStackID: workspaces[workspaceIndex].tabs[tabIndex].rootLayout.paneStack(containingPaneID: event.paneID)?.id,
-                    paneID: event.paneID,
-                    sessionID: event.sessionID
-                )
-
-                switch event.action {
-                case .workingDirectoryChanged(let path):
-                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        if var session = pane.terminalSession {
-                            session.workingDirectory = path
-                            pane.terminalSession = session
-                        }
-                        pane.terminalState.reportedWorkingDirectory = path
-                    }
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .titleChanged(let title):
-                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        pane.terminalState.reportedTitle = title
-                        if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil {
-                            pane.title = title
-                        }
-                    }
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .tabTitleChanged(let title):
-                    workspaces[workspaceIndex].tabs[tabIndex].title = title
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .progressReported(let state, let progress):
-                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        switch state {
-                        case .removed:
-                            pane.terminalState.progress = PaneProgress(state: .paused)
-                        case .active:
-                            progressIdleClearTokens.removeValue(forKey: event.paneID)
-                            pane.terminalState.progress = PaneProgress(state: .active, value: progress)
-                        case .error:
-                            progressIdleClearTokens.removeValue(forKey: event.paneID)
-                            pane.terminalState.progress = PaneProgress(state: .error, value: progress)
-                        case .indeterminate:
-                            progressIdleClearTokens.removeValue(forKey: event.paneID)
-                            pane.terminalState.progress = PaneProgress(state: .indeterminate, value: progress)
-                        case .paused:
-                            progressIdleClearTokens.removeValue(forKey: event.paneID)
-                            pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
-                        }
-                    }
-                    if state == .removed {
-                        handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
-                    }
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .childExited(let exitCode, let elapsedMilliseconds):
-                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        pane.terminalState.lastExit = PaneExitStatus(
-                            exitCode: exitCode,
-                            elapsedMilliseconds: elapsedMilliseconds
-                        )
-                    }
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .rendererHealthChanged(let isHealthy):
-                    _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                        pane.terminalState.rendererHealthy = isHealthy
-                    }
-                    updatedWorkspace = workspaces[workspaceIndex]
-                case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
-                    break
-                }
-
-                lock.unlock()
-                if let updatedWorkspace {
-                    onChange?(updatedWorkspace)
-                }
-                return context
-            }
+        guard let location = paneLocationLocked(for: event.paneID),
+              let resolved = workspacePaneLocked(at: location)
+        else {
+            lock.unlock()
+            return nil
         }
+        let workspaceIndex = location.workspaceIndex
+        let paneStackID = resolved.tab?.rootLayout.paneStack(containingPaneID: event.paneID)?.id
+            ?? resolved.floatingPaneModal?.paneStack.id
+        context = ControlPlaneTerminalContext(
+            workspaceID: resolved.workspace.id,
+            tabID: resolved.tab?.id,
+            paneStackID: paneStackID,
+            paneID: event.paneID,
+            sessionID: event.sessionID
+        )
+
+        switch event.action {
+        case .workingDirectoryChanged(let path):
+            _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                if var session = pane.terminalSession {
+                    session.workingDirectory = path
+                    pane.terminalSession = session
+                }
+                pane.terminalState.reportedWorkingDirectory = path
+            }
+            updatedWorkspace = workspaces[workspaceIndex]
+        case .titleChanged(let title):
+            _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                pane.terminalState.reportedTitle = title
+                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil {
+                    pane.title = title
+                }
+            }
+            updatedWorkspace = workspaces[workspaceIndex]
+        case .tabTitleChanged(let title):
+            if let tabIndex = location.tabIndex {
+                workspaces[workspaceIndex].tabs[tabIndex].title = title
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
+        case .progressReported(let state, let progress):
+            _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                switch state {
+                case .removed:
+                    pane.terminalState.progress = PaneProgress(state: .paused)
+                case .active:
+                    progressIdleClearTokens.removeValue(forKey: event.paneID)
+                    pane.terminalState.progress = PaneProgress(state: .active, value: progress)
+                case .error:
+                    progressIdleClearTokens.removeValue(forKey: event.paneID)
+                    pane.terminalState.progress = PaneProgress(state: .error, value: progress)
+                case .indeterminate:
+                    progressIdleClearTokens.removeValue(forKey: event.paneID)
+                    pane.terminalState.progress = PaneProgress(state: .indeterminate, value: progress)
+                case .paused:
+                    progressIdleClearTokens.removeValue(forKey: event.paneID)
+                    pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
+                }
+            }
+            if state == .removed {
+                handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
+            }
+            updatedWorkspace = workspaces[workspaceIndex]
+        case .childExited(let exitCode, let elapsedMilliseconds):
+            _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                pane.terminalState.lastExit = PaneExitStatus(
+                    exitCode: exitCode,
+                    elapsedMilliseconds: elapsedMilliseconds
+                )
+            }
+            updatedWorkspace = workspaces[workspaceIndex]
+        case .rendererHealthChanged(let isHealthy):
+            _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                pane.terminalState.rendererHealthy = isHealthy
+            }
+            updatedWorkspace = workspaces[workspaceIndex]
+        case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
+            break
+        }
+
         lock.unlock()
-        return nil
+        if let updatedWorkspace {
+            onChange?(updatedWorkspace)
+        }
+        return context
     }
 
     private func scheduleProgressIdleClear(for paneID: PaneID, token: UUID) {
@@ -2915,7 +3007,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         for workspaceIndex in workspaces.indices {
-            guard workspaces[workspaceIndex].tabs.contains(where: { $0.panes.contains(where: { $0.id == paneID }) }) else {
+            guard workspaces[workspaceIndex].panes.contains(where: { $0.id == paneID }) else {
                 continue
             }
 
@@ -3003,7 +3095,21 @@ public final class WorkspaceController: @unchecked Sendable {
             tabs: workspace.tabs.map {
                 sanitizedTabForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
             },
-            focusedTabID: workspace.focusedTabID
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map {
+                FloatingPaneModal(
+                    id: $0.id,
+                    paneStack: PaneStack(
+                        id: $0.paneStack.id,
+                        panes: $0.paneStack.panes.map {
+                            sanitizedPaneForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
+                        },
+                        focusedPaneID: $0.paneStack.focusedPaneID
+                    ),
+                    frame: $0.frame
+                )
+            },
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
         )
     }
 
@@ -3142,13 +3248,30 @@ public final class WorkspaceController: @unchecked Sendable {
 
     private static func normalizedRestoredWorkspace(_ workspace: Workspace) -> Workspace? {
         let normalizedTabs = workspace.tabs.compactMap(normalizedRestoredTab)
-        guard normalizedTabs.isEmpty == false else {
+        let normalizedFloatingPaneModals = workspace.floatingPaneModals.compactMap { modal -> FloatingPaneModal? in
+            let restoredPanes = modal.paneStack.panes.map(sanitizedPaneForRestore)
+            guard restoredPanes.isEmpty == false else {
+                return nil
+            }
+            let focusedPaneID = restoredPanes.contains(where: { $0.id == modal.paneStack.focusedPaneID })
+                ? modal.paneStack.focusedPaneID
+                : restoredPanes[0].id
+            return FloatingPaneModal(
+                id: modal.id,
+                paneStack: PaneStack(id: modal.paneStack.id, panes: restoredPanes, focusedPaneID: focusedPaneID),
+                frame: modal.frame
+            )
+        }
+        guard normalizedTabs.isEmpty == false || normalizedFloatingPaneModals.isEmpty == false else {
             return nil
         }
 
         let focusedTabID = normalizedTabs.contains(where: { $0.id == workspace.focusedTabID })
             ? workspace.focusedTabID
-            : normalizedTabs[0].id
+            : normalizedTabs.first?.id ?? TabID()
+        let focusedFloatingPaneModalID = normalizedFloatingPaneModals.contains(where: { $0.id == workspace.focusedFloatingPaneModalID })
+            ? workspace.focusedFloatingPaneModalID
+            : nil
 
         return Workspace(
             id: workspace.id,
@@ -3156,7 +3279,9 @@ public final class WorkspaceController: @unchecked Sendable {
             customName: workspace.customName,
             rootPath: workspace.rootPath,
             tabs: normalizedTabs,
-            focusedTabID: focusedTabID
+            focusedTabID: focusedTabID,
+            floatingPaneModals: normalizedFloatingPaneModals,
+            focusedFloatingPaneModalID: focusedFloatingPaneModalID
         )
     }
 
