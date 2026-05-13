@@ -3577,6 +3577,44 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
     }
 
+    func testTerminalActionStateChangesCoalesceWorkspaceUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "coalesced workspace update delivered")
+        var changeCount = 0
+        controller.onChange = { _ in
+            changeCount += 1
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("Codex 1"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex 2"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex 3"), on: runtimeSurfaceID)
+
+        wait(for: [firstChangeDelivered], timeout: 1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex 3")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex 3")
+
+        runtime.emit(.titleChanged("Codex 3"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+    }
+
     @MainActor
     func testWorkspaceWindowShowsPaneStatusOrbsForTerminalProgressEvents() throws {
         let runtime = ActionEmittingGhosttyRuntime()

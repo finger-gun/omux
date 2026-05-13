@@ -67,6 +67,8 @@ public final class WorkspaceController: @unchecked Sendable {
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
+    private var pendingTerminalStateWorkspaceIDs: Set<WorkspaceID> = []
+    private var terminalStateChangeUpdateScheduled = false
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var workspaceIndexByID: [WorkspaceID: Int] = [:]
     private var tabLocationByID: [TabID: (workspaceIndex: Int, tabIndex: Int)] = [:]
@@ -74,6 +76,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var sessionLocationByID: [SessionID: WorkspaceLookupLocation] = [:]
     private var lookupIndexesDirty = true
     private let progressIdleClearDelay: TimeInterval
+    private let terminalStateChangeCoalescingDelay: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
@@ -100,7 +103,8 @@ public final class WorkspaceController: @unchecked Sendable {
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
-        progressIdleClearDelay: TimeInterval = 3
+        progressIdleClearDelay: TimeInterval = 3,
+        terminalStateChangeCoalescingDelay: TimeInterval = 0.05
     ) {
         self.bridge = bridge
         self.hookRunner = hookRunner
@@ -111,6 +115,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.progressIdleClearDelay = progressIdleClearDelay
+        self.terminalStateChangeCoalescingDelay = terminalStateChangeCoalescingDelay
         _ = terminalActionCoordinator
     }
 
@@ -2938,72 +2943,142 @@ public final class WorkspaceController: @unchecked Sendable {
 
         switch event.action {
         case .workingDirectoryChanged(let path):
+            var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                 if var session = pane.terminalSession {
-                    session.workingDirectory = path
-                    pane.terminalSession = session
+                    if session.workingDirectory != path {
+                        session.workingDirectory = path
+                        pane.terminalSession = session
+                        didChange = true
+                    }
                 }
-                pane.terminalState.reportedWorkingDirectory = path
+                if pane.terminalState.reportedWorkingDirectory != path {
+                    pane.terminalState.reportedWorkingDirectory = path
+                    didChange = true
+                }
             }
-            updatedWorkspace = workspaces[workspaceIndex]
+            if didChange {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
         case .titleChanged(let title):
+            var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                pane.terminalState.reportedTitle = title
-                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil {
+                if pane.terminalState.reportedTitle != title {
+                    pane.terminalState.reportedTitle = title
+                    didChange = true
+                }
+                if WorkspaceIconResolver.terminalApplicationIcon(forTitle: title) == nil,
+                   pane.title != title {
                     pane.title = title
+                    didChange = true
                 }
             }
-            updatedWorkspace = workspaces[workspaceIndex]
+            if didChange {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
         case .tabTitleChanged(let title):
-            if let tabIndex = location.tabIndex {
+            if let tabIndex = location.tabIndex,
+               workspaces[workspaceIndex].tabs[tabIndex].title != title {
                 workspaces[workspaceIndex].tabs[tabIndex].title = title
                 updatedWorkspace = workspaces[workspaceIndex]
             }
         case .progressReported(let state, let progress):
+            var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                let nextProgress: PaneProgress
                 switch state {
                 case .removed:
-                    pane.terminalState.progress = PaneProgress(state: .paused)
+                    nextProgress = PaneProgress(state: .paused)
                 case .active:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
-                    pane.terminalState.progress = PaneProgress(state: .active, value: progress)
+                    nextProgress = PaneProgress(state: .active, value: progress)
                 case .error:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
-                    pane.terminalState.progress = PaneProgress(state: .error, value: progress)
+                    nextProgress = PaneProgress(state: .error, value: progress)
                 case .indeterminate:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
-                    pane.terminalState.progress = PaneProgress(state: .indeterminate, value: progress)
+                    nextProgress = PaneProgress(state: .indeterminate, value: progress)
                 case .paused:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
-                    pane.terminalState.progress = PaneProgress(state: .paused, value: progress)
+                    nextProgress = PaneProgress(state: .paused, value: progress)
+                }
+                if pane.terminalState.progress != nextProgress {
+                    pane.terminalState.progress = nextProgress
+                    didChange = true
                 }
             }
-            if state == .removed {
+            if didChange, state == .removed {
                 handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
             }
-            updatedWorkspace = workspaces[workspaceIndex]
+            if didChange {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
         case .childExited(let exitCode, let elapsedMilliseconds):
+            var didChange = false
+            let nextExit = PaneExitStatus(
+                exitCode: exitCode,
+                elapsedMilliseconds: elapsedMilliseconds
+            )
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                pane.terminalState.lastExit = PaneExitStatus(
-                    exitCode: exitCode,
-                    elapsedMilliseconds: elapsedMilliseconds
-                )
+                if pane.terminalState.lastExit != nextExit {
+                    pane.terminalState.lastExit = nextExit
+                    didChange = true
+                }
             }
-            updatedWorkspace = workspaces[workspaceIndex]
+            if didChange {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
         case .rendererHealthChanged(let isHealthy):
+            var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
-                pane.terminalState.rendererHealthy = isHealthy
+                if pane.terminalState.rendererHealthy != isHealthy {
+                    pane.terminalState.rendererHealthy = isHealthy
+                    didChange = true
+                }
             }
-            updatedWorkspace = workspaces[workspaceIndex]
+            if didChange {
+                updatedWorkspace = workspaces[workspaceIndex]
+            }
         case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
             break
         }
 
         lock.unlock()
         if let updatedWorkspace {
-            onChange?(updatedWorkspace)
+            scheduleTerminalStateChangeUpdate(for: updatedWorkspace.id)
         }
         return context
+    }
+
+    private func scheduleTerminalStateChangeUpdate(for workspaceID: WorkspaceID) {
+        lock.lock()
+        pendingTerminalStateWorkspaceIDs.insert(workspaceID)
+        guard terminalStateChangeUpdateScheduled == false else {
+            lock.unlock()
+            return
+        }
+        terminalStateChangeUpdateScheduled = true
+        let delay = terminalStateChangeCoalescingDelay
+        lock.unlock()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.flushTerminalStateChangeUpdates()
+        }
+    }
+
+    private func flushTerminalStateChangeUpdates() {
+        let updatedWorkspaces: [Workspace]
+
+        lock.lock()
+        let pendingIDs = pendingTerminalStateWorkspaceIDs
+        pendingTerminalStateWorkspaceIDs.removeAll()
+        terminalStateChangeUpdateScheduled = false
+        updatedWorkspaces = workspaces.filter { pendingIDs.contains($0.id) }
+        lock.unlock()
+
+        for workspace in updatedWorkspaces {
+            onChange?(workspace)
+        }
     }
 
     private func scheduleProgressIdleClear(for paneID: PaneID, token: UUID) {
@@ -3050,16 +3125,16 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private func clearProgressIdleState(for paneID: PaneID, token: UUID) {
-        var updatedWorkspace: Workspace?
+        var updatedWorkspaceID: WorkspaceID?
 
         lock.lock()
-        defer { lock.unlock() }
-
         guard progressIdleClearTokens[paneID] == token else {
+            lock.unlock()
             return
         }
         guard paneConfiguration.idleStatusClear == .afterDelay else {
             progressIdleClearTokens.removeValue(forKey: paneID)
+            lock.unlock()
             return
         }
 
@@ -3075,14 +3150,13 @@ public final class WorkspaceController: @unchecked Sendable {
                 pane.terminalState.progress = nil
             }
             progressIdleClearTokens.removeValue(forKey: paneID)
-            updatedWorkspace = workspaces[workspaceIndex]
+            updatedWorkspaceID = workspaces[workspaceIndex].id
             break
         }
+        lock.unlock()
 
-        if let updatedWorkspace {
-            DispatchQueue.main.async { [weak self] in
-                self?.onChange?(updatedWorkspace)
-            }
+        if let updatedWorkspaceID {
+            scheduleTerminalStateChangeUpdate(for: updatedWorkspaceID)
         }
     }
 
