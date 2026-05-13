@@ -1629,6 +1629,39 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNil(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(PaneID(rawValue: "missing")))))
     }
 
+    func testTerminalHistorySkipsFloatingOnlyWorkspaceWithoutFallbackTab() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let pane = Pane(
+            title: "Floating",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/floating")
+        )
+        let modal = FloatingPaneModal(
+            paneStack: PaneStack(panes: [pane], focusedPaneID: pane.id)
+        )
+        let workspace = Workspace(
+            generatedName: "Floating Only",
+            rootPath: "/tmp/floating",
+            tabs: [],
+            focusedTabID: TabID(),
+            floatingPaneModals: [modal],
+            focusedFloatingPaneModalID: modal.id
+        )
+
+        try controller.restorePersistedState(WorkspacePersistenceSnapshot(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        ))
+
+        let activeHistory = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest()))
+        XCTAssertEqual(activeHistory.items, [])
+        XCTAssertNil(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(pane.id))))
+    }
+
     func testTerminalHistoryReportsUnavailableAndDoesNotMutatePersistenceOrInput() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)

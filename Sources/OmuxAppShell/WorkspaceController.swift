@@ -2434,7 +2434,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 guard let session = pane.terminalSession else {
                     return nil
                 }
-                let fallbackTab = workspace.focusedTab ?? workspace.tabs[0]
+                guard let fallbackTab = workspace.focusedTab ?? workspace.tabs.first else {
+                    return nil
+                }
                 return PaneHistoryTarget(
                     workspaceID: workspace.id,
                     workspaceName: workspace.name,
