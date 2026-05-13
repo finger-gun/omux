@@ -16,7 +16,7 @@ If you are new to OpenMUX, start with [Getting started](./getting-started.md). I
 | Use bundled or registry-hosted plugins | [Plugin index](./plugins/index.md) | [Configuration and themes](./configuration.md#plugins-settings) |
 | Create a plugin, extension pane, or menu contribution | [Plugin ecosystem](./plugins.md) | [Hooks](./hooks.md) |
 | Understand where the product is headed | [Roadmap](./roadmap.md) | [Manifesto](./manifest.md) |
-| Contribute to OpenMUX itself | [Developer quick start](./developer.md) | [Development notes](./development.md), [Releasing](./releasing.md), [CONTRIBUTING](../CONTRIBUTING.md) |
+| Contribute to OpenMUX itself | [Developer quick start](./developer.md) | [Architecture overview](./architecture.md), [Development notes](./development.md), [Releasing](./releasing.md), [CONTRIBUTING](../CONTRIBUTING.md) |
 | Research architecture and terminal-engine boundaries | [Research notes](./research/) | [Manifesto](./manifest.md), [Development notes](./development.md) |
 
 ## For users
@@ -36,6 +36,7 @@ These docs describe OpenMUX from the outside: what you can run, configure, and a
 These docs are for changing OpenMUX itself.
 
 - [Developer quick start](./developer.md) - first-time setup, daily commands, validation, and links for contributors.
+- [Architecture overview](./architecture.md) - system boundaries, render tree, workspace model, and modal/pane relationships.
 - [Development notes](./development.md) - module boundaries, build commands, runtime bridge notes, and current limitations.
 - [Releasing](./releasing.md) - local packaging, GitHub Release flow, and current distribution status.
 - [Manifesto](./manifest.md) - product principles and architectural guardrails.

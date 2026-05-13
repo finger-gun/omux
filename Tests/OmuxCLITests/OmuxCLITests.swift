@@ -688,6 +688,7 @@ final class OmuxCLITests: XCTestCase {
         enabled = true
         renderer = "builtin"
         theme = "dark"
+        presentation = "modal"
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let markdownURL = root.appendingPathComponent("README.md")
@@ -724,6 +725,7 @@ final class OmuxCLITests: XCTestCase {
               case .string(markdownURL.path)? = params["source"],
               case .string("html")? = params["contentKind"],
               case .string("ready")? = params["status"],
+              case .string("modal")? = params["presentation"],
               case .string(let html)? = params["html"]
         else {
             return XCTFail("expected markdown preview extension-pane create params")
@@ -856,6 +858,49 @@ final class OmuxCLITests: XCTestCase {
             return XCTFail("expected markdown preview update params")
         }
         XCTAssertTrue(html.contains("<code>code</code>"))
+    }
+
+    func testCLIMarkdownPreviewAcceptsModalShortcutFlag() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [plugins.markdown-preview]
+        enabled = true
+        presentation = "pane-tab"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let markdownURL = root.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        let socketPath = "/tmp/omux-mdmodal-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .object(["paneID": .string("pane-preview")]))
+        }
+        defer { server.stop() }
+
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller()
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "markdown-preview", markdownURL.path, "--modal"]), 0)
+        guard case .object(let params)? = requests.value.first?.params,
+              case .string("modal")? = params["presentation"]
+        else {
+            return XCTFail("expected markdown preview modal presentation params")
+        }
     }
 
     func testCLIMarkdownPreviewRequiresEnabledPlugin() throws {
@@ -1306,7 +1351,7 @@ final class OmuxCLITests: XCTestCase {
 
         XCTAssertEqual(command.run(arguments: ["omux", OmuxMarkdownPreviewPlugin.commandName]), 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
-        XCTAssertEqual(output, ["usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]"])
+        XCTAssertEqual(output, ["usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows] [--modal|--pane-tab|--presentation pane-tab|modal]"])
     }
 
     func testCLISplitAcceptsDirectionAndTargetInEitherOrder() throws {
@@ -1723,6 +1768,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(export.values.themeName, "nord")
         XCTAssertEqual(export.values.ui.panes.inactiveOpacity, 0.7)
         XCTAssertEqual(export.defaults.markdownPreviewRenderer, "builtin")
+        XCTAssertEqual(export.defaults.markdownPreviewPresentation, "pane-tab")
         XCTAssertEqual(export.diagnostics, [])
     }
 

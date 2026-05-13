@@ -1629,6 +1629,39 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNil(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(PaneID(rawValue: "missing")))))
     }
 
+    func testTerminalHistorySkipsFloatingOnlyWorkspaceWithoutFallbackTab() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let pane = Pane(
+            title: "Floating",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/floating")
+        )
+        let modal = FloatingPaneModal(
+            paneStack: PaneStack(panes: [pane], focusedPaneID: pane.id)
+        )
+        let workspace = Workspace(
+            generatedName: "Floating Only",
+            rootPath: "/tmp/floating",
+            tabs: [],
+            focusedTabID: TabID(),
+            floatingPaneModals: [modal],
+            focusedFloatingPaneModalID: modal.id
+        )
+
+        try controller.restorePersistedState(WorkspacePersistenceSnapshot(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        ))
+
+        let activeHistory = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest()))
+        XCTAssertEqual(activeHistory.items, [])
+        XCTAssertNil(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(pane.id))))
+    }
+
     func testTerminalHistoryReportsUnavailableAndDoesNotMutatePersistenceOrInput() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1804,6 +1837,158 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(updatedWorkspace.focusedTab?.panes.map(\.id), [extensionResult.pane.id])
         XCTAssertEqual(updatedWorkspace.focusedPane?.id, extensionResult.pane.id)
         XCTAssertEqual(runtime.destroyedSurfaceIDs, [terminalSurfaceID])
+    }
+
+    func testWorkspaceControllerCanCloseFloatingExtensionModal() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>",
+                presentationStyle: .modal
+            )
+        ))
+
+        let updatedWorkspace = try XCTUnwrap(controller.closePane(paneID: result.pane.id))
+
+        XCTAssertTrue(updatedWorkspace.floatingPaneModals.isEmpty)
+        XCTAssertNil(updatedWorkspace.panes.first(where: { $0.id == result.pane.id }))
+    }
+
+    func testWorkspaceControllerCanDockFloatingExtensionModalIntoRootSplit() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>",
+                presentationStyle: .modal
+            )
+        ))
+        let modalID = try XCTUnwrap(result.floatingPaneModalID)
+
+        let updatedWorkspace = try XCTUnwrap(controller.dockFloatingPaneModalToRootSplit(
+            modalID: modalID,
+            direction: .left
+        ))
+
+        XCTAssertTrue(updatedWorkspace.floatingPaneModals.isEmpty)
+        XCTAssertEqual(updatedWorkspace.focusedPane?.id, result.pane.id)
+        XCTAssertTrue(updatedWorkspace.tabs.flatMap(\.panes).contains(where: { $0.id == terminalPaneID }))
+        XCTAssertTrue(updatedWorkspace.tabs.flatMap(\.panes).contains(where: { $0.id == result.pane.id }))
+        XCTAssertEqual(
+            updatedWorkspace.tabs.flatMap(\.panes).first(where: { $0.id == result.pane.id })?.extensionPane?.presentationStyle,
+            .paneTab
+        )
+    }
+
+    func testWorkspaceControllerCanFocusFloatingModalPane() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>",
+                presentationStyle: .modal
+            )
+        ))
+
+        _ = try XCTUnwrap(controller.focus(paneID: terminalPaneID))
+        let updatedWorkspace = try XCTUnwrap(controller.focus(paneID: result.pane.id))
+
+        XCTAssertEqual(updatedWorkspace.focusedPane?.id, result.pane.id)
+        XCTAssertEqual(updatedWorkspace.focusedFloatingPaneModal?.focusedPane?.id, result.pane.id)
+    }
+
+    func testWorkspaceControllerCanPopOutDockedPaneTabToFloatingModal() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let twoTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let remainingPaneID = try XCTUnwrap(twoTabWorkspace.focusedPane?.id)
+        let sourceStackID = try XCTUnwrap(twoTabWorkspace.focusedPaneStack?.id)
+        let frame = FloatingPaneModalFrame(x: 48, y: 64, width: 680, height: 480)
+
+        let updatedWorkspace = try XCTUnwrap(controller.movePaneTabToFloatingModal(
+            paneID: firstPaneID,
+            sourceStackID: sourceStackID,
+            frame: frame
+        ))
+
+        let modal = try XCTUnwrap(updatedWorkspace.floatingPaneModals.first)
+        XCTAssertEqual(modal.paneStack.panes.map(\.id), [firstPaneID])
+        XCTAssertEqual(modal.frame, frame)
+        XCTAssertEqual(updatedWorkspace.focusedPane?.id, firstPaneID)
+        XCTAssertEqual(updatedWorkspace.focusedFloatingPaneModal?.id, modal.id)
+        XCTAssertEqual(updatedWorkspace.focusedTab?.panes.map(\.id), [remainingPaneID])
+    }
+
+    func testWorkspaceControllerUpdatesExtensionPanePresentationStyleWhenPoppedOutToModal() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let terminalPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let result = try XCTUnwrap(controller.createExtensionPane(
+            title: "README.md",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/README.md",
+                html: "<h1>README</h1>",
+                presentationStyle: .paneTab
+            )
+        ))
+        let sourceStackID = try XCTUnwrap(result.workspace.focusedPaneStack?.id)
+
+        let poppedOutWorkspace = try XCTUnwrap(controller.movePaneTabToFloatingModal(
+            paneID: result.pane.id,
+            sourceStackID: sourceStackID
+        ))
+        let modal = try XCTUnwrap(poppedOutWorkspace.floatingPaneModals.first)
+
+        XCTAssertEqual(modal.paneStack.focusedPane?.extensionPane?.presentationStyle, .modal)
+
+        let dockedWorkspace = try XCTUnwrap(controller.dockFloatingPaneModalToRootSplit(
+            modalID: modal.id,
+            direction: .left
+        ))
+
+        XCTAssertTrue(dockedWorkspace.tabs.flatMap(\.panes).contains(where: { $0.id == terminalPaneID }))
+        XCTAssertEqual(
+            dockedWorkspace.tabs.flatMap(\.panes).first(where: { $0.id == result.pane.id })?.extensionPane?.presentationStyle,
+            .paneTab
+        )
     }
 
     func testWorkspaceControllerDeletesActiveWorkspaceWhenAnotherExists() throws {
@@ -2268,6 +2453,76 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(wrapperScript.contains("export ZDOTDIR=\"$GHOSTTY_RESOURCES_DIR/shell-integration/zsh\""))
     }
 
+    func testWorkspaceRestoreDefersHiddenTabTerminalSurfaceUntilVisible() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/hidden")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab, visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+
+        XCTAssertNotNil(bridge.surface(for: visiblePane.id))
+        XCTAssertNotNil(runtime.session(for: "action:\(visiblePane.id.rawValue)"))
+        XCTAssertNil(bridge.surface(for: hiddenPane.id))
+
+        _ = controller.focus(tabID: hiddenTab.id)
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspace.id)
+
+        XCTAssertNotNil(bridge.surface(for: hiddenPane.id))
+        XCTAssertNotNil(runtime.session(for: "action:\(hiddenPane.id.rawValue)"))
+    }
+
+    func testControlPlaneActionStartsLazyRestoredPaneBeforeSendingInput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/hidden")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let workspace = Workspace(
+            generatedName: "Workspace 1",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab, visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        XCTAssertNil(bridge.surface(for: hiddenPane.id))
+
+        _ = try XCTUnwrap(controller.sendText(target: .pane(hiddenPane.id), text: "echo lazy\n"))
+
+        XCTAssertNotNil(bridge.surface(for: hiddenPane.id))
+        XCTAssertEqual(runtime.currentInputText(), "echo lazy\n")
+    }
+
     func testWorkspaceRestoreSkipsReplayWrapperWhenPersistedScrollbackIsDisabled() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceReplayTests-\(UUID().uuidString)", isDirectory: true)
@@ -2634,6 +2889,32 @@ final class OmuxAppShellTests: XCTestCase {
         let wsButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: wsLabel))
         XCTAssertNotNil(wsButton)
         XCTAssertGreaterThanOrEqual(findViews(ofType: NSImageView.self, in: sidebar).count, 2)
+    }
+
+    @MainActor
+    func testWorkspaceWindowCachesTerminalSnapshotsAcrossInitialRender() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let workspaceRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        let workspace = try controller.openWorkspace(at: workspaceRoot.path)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.transcript = "vim - Vi IMproved"
+
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(surfaceID, "action:\(pane.id.rawValue)")
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, 1)
     }
 
     @MainActor
@@ -3178,6 +3459,41 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testFloatingModalDoesNotRenderInnerPaneTabStrip() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let created = try XCTUnwrap(controller.createExtensionPane(
+            title: "Preview",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.fingergun.markdown-preview",
+                contentKind: .html,
+                source: "/tmp/example.md",
+                html: "<html><body><h1>Preview</h1></body></html>",
+                status: .ready,
+                presentationStyle: .modal
+            )
+        ))
+        let modalStackID = try XCTUnwrap(created.workspace.floatingPaneModals.first?.paneStack.id)
+
+        let windowController = WorkspaceWindowController(workspace: created.workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let paneTabStrips = findViews(ofType: NSStackView.self, in: rootView)
+        let modalTabStrip = paneTabStrips.first {
+            $0.identifier?.rawValue == "pane-tab-strip-\(modalStackID.rawValue)"
+        }
+
+        XCTAssertNil(modalTabStrip)
+        XCTAssertEqual(findViews(ofType: PaneHeaderView.self, in: rootView).count, 1)
+        XCTAssertEqual(findViews(ofType: FloatingPaneModalHeaderView.self, in: rootView).count, 1)
+    }
+
+    @MainActor
     func testWorkspaceWindowRestoresPersistedSidebarVisibility() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -3259,6 +3575,126 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedWorkingDirectory, "/var/tmp")
         XCTAssertEqual(publishedEvent?.name, "terminal.cwdChanged")
         XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
+    }
+
+    func testTerminalActionStateChangesCoalesceWorkspaceUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01,
+            terminalDisplayTitleUpdateMinimumInterval: 0
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "coalesced workspace update delivered")
+        var changeCount = 0
+        controller.onChange = { _ in
+            changeCount += 1
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("Codex 1"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex 2"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex 3"), on: runtimeSurfaceID)
+
+        wait(for: [firstChangeDelivered], timeout: 1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex 3")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex 3")
+
+        runtime.emit(.titleChanged("Codex 3"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+    }
+
+    func testTerminalTitleSpinnerFramesDoNotTriggerWorkspaceUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "initial title update delivered")
+        var changeCount = 0
+        controller.onChange = { _ in
+            changeCount += 1
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("⠋ Codex"), on: runtimeSurfaceID)
+
+        wait(for: [firstChangeDelivered], timeout: 1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "⠋ Codex")
+
+        runtime.emit(.titleChanged("⠙ Codex"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("• Codex"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "• Codex")
+    }
+
+    func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0.01,
+            terminalDisplayTitleUpdateMinimumInterval: 0.08
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let firstChangeDelivered = expectation(description: "initial title update delivered")
+        let trailingChangeDelivered = expectation(description: "trailing title update delivered")
+        var changeCount = 0
+        var deliveredTitles: [String?] = []
+        var deliveredAt: [Date] = []
+        controller.onChange = { workspace in
+            changeCount += 1
+            deliveredTitles.append(workspace.focusedPane?.title)
+            deliveredAt.append(Date())
+            if changeCount == 1 {
+                firstChangeDelivered.fulfill()
+            } else if changeCount == 2 {
+                trailingChangeDelivered.fulfill()
+            }
+        }
+
+        runtime.emit(.titleChanged("Codex reading"), on: runtimeSurfaceID)
+        wait(for: [firstChangeDelivered], timeout: 1)
+
+        runtime.emit(.titleChanged("Codex thinking"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Codex writing"), on: runtimeSurfaceID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex writing")
+
+        wait(for: [trailingChangeDelivered], timeout: 1)
+        XCTAssertEqual(changeCount, 2)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
+        XCTAssertEqual(deliveredTitles, ["Codex reading", "Codex writing"])
+        XCTAssertGreaterThanOrEqual(deliveredAt[1].timeIntervalSince(deliveredAt[0]), 0.07)
     }
 
     @MainActor
@@ -3687,11 +4123,63 @@ final class OmuxAppShellTests: XCTestCase {
         let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
 
         XCTAssertTrue(menuTitles.contains("Rename…"))
+        XCTAssertTrue(menuTitles.contains("Pop Out to Modal"))
         XCTAssertTrue(menuTitles.contains("Close"))
         XCTAssertTrue(menuTitles.contains("Close Others"))
         XCTAssertTrue(menuTitles.contains("Close Above"))
         XCTAssertTrue(menuTitles.contains("Close Below"))
         XCTAssertEqual(workspace.tabs.count, 1)
+    }
+
+    @MainActor
+    func testPaneTabContextMenuCanPopOutPaneToModal() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        let firstPaneButton = try XCTUnwrap(
+            findViews(ofType: NSControl.self, in: rootView)
+                .first { $0.identifier?.rawValue == "pane-tab-\(firstPaneID.rawValue)" }
+        )
+        let popOutItem = try XCTUnwrap(firstPaneButton.menu?.items.first { $0.title == "Pop Out to Modal" })
+
+        XCTAssertTrue(popOutItem.isEnabled)
+        XCTAssertTrue(NSApp.sendAction(popOutItem.action!, to: popOutItem.target, from: popOutItem))
+
+        let poppedOutWorkspace = try XCTUnwrap(controller.activeWorkspace())
+        XCTAssertEqual(poppedOutWorkspace.floatingPaneModals.first?.paneStack.focusedPane?.id, firstPaneID)
+    }
+
+    @MainActor
+    func testPaneTabContextMenuCanPopOutSinglePaneWorkspaceToModal() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        let paneButton = try XCTUnwrap(
+            findViews(ofType: NSControl.self, in: rootView)
+                .first { $0.identifier?.rawValue == "pane-tab-\(paneID.rawValue)" }
+        )
+        let popOutItem = try XCTUnwrap(paneButton.menu?.items.first { $0.title == "Pop Out to Modal" })
+
+        XCTAssertTrue(popOutItem.isEnabled)
+        XCTAssertTrue(NSApp.sendAction(popOutItem.action!, to: popOutItem.target, from: popOutItem))
+
+        let poppedOutWorkspace = try XCTUnwrap(controller.activeWorkspace())
+        XCTAssertEqual(poppedOutWorkspace.floatingPaneModals.first?.paneStack.focusedPane?.id, paneID)
     }
 
     @MainActor
@@ -4429,6 +4917,146 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testControlPlaneCreatesExtensionPaneModal() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-ext-modal-\(UUID().uuidString).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+
+        try service.start()
+        _ = try controller.openWorkspace(at: "/tmp")
+
+        let createResponse = try requestControlMethod(
+            .createExtensionPane,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "pluginID": .string("dev.fingergun.markdown-preview"),
+                "title": .string("README.md"),
+                "source": .string("/tmp/README.md"),
+                "html": .string("<h1>README</h1>"),
+                "presentation": .string("modal"),
+            ])
+        )
+
+        XCTAssertNil(createResponse.error)
+        guard case .object(let created)? = createResponse.result,
+              case .string(let paneIDRaw)? = created["paneID"],
+              case .string(let modalIDRaw)? = created["floatingPaneModalID"],
+              case .string("modal")? = created["presentation"]
+        else {
+            return XCTFail("expected floating extension pane result")
+        }
+
+        let paneID = PaneID(rawValue: paneIDRaw)
+        let modalID = FloatingPaneModalID(rawValue: modalIDRaw)
+        let workspace = try XCTUnwrap(controller.activeWorkspace())
+        XCTAssertTrue(workspace.floatingPaneModals.contains(where: { $0.id == modalID }))
+        XCTAssertTrue(workspace.floatingPaneModals.contains(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) }))
+    }
+
+    @MainActor
+    func testControlPlaneListsFloatingModalTerminalSessionsAndFocus() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-list-modal-\(UUID().uuidString).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+
+        try service.start()
+        _ = try controller.openWorkspace(at: "/tmp")
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let poppedPaneID = try XCTUnwrap(updatedWorkspace.tabs.first?.panes.first?.id)
+        let sourceStackID = try XCTUnwrap(updatedWorkspace.tabs.first?.focusedPaneStack?.id)
+        let modalWorkspace = try XCTUnwrap(controller.movePaneTabToFloatingModal(
+            paneID: poppedPaneID,
+            sourceStackID: sourceStackID
+        ))
+        let modalID = try XCTUnwrap(modalWorkspace.floatingPaneModals.first?.id)
+        let dockedPaneID = try XCTUnwrap(modalWorkspace.tabs.first?.focusedPane?.id)
+
+        let sessionsResponse = try requestControlMethod(.listSessions, socketPath: socketURL.path(percentEncoded: false))
+        let panesResponse = try requestControlMethod(.listPanes, socketPath: socketURL.path(percentEncoded: false))
+
+        guard case .array(let sessionValues)? = sessionsResponse.result,
+              case .array(let paneValues)? = panesResponse.result
+        else {
+            return XCTFail("expected list responses")
+        }
+
+        func rpcObject(for paneID: PaneID, in values: [RPCValue]) -> [String: RPCValue]? {
+            values.first { value in
+                guard case .object(let object) = value else {
+                    return false
+                }
+                return object["paneID"] == .string(paneID.rawValue)
+            }.flatMap { value in
+                guard case .object(let object) = value else {
+                    return nil
+                }
+                return object
+            }
+        }
+
+        let modalSession = try XCTUnwrap(rpcObject(for: poppedPaneID, in: sessionValues))
+        XCTAssertEqual(modalSession["floatingPaneModalID"], .string(modalID.rawValue))
+        XCTAssertEqual(modalSession["tabID"], .null)
+        XCTAssertEqual(modalSession["focused"], .bool(true))
+
+        let modalPane = try XCTUnwrap(rpcObject(for: poppedPaneID, in: paneValues))
+        let dockedPane = try XCTUnwrap(rpcObject(for: dockedPaneID, in: paneValues))
+        XCTAssertEqual(modalPane["floatingPaneModalID"], .string(modalID.rawValue))
+        XCTAssertEqual(modalPane["focused"], .bool(true))
+        XCTAssertEqual(dockedPane["focused"], .bool(false))
+    }
+
+    @MainActor
     func testControlPlaneWorkspaceMutationsRunOnMainThreadForHookDrivenRequests() throws {
         let runtime = MainThreadRecordingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -4629,7 +5257,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
     }
 
-    func testPaneTabDragRequiresInitializedTerminalPane() throws {
+    func testPaneTabDragRequiresAttachedTerminalSession() throws {
         let firstPane = Pane(
             title: "one",
             session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp")
@@ -4654,7 +5282,7 @@ final class OmuxAppShellTests: XCTestCase {
                 attachedSessionExists: false
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             PaneTabDragReadiness.canStart(
                 paneID: secondPane.id,
                 sourceStackID: uninitializedStack.id,
@@ -5378,6 +6006,45 @@ final class OmuxAppShellTests: XCTestCase {
             XCTAssertEqual(indexed?.paneID, scanned?.paneID)
             XCTAssertEqual(indexed?.sessionID, scanned?.sessionID)
         }
+    }
+
+    func testWorkspaceControllerResolvesFloatingModalTerminalTargets() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/modal-targets")
+        let poppedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let sourceStackID = try XCTUnwrap(workspace.focusedPaneStack?.id)
+        let updatedWorkspace = try XCTUnwrap(controller.movePaneTabToFloatingModal(
+            paneID: poppedPaneID,
+            sourceStackID: sourceStackID
+        ))
+        let modalPane = try XCTUnwrap(updatedWorkspace.floatingPaneModals.first?.paneStack.focusedPane)
+        let sessionID = try XCTUnwrap(modalPane.terminalSession?.id)
+
+        let paneContext = try XCTUnwrap(controller.resolveTerminalTarget(.pane(poppedPaneID)))
+        XCTAssertEqual(paneContext.workspaceID, updatedWorkspace.id)
+        XCTAssertNil(paneContext.tabID)
+        XCTAssertEqual(paneContext.paneStackID, updatedWorkspace.floatingPaneModals.first?.paneStack.id)
+        XCTAssertEqual(paneContext.paneID, poppedPaneID)
+        XCTAssertEqual(paneContext.sessionID, sessionID)
+
+        let sessionContext = try XCTUnwrap(controller.resolveTerminalTarget(.session(sessionID)))
+        XCTAssertEqual(sessionContext.workspaceID, updatedWorkspace.id)
+        XCTAssertNil(sessionContext.tabID)
+        XCTAssertEqual(sessionContext.paneStackID, updatedWorkspace.floatingPaneModals.first?.paneStack.id)
+        XCTAssertEqual(sessionContext.paneID, poppedPaneID)
+        XCTAssertEqual(sessionContext.sessionID, sessionID)
+
+        let workspaceContext = try XCTUnwrap(controller.resolveTerminalTarget(.workspace(updatedWorkspace.id)))
+        XCTAssertEqual(workspaceContext.workspaceID, updatedWorkspace.id)
+        XCTAssertNil(workspaceContext.tabID)
+        XCTAssertEqual(workspaceContext.paneID, poppedPaneID)
+        XCTAssertEqual(workspaceContext.sessionID, sessionID)
     }
 
     private func runGit(_ arguments: [String]) throws {

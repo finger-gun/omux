@@ -434,7 +434,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             guard let paneID = request.params?.objectValue?["paneID"]?.stringValue.map(PaneID.init(rawValue:)) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing paneID"))
             }
-            guard let pane = controller.allWorkspaces().lazy.flatMap({ $0.tabs.flatMap(\.panes) }).first(where: { $0.id == paneID }) else {
+            guard let pane = controller.allWorkspaces().lazy.flatMap(\.panes).first(where: { $0.id == paneID }) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "extension pane not found"))
             }
             guard pane.extensionPane != nil else {
@@ -553,6 +553,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
 private func extensionPaneDescriptor(pluginID: String, params: [String: RPCValue]) -> ExtensionPaneDescriptor {
     let contentKind = params["contentKind"]?.stringValue.flatMap(ExtensionPaneContentKind.init(rawValue:)) ?? .html
     let status = params["status"]?.stringValue.flatMap(ExtensionPaneStatus.init(rawValue:)) ?? .ready
+    let presentation = params["presentation"]?.stringValue.flatMap(ExtensionPanePresentationStyle.init(rawValue:)) ?? .paneTab
     return ExtensionPaneDescriptor(
         pluginID: pluginID,
         contentKind: contentKind,
@@ -560,7 +561,8 @@ private func extensionPaneDescriptor(pluginID: String, params: [String: RPCValue
         html: params["html"]?.stringValue,
         status: status,
         message: params["message"]?.stringValue,
-        actionsEnabled: params["actionsEnabled"]?.boolValue == true
+        actionsEnabled: params["actionsEnabled"]?.boolValue == true,
+        presentationStyle: presentation
     )
 }
 
@@ -649,10 +651,12 @@ private extension ExtensionPaneActionResult {
             "workspaceID": .string(workspace.id.rawValue),
             "tabID": tabID.map { .string($0.rawValue) } ?? .null,
             "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+            "floatingPaneModalID": floatingPaneModalID.map { .string($0.rawValue) } ?? .null,
             "paneID": .string(pane.id.rawValue),
             "title": .string(pane.title),
             "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
             "contentKind": pane.extensionPane.map { .string($0.contentKind.rawValue) } ?? .null,
+            "presentation": pane.extensionPane.map { .string($0.presentationStyle.rawValue) } ?? .null,
             "source": pane.extensionPane?.source.map(RPCValue.string) ?? .null,
             "workspace": .object(workspace.rpcObject),
         ]
@@ -668,12 +672,14 @@ private extension Workspace {
             "customName": customName.map { .string($0) } ?? .null,
             "rootPath": .string(rootPath),
             "tabCount": .integer(tabs.count),
-            "paneCount": .integer(tabs.reduce(into: 0) { $0 += $1.panes.count }),
+            "paneCount": .integer(panes.count),
             "focusedTabID": .string(focusedTabID.rawValue),
+            "focusedFloatingPaneModalID": focusedFloatingPaneModalID.map { .string($0.rawValue) } ?? .null,
             "focusedPaneID": focusedPane.map { .string($0.id.rawValue) } ?? .null,
             "focusedPaneStackID": focusedPaneStack.map { .string($0.id.rawValue) } ?? .null,
             "focusedSessionID": focusedPane?.terminalSession.map { .string($0.id.rawValue) } ?? .null,
             "tabs": .array(tabs.map { .object($0.rpcObject(workspaceID: id)) }),
+            "floatingPaneModals": .array(floatingPaneModals.map { .object($0.rpcObject(workspaceID: id)) }),
         ]
     }
 
@@ -687,34 +693,74 @@ private extension Workspace {
                     "workspaceID": .string(id.rawValue),
                     "tabID": .string(tab.id.rawValue),
                     "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
+                    "floatingPaneModalID": .null,
                     "paneID": .string(pane.id.rawValue),
                     "sessionID": .string(session.id.rawValue),
                     "workingDirectory": .string(session.workingDirectory),
                     "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
                     "progress": pane.terminalState.progress.rpcValue,
-                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                    "focused": .bool(focusedFloatingPaneModalID == nil && focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                ]
+            }
+        } + floatingPaneModals.flatMap { modal in
+            modal.paneStack.panes.compactMap { pane in
+                guard let session = pane.terminalSession else {
+                    return nil
+                }
+                return [
+                    "workspaceID": .string(id.rawValue),
+                    "tabID": .null,
+                    "paneStackID": .string(modal.paneStack.id.rawValue),
+                    "floatingPaneModalID": .string(modal.id.rawValue),
+                    "paneID": .string(pane.id.rawValue),
+                    "sessionID": .string(session.id.rawValue),
+                    "workingDirectory": .string(session.workingDirectory),
+                    "reportedWorkingDirectory": pane.terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,
+                    "progress": pane.terminalState.progress.rpcValue,
+                    "focused": .bool(focusedFloatingPaneModalID == modal.id && modal.paneStack.focusedPaneID == pane.id),
                 ]
             }
         }
     }
 
     var paneRPCObjects: [[String: RPCValue]] {
-        tabs.flatMap { tab in
+        let dockedPanes: [[String: RPCValue]] = tabs.flatMap { tab in
             tab.panes.map { pane in
                 [
                     "workspaceID": .string(id.rawValue),
                     "tabID": .string(tab.id.rawValue),
                     "paneStackID": tab.rootLayout.paneStack(containingPaneID: pane.id).map { .string($0.id.rawValue) } ?? .null,
+                    "floatingPaneModalID": .null,
                     "paneID": .string(pane.id.rawValue),
                     "contentKind": .string(pane.isTerminal ? "terminal" : "extension"),
                     "sessionID": pane.terminalSession.map { .string($0.id.rawValue) } ?? .null,
                     "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
+                    "presentation": pane.extensionPane.map { .string($0.presentationStyle.rawValue) } ?? .null,
                     "title": .string(pane.title),
                     "progress": pane.terminalState.progress.rpcValue,
-                    "focused": .bool(focusedTabID == tab.id && tab.focusedPaneID == pane.id),
+                    "focused": .bool(focusedFloatingPaneModalID == nil && focusedTabID == tab.id && tab.focusedPaneID == pane.id),
                 ]
             }
         }
+        let floatingPanes: [[String: RPCValue]] = floatingPaneModals.flatMap { modal in
+            modal.panes.map { pane in
+                [
+                    "workspaceID": .string(id.rawValue),
+                    "tabID": .null,
+                    "paneStackID": .string(modal.paneStack.id.rawValue),
+                    "floatingPaneModalID": .string(modal.id.rawValue),
+                    "paneID": .string(pane.id.rawValue),
+                    "contentKind": .string(pane.isTerminal ? "terminal" : "extension"),
+                    "sessionID": pane.terminalSession.map { .string($0.id.rawValue) } ?? .null,
+                    "pluginID": pane.extensionPane.map { .string($0.pluginID) } ?? .null,
+                    "presentation": pane.extensionPane.map { .string($0.presentationStyle.rawValue) } ?? .null,
+                    "title": .string(pane.title),
+                    "progress": pane.terminalState.progress.rpcValue,
+                    "focused": .bool(focusedFloatingPaneModalID == modal.id && modal.paneStack.focusedPaneID == pane.id),
+                ]
+            }
+        }
+        return dockedPanes + floatingPanes
     }
 }
 
@@ -758,6 +804,30 @@ private extension PaneStack {
     }
 }
 
+private extension FloatingPaneModal {
+    func rpcObject(workspaceID: WorkspaceID) -> [String: RPCValue] {
+        [
+            "id": .string(id.rawValue),
+            "workspaceID": .string(workspaceID.rawValue),
+            "paneStackID": .string(paneStack.id.rawValue),
+            "focusedPaneID": .string(paneStack.focusedPaneID.rawValue),
+            "frame": .object(frame.rpcObject),
+            "paneIDs": .array(paneStack.panes.map { .string($0.id.rawValue) }),
+        ]
+    }
+}
+
+private extension FloatingPaneModalFrame {
+    var rpcObject: [String: RPCValue] {
+        [
+            "originX": .number(x),
+            "originY": .number(y),
+            "width": .number(width),
+            "height": .number(height),
+        ]
+    }
+}
+
 private extension Pane {
     func rpcObject(workspaceID: WorkspaceID, tabID: TabID, paneStackID: PaneStackID?, focused: Bool) -> [String: RPCValue] {
         [
@@ -768,6 +838,7 @@ private extension Pane {
             "contentKind": .string(isTerminal ? "terminal" : "extension"),
             "sessionID": terminalSession.map { .string($0.id.rawValue) } ?? .null,
             "pluginID": extensionPane.map { .string($0.pluginID) } ?? .null,
+            "presentation": extensionPane.map { .string($0.presentationStyle.rawValue) } ?? .null,
             "title": .string(title),
             "workingDirectory": terminalSession.map { .string($0.workingDirectory) } ?? .null,
             "reportedWorkingDirectory": terminalState.reportedWorkingDirectory.map(RPCValue.string) ?? .null,

@@ -717,7 +717,7 @@ public struct OmuxCLICommand {
 
     private func runMarkdownPreviewCommand(arguments: [String]) throws -> Int32 {
         guard let request = parseMarkdownPreviewRequest(arguments) else {
-            writeLine("usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows]")
+            writeLine("usage: omux markdown-preview <file> [--watch] [--pane <id>] [--title <title>] [--axis columns|rows] [--modal|--pane-tab|--presentation pane-tab|modal]")
             return 1
         }
 
@@ -741,10 +741,21 @@ public struct OmuxCLICommand {
             return 1
         }
 
+        let presentationStyle = request.presentationStyle
+            ?? ExtensionPanePresentationStyle(rawValue: pluginConfig.presentation)
+            ?? .paneTab
+
         return try OmuxMarkdownPreviewPlugin(
             renderer: OmuxMarkdownPreviewRenderer(theme: pluginConfig.theme)
         ).run(
-            request: request,
+            request: OmuxMarkdownPreviewRequest(
+                fileURL: request.fileURL,
+                paneID: request.paneID,
+                title: request.title,
+                watch: request.watch,
+                axis: request.axis,
+                presentationStyle: presentationStyle
+            ),
             client: client,
             writeLine: writeLine
         )
@@ -756,6 +767,7 @@ public struct OmuxCLICommand {
         var title: String?
         var watch = false
         var axis = PaneSplitAxis.columns
+        var presentationStyle: ExtensionPanePresentationStyle?
         var index = 0
 
         while index < arguments.count {
@@ -784,6 +796,20 @@ public struct OmuxCLICommand {
                 }
                 axis = parsedAxis
                 index += 2
+            case "--presentation":
+                guard index + 1 < arguments.count,
+                      let parsedPresentation = ExtensionPanePresentationStyle(rawValue: arguments[index + 1])
+                else {
+                    return nil
+                }
+                presentationStyle = parsedPresentation
+                index += 2
+            case "--modal":
+                presentationStyle = .modal
+                index += 1
+            case "--pane-tab":
+                presentationStyle = .paneTab
+                index += 1
             default:
                 guard argument.hasPrefix("-") == false, filePath == nil else {
                     return nil
@@ -802,7 +828,8 @@ public struct OmuxCLICommand {
             paneID: paneID,
             title: title,
             watch: watch,
-            axis: axis
+            axis: axis,
+            presentationStyle: presentationStyle
         )
     }
 
@@ -815,7 +842,7 @@ public struct OmuxCLICommand {
         switch subcommand {
         case "create":
             guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: false) else {
-                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--actions]")
+                writeLine("usage: omux extension-pane create --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--actions] [--axis columns|rows] [--presentation pane-tab|modal]")
                 return 1
             }
             let response = try client.request(method: .createExtensionPane, params: .object(request))
@@ -823,7 +850,7 @@ public struct OmuxCLICommand {
             return 0
         case "update":
             guard let request = parseExtensionPaneRequest(Array(arguments.dropFirst()), requiresPaneID: true) else {
-                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>] [--actions]")
+                writeLine("usage: omux extension-pane update --pane <id> --plugin <id> [--title <title>] [--source <path>] [--html <html>|--html-file <path>] [--status ready|disabled|error] [--message <text>] [--actions] [--presentation pane-tab|modal]")
                 return 1
             }
             let response = try client.request(method: .updateExtensionPane, params: .object(request))
@@ -896,6 +923,11 @@ public struct OmuxCLICommand {
                     return nil
                 }
                 params["axis"] = .string(value)
+            case "--presentation":
+                guard ExtensionPanePresentationStyle(rawValue: value) != nil else {
+                    return nil
+                }
+                params["presentation"] = .string(value)
             default:
                 return nil
             }

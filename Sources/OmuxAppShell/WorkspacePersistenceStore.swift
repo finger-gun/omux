@@ -3,13 +3,25 @@ import OmuxCore
 
 @MainActor
 protocol WorkspacePersistenceStoring: AnyObject {
-    func load() -> WorkspacePersistenceSnapshot?
+    func load(scrollbackPayloadResolution: WorkspaceScrollbackPayloadResolution) -> WorkspacePersistenceSnapshot?
     func save(_ snapshot: WorkspacePersistenceSnapshot?)
+}
+
+extension WorkspacePersistenceStoring {
+    func load() -> WorkspacePersistenceSnapshot? {
+        load(scrollbackPayloadResolution: .all)
+    }
 }
 
 struct WorkspacePersistenceSnapshot: Codable, Equatable {
     let workspaces: [Workspace]
     let activeWorkspaceID: WorkspaceID?
+}
+
+enum WorkspaceScrollbackPayloadResolution: Equatable {
+    case all
+    case initiallyVisible
+    case none
 }
 
 enum WorkspacePersistenceSnapshotMode: Equatable {
@@ -51,12 +63,14 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
         self.backupDirectory = backupDirectory
     }
 
-    func load() -> WorkspacePersistenceSnapshot? {
-        if let snapshot = loadSnapshotFromStateFile() {
+    func load(
+        scrollbackPayloadResolution: WorkspaceScrollbackPayloadResolution = .all
+    ) -> WorkspacePersistenceSnapshot? {
+        if let snapshot = loadSnapshotFromStateFile(scrollbackPayloadResolution: scrollbackPayloadResolution) {
             return snapshot
         }
 
-        if let snapshot = loadSnapshot(from: defaults) {
+        if let snapshot = loadSnapshot(from: defaults, scrollbackPayloadResolution: scrollbackPayloadResolution) {
             save(snapshot)
             return snapshot
         }
@@ -65,7 +79,10 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
             return loadLatestBackup()
         }
 
-        guard let migratedSnapshot = loadSnapshot(from: fallbackDefaults) else {
+        guard let migratedSnapshot = loadSnapshot(
+            from: fallbackDefaults,
+            scrollbackPayloadResolution: scrollbackPayloadResolution
+        ) else {
             return loadLatestBackup()
         }
 
@@ -128,7 +145,9 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
             .appendingPathComponent("Scrollback", isDirectory: true)
     }
 
-    private func loadSnapshotFromStateFile() -> WorkspacePersistenceSnapshot? {
+    private func loadSnapshotFromStateFile(
+        scrollbackPayloadResolution: WorkspaceScrollbackPayloadResolution
+    ) -> WorkspacePersistenceSnapshot? {
         guard let stateFileURL,
               FileManager.default.fileExists(atPath: stateFileURL.path)
         else {
@@ -137,21 +156,24 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
 
         do {
             let snapshot = try decoder.decode(WorkspacePersistenceSnapshot.self, from: Data(contentsOf: stateFileURL))
-            return scrollbackPayloadStore?.resolvePayloads(in: snapshot) ?? snapshot
+            return scrollbackPayloadStore?.resolvePayloads(in: snapshot, resolution: scrollbackPayloadResolution) ?? snapshot
         } catch {
             fputs("warning: failed to decode workspace persistence state \(stateFileURL.path): \(error)\n", stderr)
             return nil
         }
     }
 
-    private func loadSnapshot(from defaults: UserDefaults) -> WorkspacePersistenceSnapshot? {
+    private func loadSnapshot(
+        from defaults: UserDefaults,
+        scrollbackPayloadResolution: WorkspaceScrollbackPayloadResolution
+    ) -> WorkspacePersistenceSnapshot? {
         guard let data = defaults.data(forKey: key) else {
             return nil
         }
 
         do {
             let snapshot = try decoder.decode(WorkspacePersistenceSnapshot.self, from: data)
-            return scrollbackPayloadStore?.resolvePayloads(in: snapshot) ?? snapshot
+            return scrollbackPayloadStore?.resolvePayloads(in: snapshot, resolution: scrollbackPayloadResolution) ?? snapshot
         } catch {
             fputs("warning: failed to decode workspace persistence snapshot: \(error)\n", stderr)
             return nil
@@ -224,7 +246,7 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
             for backupURL in backups {
                 do {
                     let snapshot = try decoder.decode(WorkspacePersistenceSnapshot.self, from: Data(contentsOf: backupURL))
-                    return scrollbackPayloadStore?.resolvePayloads(in: snapshot) ?? snapshot
+                    return scrollbackPayloadStore?.resolvePayloads(in: snapshot, resolution: .all) ?? snapshot
                 } catch {
                     fputs("warning: failed to decode workspace persistence backup \(backupURL.path): \(error)\n", stderr)
                 }
@@ -256,9 +278,44 @@ final class WorkspaceScrollbackPayloadStore {
         return persistedSnapshot
     }
 
-    func resolvePayloads(in snapshot: WorkspacePersistenceSnapshot) -> WorkspacePersistenceSnapshot {
-        WorkspacePersistenceSnapshot(
-            workspaces: snapshot.workspaces.map(resolvePayloads(in:)),
+    func resolvePayloads(
+        in snapshot: WorkspacePersistenceSnapshot,
+        resolution: WorkspaceScrollbackPayloadResolution = .all
+    ) -> WorkspacePersistenceSnapshot {
+        switch resolution {
+        case .all:
+            return WorkspacePersistenceSnapshot(
+                workspaces: snapshot.workspaces.map(resolvePayloads(in:)),
+                activeWorkspaceID: snapshot.activeWorkspaceID
+            )
+        case .initiallyVisible:
+            return resolveInitiallyVisiblePayloads(in: snapshot)
+        case .none:
+            return snapshot
+        }
+    }
+
+    private func resolveInitiallyVisiblePayloads(in snapshot: WorkspacePersistenceSnapshot) -> WorkspacePersistenceSnapshot {
+        guard let activeWorkspace = snapshot.activeWorkspaceID.flatMap({ activeWorkspaceID in
+            snapshot.workspaces.first(where: { $0.id == activeWorkspaceID })
+        }) ?? snapshot.workspaces.first else {
+            return snapshot
+        }
+
+        let focusedTabPanes = (activeWorkspace.focusedTab ?? activeWorkspace.tabs.first)?.panes.map(\.id) ?? []
+        let floatingPaneIDs = activeWorkspace.floatingPaneModals.flatMap(\.panes).map(\.id)
+        let initiallyVisiblePaneIDs = Set(focusedTabPanes + floatingPaneIDs)
+        guard initiallyVisiblePaneIDs.isEmpty == false else {
+            return snapshot
+        }
+
+        return WorkspacePersistenceSnapshot(
+            workspaces: snapshot.workspaces.map { workspace in
+                guard workspace.id == activeWorkspace.id else {
+                    return workspace
+                }
+                return resolvePayloads(in: workspace, paneIDs: initiallyVisiblePaneIDs)
+            },
             activeWorkspaceID: snapshot.activeWorkspaceID
         )
     }
@@ -270,7 +327,23 @@ final class WorkspaceScrollbackPayloadStore {
             customName: workspace.customName,
             rootPath: workspace.rootPath,
             tabs: workspace.tabs.map { persistPayloads(in: $0, workspaceID: workspace.id) },
-            focusedTabID: workspace.focusedTabID
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map {
+                persistPayloads(in: $0, workspaceID: workspace.id)
+            },
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
+        )
+    }
+
+    private func persistPayloads(in modal: FloatingPaneModal, workspaceID: WorkspaceID) -> FloatingPaneModal {
+        FloatingPaneModal(
+            id: modal.id,
+            paneStack: PaneStack(
+                id: modal.paneStack.id,
+                panes: modal.paneStack.panes.map { persistPayloads(in: $0, workspaceID: workspaceID) },
+                focusedPaneID: modal.paneStack.focusedPaneID
+            ),
+            frame: modal.frame
         )
     }
 
@@ -312,7 +385,48 @@ final class WorkspaceScrollbackPayloadStore {
             customName: workspace.customName,
             rootPath: workspace.rootPath,
             tabs: workspace.tabs.map(resolvePayloads(in:)),
-            focusedTabID: workspace.focusedTabID
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map(resolvePayloads(in:)),
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
+        )
+    }
+
+    private func resolvePayloads(in workspace: Workspace, paneIDs: Set<PaneID>) -> Workspace {
+        Workspace(
+            id: workspace.id,
+            generatedName: workspace.generatedName,
+            customName: workspace.customName,
+            rootPath: workspace.rootPath,
+            tabs: workspace.tabs.map { resolvePayloads(in: $0, paneIDs: paneIDs) },
+            focusedTabID: workspace.focusedTabID,
+            floatingPaneModals: workspace.floatingPaneModals.map { resolvePayloads(in: $0, paneIDs: paneIDs) },
+            focusedFloatingPaneModalID: workspace.focusedFloatingPaneModalID
+        )
+    }
+
+    private func resolvePayloads(in modal: FloatingPaneModal) -> FloatingPaneModal {
+        FloatingPaneModal(
+            id: modal.id,
+            paneStack: PaneStack(
+                id: modal.paneStack.id,
+                panes: modal.paneStack.panes.map(resolvePayloads(in:)),
+                focusedPaneID: modal.paneStack.focusedPaneID
+            ),
+            frame: modal.frame
+        )
+    }
+
+    private func resolvePayloads(in modal: FloatingPaneModal, paneIDs: Set<PaneID>) -> FloatingPaneModal {
+        FloatingPaneModal(
+            id: modal.id,
+            paneStack: PaneStack(
+                id: modal.paneStack.id,
+                panes: modal.paneStack.panes.map { pane in
+                    paneIDs.contains(pane.id) ? resolvePayloads(in: pane) : pane
+                },
+                focusedPaneID: modal.paneStack.focusedPaneID
+            ),
+            frame: modal.frame
         )
     }
 
@@ -321,6 +435,17 @@ final class WorkspaceScrollbackPayloadStore {
             id: tab.id,
             title: tab.title,
             rootLayout: transformPanes(in: tab.rootLayout, transform: resolvePayloads(in:)),
+            focusedPaneID: tab.focusedPaneID
+        )
+    }
+
+    private func resolvePayloads(in tab: Tab, paneIDs: Set<PaneID>) -> Tab {
+        Tab(
+            id: tab.id,
+            title: tab.title,
+            rootLayout: transformPanes(in: tab.rootLayout) { pane in
+                paneIDs.contains(pane.id) ? resolvePayloads(in: pane) : pane
+            },
             focusedPaneID: tab.focusedPaneID
         )
     }
@@ -408,11 +533,9 @@ final class WorkspaceScrollbackPayloadStore {
     private func referencedPayloadIdentifiers(in snapshot: WorkspacePersistenceSnapshot) -> Set<String> {
         var identifiers = Set<String>()
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                for pane in tab.panes {
-                    if let storageIdentifier = pane.terminalState.restoredScrollback?.storageIdentifier {
-                        identifiers.insert(storageIdentifier)
-                    }
+            for pane in workspace.panes {
+                if let storageIdentifier = pane.terminalState.restoredScrollback?.storageIdentifier {
+                    identifiers.insert(storageIdentifier)
                 }
             }
         }

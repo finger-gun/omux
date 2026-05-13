@@ -1,6 +1,6 @@
 # OpenMUX Developer Quick Start
 
-This page is the short path for working on OpenMUX locally. For deeper architecture notes, see [Development notes](./development.md).
+This page is the short path for working on OpenMUX locally. For deeper architecture notes, see [Architecture overview](./architecture.md) and [Development notes](./development.md).
 
 ## First-time setup
 
@@ -64,6 +64,7 @@ openspec validate <change-id> --strict
 ## Useful docs while developing
 
 - [Development notes](./development.md) - module boundaries, runtime bridge details, command list, and current implementation status.
+- [Architecture overview](./architecture.md) - how OpenMUX speaks over the control plane, renders the shell, and models workspaces, panes, tabs, and modals.
 - [Plugin ecosystem](./plugins.md) - external plugin commands, extension panes, menu contributions, and terminal text activation hooks.
 - [Plugin index](./plugins/index.md) - bundled and registry-hosted plugin docs.
 - [Configuration and themes](./configuration.md) - config schema, theme tokens, keybindings, and bundled plugin settings.

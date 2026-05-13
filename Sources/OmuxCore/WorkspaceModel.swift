@@ -24,6 +24,11 @@ public enum ExtensionPaneContentKind: String, Codable, Sendable {
     case placeholder
 }
 
+public enum ExtensionPanePresentationStyle: String, Codable, Sendable {
+    case paneTab = "pane-tab"
+    case modal
+}
+
 public enum ExtensionPaneStatus: String, Codable, Sendable {
     case ready
     case disabled
@@ -38,6 +43,7 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
     public var status: ExtensionPaneStatus
     public var message: String?
     public var actionsEnabled: Bool
+    public var presentationStyle: ExtensionPanePresentationStyle
 
     public init(
         pluginID: String,
@@ -46,7 +52,8 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
         html: String? = nil,
         status: ExtensionPaneStatus = .ready,
         message: String? = nil,
-        actionsEnabled: Bool = false
+        actionsEnabled: Bool = false,
+        presentationStyle: ExtensionPanePresentationStyle = .paneTab
     ) {
         self.pluginID = pluginID
         self.contentKind = contentKind
@@ -55,6 +62,45 @@ public struct ExtensionPaneDescriptor: Equatable, Codable, Sendable {
         self.status = status
         self.message = message
         self.actionsEnabled = actionsEnabled
+        self.presentationStyle = presentationStyle
+    }
+}
+
+public struct FloatingPaneModalFrame: Equatable, Codable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double = 120, y: Double = 120, width: Double = 720, height: Double = 520) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct FloatingPaneModal: Equatable, Codable, Sendable {
+    public let id: FloatingPaneModalID
+    public var paneStack: PaneStack
+    public var frame: FloatingPaneModalFrame
+
+    public init(
+        id: FloatingPaneModalID = FloatingPaneModalID(),
+        paneStack: PaneStack,
+        frame: FloatingPaneModalFrame = FloatingPaneModalFrame()
+    ) {
+        self.id = id
+        self.paneStack = paneStack
+        self.frame = frame
+    }
+
+    public var panes: [Pane] {
+        paneStack.panes
+    }
+
+    public var focusedPane: Pane? {
+        paneStack.focusedPane
     }
 }
 
@@ -1041,6 +1087,47 @@ public indirect enum TabLayoutNode: Equatable, Codable, Sendable {
         return true
     }
 
+    @discardableResult
+    public mutating func insertPaneToExistingStack(
+        _ pane: Pane,
+        targetStackID: PaneStackID
+    ) -> Bool {
+        appendPane(pane, toStackID: targetStackID)
+    }
+
+    @discardableResult
+    public mutating func insertPaneToSplit(
+        _ pane: Pane,
+        targetStackID: PaneStackID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        let newStack = PaneStack(panes: [pane], focusedPaneID: pane.id)
+        return insertStack(newStack, adjacentTo: targetStackID, direction: direction)
+    }
+
+    @discardableResult
+    public mutating func insertPaneToRootSplit(
+        _ pane: Pane,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        let newStack = PaneStack(panes: [pane], focusedPaneID: pane.id)
+        let newNode = TabLayoutNode.paneStack(newStack)
+        let children: [TabLayoutNode] = direction.insertsAfterTarget ? [self, newNode] : [newNode, self]
+        self = Self.makeSplit(axis: direction.axis, proportions: [], children: children)
+        return true
+    }
+
+    @discardableResult
+    public mutating func insertPaneStackToRootSplit(
+        _ paneStack: PaneStack,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        let newNode = TabLayoutNode.paneStack(paneStack)
+        let children: [TabLayoutNode] = direction.insertsAfterTarget ? [self, newNode] : [newNode, self]
+        self = Self.makeSplit(axis: direction.axis, proportions: [], children: children)
+        return true
+    }
+
     /// Reorders `paneID` within an existing stack to a destination insertion index.
     /// Returns false when the stack or pane is missing, or when the resulting order is unchanged.
     @discardableResult
@@ -1550,12 +1637,25 @@ public struct Tab: Equatable, Codable, Sendable {
 }
 
 public struct Workspace: Equatable, Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case generatedName
+        case customName
+        case rootPath
+        case tabs
+        case focusedTabID
+        case floatingPaneModals
+        case focusedFloatingPaneModalID
+    }
+
     public let id: WorkspaceID
     public var generatedName: String
     public var customName: String?
     public var rootPath: String
     public var tabs: [Tab]
     public var focusedTabID: TabID
+    public var floatingPaneModals: [FloatingPaneModal]
+    public var focusedFloatingPaneModalID: FloatingPaneModalID?
 
     public init(
         id: WorkspaceID = WorkspaceID(),
@@ -1563,7 +1663,9 @@ public struct Workspace: Equatable, Codable, Sendable {
         customName: String? = nil,
         rootPath: String,
         tabs: [Tab],
-        focusedTabID: TabID
+        focusedTabID: TabID,
+        floatingPaneModals: [FloatingPaneModal] = [],
+        focusedFloatingPaneModalID: FloatingPaneModalID? = nil
     ) {
         self.id = id
         self.generatedName = generatedName
@@ -1571,6 +1673,8 @@ public struct Workspace: Equatable, Codable, Sendable {
         self.rootPath = rootPath
         self.tabs = tabs
         self.focusedTabID = focusedTabID
+        self.floatingPaneModals = floatingPaneModals
+        self.focusedFloatingPaneModalID = focusedFloatingPaneModalID
     }
 
     public init(
@@ -1590,6 +1694,30 @@ public struct Workspace: Equatable, Codable, Sendable {
         )
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(WorkspaceID.self, forKey: .id)
+        self.generatedName = try container.decode(String.self, forKey: .generatedName)
+        self.customName = try container.decodeIfPresent(String.self, forKey: .customName)
+        self.rootPath = try container.decode(String.self, forKey: .rootPath)
+        self.tabs = try container.decode([Tab].self, forKey: .tabs)
+        self.focusedTabID = try container.decode(TabID.self, forKey: .focusedTabID)
+        self.floatingPaneModals = try container.decodeIfPresent([FloatingPaneModal].self, forKey: .floatingPaneModals) ?? []
+        self.focusedFloatingPaneModalID = try container.decodeIfPresent(FloatingPaneModalID.self, forKey: .focusedFloatingPaneModalID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(generatedName, forKey: .generatedName)
+        try container.encodeIfPresent(customName, forKey: .customName)
+        try container.encode(rootPath, forKey: .rootPath)
+        try container.encode(tabs, forKey: .tabs)
+        try container.encode(focusedTabID, forKey: .focusedTabID)
+        try container.encode(floatingPaneModals, forKey: .floatingPaneModals)
+        try container.encodeIfPresent(focusedFloatingPaneModalID, forKey: .focusedFloatingPaneModalID)
+    }
+
     public var name: String {
         customName ?? generatedName
     }
@@ -1602,12 +1730,18 @@ public struct Workspace: Equatable, Codable, Sendable {
         tabs.first(where: { $0.id == focusedTabID })
     }
 
+    public var focusedFloatingPaneModal: FloatingPaneModal? {
+        focusedFloatingPaneModalID.flatMap { focusedID in
+            floatingPaneModals.first(where: { $0.id == focusedID })
+        }
+    }
+
     public var focusedPane: Pane? {
-        focusedTab?.focusedPane
+        focusedFloatingPaneModal?.focusedPane ?? focusedTab?.focusedPane
     }
 
     public var focusedPaneStack: PaneStack? {
-        focusedTab?.focusedPaneStack
+        focusedFloatingPaneModal?.paneStack ?? focusedTab?.focusedPaneStack
     }
 
     public var hasFocusedTabSplits: Bool {
@@ -1615,13 +1749,17 @@ public struct Workspace: Equatable, Codable, Sendable {
     }
 
     public func canResizeFocusedSplit(_ direction: PaneSplitResizeDirection) -> Bool {
-        focusedTab?.canResizeFocusedSplit(direction) ?? false
+        guard focusedFloatingPaneModalID == nil else {
+            return false
+        }
+        return focusedTab?.canResizeFocusedSplit(direction) ?? false
     }
 
     @discardableResult
     public mutating func focus(sessionID: SessionID) -> Bool {
         for tabIndex in tabs.indices {
             if let pane = tabs[tabIndex].panes.first(where: { $0.terminalSession?.id == sessionID }) {
+                focusedFloatingPaneModalID = nil
                 focusedTabID = tabs[tabIndex].id
                 return tabs[tabIndex].focusPane(pane.id)
             }
@@ -1636,6 +1774,7 @@ public struct Workspace: Equatable, Codable, Sendable {
             return false
         }
 
+        focusedFloatingPaneModalID = nil
         focusedTabID = tabID
         return true
     }
@@ -1644,8 +1783,16 @@ public struct Workspace: Equatable, Codable, Sendable {
     public mutating func focus(paneID: PaneID) -> Bool {
         for tabIndex in tabs.indices {
             if tabs[tabIndex].panes.contains(where: { $0.id == paneID }) {
+                focusedFloatingPaneModalID = nil
                 focusedTabID = tabs[tabIndex].id
                 return tabs[tabIndex].focusPane(paneID)
+            }
+        }
+
+        for modalIndex in floatingPaneModals.indices {
+            if floatingPaneModals[modalIndex].paneStack.focusPane(paneID) {
+                focusedFloatingPaneModalID = floatingPaneModals[modalIndex].id
+                return true
             }
         }
 
@@ -1654,7 +1801,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func focusNextPaneTab() -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1663,7 +1812,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func focusPreviousPaneTab() -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1672,7 +1823,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func focusNextPane() -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1681,7 +1834,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func focusPreviousPane() -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1691,6 +1846,7 @@ public struct Workspace: Equatable, Codable, Sendable {
     public mutating func appendTab(_ tab: Tab, focus: Bool = true) {
         tabs.append(tab)
         if focus {
+            focusedFloatingPaneModalID = nil
             focusedTabID = tab.id
         }
     }
@@ -1709,9 +1865,15 @@ public struct Workspace: Equatable, Codable, Sendable {
         return removedTab
     }
 
+    public var panes: [Pane] {
+        tabs.flatMap(\.panes) + floatingPaneModals.flatMap(\.panes)
+    }
+
     @discardableResult
     public mutating func createPaneInFocusedStack(_ pane: Pane) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1728,6 +1890,7 @@ public struct Workspace: Equatable, Codable, Sendable {
                 continue
             }
 
+            focusedFloatingPaneModalID = nil
             focusedTabID = tabs[tabIndex].id
             return tabs[tabIndex].createPane(inStack: stackID, pane: pane)
         }
@@ -1736,6 +1899,12 @@ public struct Workspace: Equatable, Codable, Sendable {
     }
 
     public mutating func closeFocusedPane() -> Pane? {
+        if let modalID = focusedFloatingPaneModalID,
+           let modal = floatingPaneModals.first(where: { $0.id == modalID }),
+           let paneID = modal.focusedPane?.id {
+            return closeFloatingPane(paneID)
+        }
+
         guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
             return nil
         }
@@ -1746,12 +1915,13 @@ public struct Workspace: Equatable, Codable, Sendable {
     public mutating func closePane(_ paneID: PaneID) -> Pane? {
         for tabIndex in tabs.indices {
             if tabs[tabIndex].panes.contains(where: { $0.id == paneID }) {
+                focusedFloatingPaneModalID = nil
                 focusedTabID = tabs[tabIndex].id
                 return tabs[tabIndex].closePane(paneID)
             }
         }
 
-        return nil
+        return closeFloatingPane(paneID)
     }
 
     @discardableResult
@@ -1764,6 +1934,13 @@ public struct Workspace: Equatable, Codable, Sendable {
                 return true
             }
         }
+        for modalIndex in floatingPaneModals.indices {
+            guard let paneIndex = floatingPaneModals[modalIndex].paneStack.panes.firstIndex(where: { $0.id == paneID }) else {
+                continue
+            }
+            transform(&floatingPaneModals[modalIndex].paneStack.panes[paneIndex])
+            return true
+        }
         return false
     }
 
@@ -1773,6 +1950,7 @@ public struct Workspace: Equatable, Codable, Sendable {
             return false
         }
 
+        focusedFloatingPaneModalID = nil
         return tabs[tabIndex].splitFocusedPane(pane, axis: axis ?? .columns)
     }
 
@@ -1781,7 +1959,9 @@ public struct Workspace: Equatable, Codable, Sendable {
         _ proportions: [Double],
         forChildPaneIDs childPaneIDs: [PaneID]
     ) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1790,7 +1970,9 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func equalizeSplitsInFocusedTab() -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
@@ -1799,15 +1981,15 @@ public struct Workspace: Equatable, Codable, Sendable {
 
     @discardableResult
     public mutating func resizeFocusedSplit(_ direction: PaneSplitResizeDirection) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) else {
+        guard focusedFloatingPaneModalID == nil,
+              let tabIndex = tabs.firstIndex(where: { $0.id == focusedTabID })
+        else {
             return false
         }
 
         return tabs[tabIndex].resizeFocusedSplit(direction)
     }
 
-    /// Moves a pane tab into a new split adjacent to the target pane stack in the given direction.
-    /// Returns false if the move is invalid (same stack, pane not found, or stack not found).
     @discardableResult
     public mutating func movePaneTabToSplit(
         paneID: PaneID,
@@ -1815,78 +1997,266 @@ public struct Workspace: Equatable, Codable, Sendable {
         targetStackID: PaneStackID,
         direction: PaneSplitDropDirection
     ) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+        if let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) {
+            let moved = tabs[tabIndex].rootLayout.movePaneToSplit(
+                paneID: paneID,
+                sourceStackID: sourceStackID,
+                targetStackID: targetStackID,
+                direction: direction
+            )
+            guard moved else { return false }
+            return focus(paneID: paneID)
+        }
+
+        guard let detached = detachFloatingPane(paneID: paneID, sourceStackID: sourceStackID),
+              let targetTabIndex = tabs.firstIndex(where: { $0.rootLayout.paneStack(id: targetStackID) != nil }),
+              tabs[targetTabIndex].rootLayout.insertPaneToSplit(
+                paneSettingPresentationStyle(detached.pane, to: .paneTab),
+                targetStackID: targetStackID,
+                direction: direction
+              )
+        else {
             return false
         }
-        let moved = tabs[tabIndex].rootLayout.movePaneToSplit(
-            paneID: paneID,
-            sourceStackID: sourceStackID,
-            targetStackID: targetStackID,
-            direction: direction
-        )
-        guard moved else { return false }
-        focus(paneID: paneID)
-        return true
+
+        focusedFloatingPaneModalID = nil
+        return focus(paneID: paneID)
     }
 
-    /// Wraps the entire root layout in a new split, moving the pane to the new slot.
     @discardableResult
     public mutating func movePaneTabToRootSplit(
         paneID: PaneID,
         sourceStackID: PaneStackID,
         direction: PaneSplitDropDirection
     ) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+        if let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) {
+            let moved = tabs[tabIndex].rootLayout.movePaneToRootSplit(
+                paneID: paneID,
+                sourceStackID: sourceStackID,
+                direction: direction
+            )
+            guard moved else { return false }
+            return focus(paneID: paneID)
+        }
+
+        guard let detached = detachFloatingPane(paneID: paneID, sourceStackID: sourceStackID),
+              let targetTabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) ?? tabs.indices.first
+        else {
             return false
         }
-        let moved = tabs[tabIndex].rootLayout.movePaneToRootSplit(
-            paneID: paneID,
-            sourceStackID: sourceStackID,
+        _ = tabs[targetTabIndex].rootLayout.insertPaneToRootSplit(
+            paneSettingPresentationStyle(detached.pane, to: .paneTab),
             direction: direction
         )
-        guard moved else { return false }
-        focus(paneID: paneID)
-        return true
+        focusedFloatingPaneModalID = nil
+        return focus(paneID: paneID)
     }
 
-    /// Moves a pane tab into an existing pane stack, appending it as a new tab.
     @discardableResult
     public mutating func movePaneTabToExistingStack(
         paneID: PaneID,
         sourceStackID: PaneStackID,
         targetStackID: PaneStackID
     ) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+        if let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) {
+            let moved = tabs[tabIndex].rootLayout.movePaneToExistingStack(
+                paneID: paneID,
+                sourceStackID: sourceStackID,
+                targetStackID: targetStackID
+            )
+            guard moved else { return false }
+            return focus(paneID: paneID)
+        }
+
+        guard let detached = detachFloatingPane(paneID: paneID, sourceStackID: sourceStackID),
+              let targetTabIndex = tabs.firstIndex(where: { $0.rootLayout.paneStack(id: targetStackID) != nil }),
+              tabs[targetTabIndex].rootLayout.insertPaneToExistingStack(
+                paneSettingPresentationStyle(detached.pane, to: .paneTab),
+                targetStackID: targetStackID
+              )
+        else {
             return false
         }
-        let moved = tabs[tabIndex].rootLayout.movePaneToExistingStack(
-            paneID: paneID,
-            sourceStackID: sourceStackID,
-            targetStackID: targetStackID
-        )
-        guard moved else { return false }
-        focus(paneID: paneID)
-        return true
+
+        focusedFloatingPaneModalID = nil
+        return focus(paneID: paneID)
     }
 
-    /// Reorders a pane tab within its current pane stack.
     @discardableResult
     public mutating func reorderPaneTabInStack(
         paneID: PaneID,
         stackID: PaneStackID,
         insertionIndex: Int
     ) -> Bool {
-        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) else {
+        if let tabIndex = tabs.firstIndex(where: { $0.rootLayout.containsPane(id: paneID) }) {
+            let reordered = tabs[tabIndex].rootLayout.reorderPaneInStack(
+                paneID: paneID,
+                stackID: stackID,
+                insertionIndex: insertionIndex
+            )
+            guard reordered else { return false }
+            return focus(paneID: paneID)
+        }
+
+        guard let modalIndex = floatingPaneModals.firstIndex(where: { $0.paneStack.id == stackID }),
+              let fromIndex = floatingPaneModals[modalIndex].paneStack.panes.firstIndex(where: { $0.id == paneID })
+        else {
             return false
         }
-        let reordered = tabs[tabIndex].rootLayout.reorderPaneInStack(
-            paneID: paneID,
-            stackID: stackID,
-            insertionIndex: insertionIndex
-        )
-        guard reordered else { return false }
-        focus(paneID: paneID)
+
+        let clampedInsertionIndex = max(0, min(insertionIndex, floatingPaneModals[modalIndex].paneStack.panes.count))
+        var destinationIndex = clampedInsertionIndex
+        if destinationIndex > fromIndex {
+            destinationIndex -= 1
+        }
+        guard destinationIndex != fromIndex else {
+            return false
+        }
+
+        let pane = floatingPaneModals[modalIndex].paneStack.panes.remove(at: fromIndex)
+        floatingPaneModals[modalIndex].paneStack.panes.insert(pane, at: destinationIndex)
+        floatingPaneModals[modalIndex].paneStack.focusedPaneID = pane.id
+        focusedFloatingPaneModalID = floatingPaneModals[modalIndex].id
         return true
+    }
+
+    public mutating func appendFloatingPaneModal(_ modal: FloatingPaneModal, focus: Bool = true) {
+        floatingPaneModals.append(modal)
+        if focus {
+            focusedFloatingPaneModalID = modal.id
+        }
+    }
+
+    @discardableResult
+    public mutating func updateFloatingPaneModalFrame(
+        modalID: FloatingPaneModalID,
+        frame: FloatingPaneModalFrame
+    ) -> Bool {
+        guard let index = floatingPaneModals.firstIndex(where: { $0.id == modalID }) else {
+            return false
+        }
+        floatingPaneModals[index].frame = frame
+        return true
+    }
+
+    @discardableResult
+    public mutating func createFloatingPaneModal(
+        containing pane: Pane,
+        frame: FloatingPaneModalFrame = FloatingPaneModalFrame()
+    ) -> FloatingPaneModal {
+        let paneStack = PaneStack(
+            panes: [paneSettingPresentationStyle(pane, to: .modal)],
+            focusedPaneID: pane.id
+        )
+        let modal = FloatingPaneModal(paneStack: paneStack, frame: frame)
+        appendFloatingPaneModal(modal)
+        return modal
+    }
+
+    @discardableResult
+    public mutating func moveDockedPaneToFloatingModal(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        frame: FloatingPaneModalFrame = FloatingPaneModalFrame()
+    ) -> FloatingPaneModal? {
+        guard let tabIndex = tabs.firstIndex(where: { $0.rootLayout.paneStack(id: sourceStackID) != nil && $0.rootLayout.containsPane(id: paneID) }) else {
+            return nil
+        }
+        let pane: Pane
+        if let removedPane = tabs[tabIndex].removePane(paneID) {
+            pane = removedPane
+        } else if tabs[tabIndex].rootLayout.containsPane(id: paneID),
+                  tabs[tabIndex].panes.count == 1,
+                  tabs[tabIndex].panes.first?.id == paneID {
+            let removedTab = tabs.remove(at: tabIndex)
+            pane = removedTab.panes[0]
+            if tabs.isEmpty == false, focusedTabID == removedTab.id {
+                focusedTabID = tabs[min(tabIndex, tabs.count - 1)].id
+            }
+        } else {
+            return nil
+        }
+        let modal = createFloatingPaneModal(containing: pane, frame: frame)
+        focusedFloatingPaneModalID = modal.id
+        return modal
+    }
+
+    @discardableResult
+    public mutating func moveFloatingPaneModalToRootSplit(
+        modalID: FloatingPaneModalID,
+        direction: PaneSplitDropDirection
+    ) -> Bool {
+        guard let modalIndex = floatingPaneModals.firstIndex(where: { $0.id == modalID }),
+              let targetTabIndex = tabs.firstIndex(where: { $0.id == focusedTabID }) ?? tabs.indices.first
+        else {
+            return false
+        }
+
+        let modal = floatingPaneModals.remove(at: modalIndex)
+        let dockedPaneStack = paneStackSettingPresentationStyle(modal.paneStack, to: .paneTab)
+        _ = tabs[targetTabIndex].rootLayout.insertPaneStackToRootSplit(dockedPaneStack, direction: direction)
+        tabs[targetTabIndex].focusedPaneID = dockedPaneStack.focusedPaneID
+        focusedTabID = tabs[targetTabIndex].id
+        focusedFloatingPaneModalID = nil
+        return focus(paneID: dockedPaneStack.focusedPaneID)
+    }
+
+    @discardableResult
+    public mutating func closeFloatingPane(_ paneID: PaneID) -> Pane? {
+        detachFloatingPane(
+            paneID: paneID,
+            sourceStackID: floatingPaneModals.first(where: { $0.paneStack.panes.contains(where: { $0.id == paneID }) })?.paneStack.id
+        )?.pane
+    }
+
+    private mutating func detachFloatingPane(
+        paneID: PaneID,
+        sourceStackID: PaneStackID?
+    ) -> (pane: Pane, modalID: FloatingPaneModalID)? {
+        guard let sourceStackID,
+              let modalIndex = floatingPaneModals.firstIndex(where: { $0.paneStack.id == sourceStackID }),
+              let paneIndex = floatingPaneModals[modalIndex].paneStack.panes.firstIndex(where: { $0.id == paneID })
+        else {
+            return nil
+        }
+
+        let pane = floatingPaneModals[modalIndex].paneStack.panes.remove(at: paneIndex)
+        if floatingPaneModals[modalIndex].paneStack.panes.isEmpty {
+            let modalID = floatingPaneModals[modalIndex].id
+            floatingPaneModals.remove(at: modalIndex)
+            if focusedFloatingPaneModalID == modalID {
+                focusedFloatingPaneModalID = nil
+            }
+            return (pane, modalID)
+        }
+
+        if floatingPaneModals[modalIndex].paneStack.focusedPaneID == pane.id {
+            let nextIndex = min(paneIndex, floatingPaneModals[modalIndex].paneStack.panes.count - 1)
+            floatingPaneModals[modalIndex].paneStack.focusedPaneID = floatingPaneModals[modalIndex].paneStack.panes[nextIndex].id
+        }
+        return (pane, floatingPaneModals[modalIndex].id)
+    }
+
+    private func paneSettingPresentationStyle(
+        _ pane: Pane,
+        to style: ExtensionPanePresentationStyle
+    ) -> Pane {
+        guard var descriptor = pane.extensionPane else {
+            return pane
+        }
+        var updatedPane = pane
+        descriptor.presentationStyle = style
+        updatedPane.extensionPane = descriptor
+        return updatedPane
+    }
+
+    private func paneStackSettingPresentationStyle(
+        _ paneStack: PaneStack,
+        to style: ExtensionPanePresentationStyle
+    ) -> PaneStack {
+        var updatedPaneStack = paneStack
+        updatedPaneStack.panes = paneStack.panes.map { paneSettingPresentationStyle($0, to: style) }
+        return updatedPaneStack
     }
 }
 
@@ -1908,7 +2278,7 @@ public struct WorkspaceSummary: Equatable, Codable, Sendable {
         self.hasCustomName = workspace.hasCustomName
         self.rootPath = workspace.rootPath
         self.tabCount = workspace.tabs.count
-        self.paneCount = workspace.tabs.reduce(into: 0) { $0 += $1.panes.count }
+        self.paneCount = workspace.panes.count
     }
 }
 

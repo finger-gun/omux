@@ -1,6 +1,6 @@
 # OpenMUX Development Notes
 
-This page is the detailed contributor reference. If you are setting up the repo for the first time, start with the [Developer quick start](./developer.md).
+This page is the detailed contributor reference. If you are setting up the repo for the first time, start with the [Developer quick start](./developer.md). For a system-level map of how the shell, control plane, workspace model, and modal presentation fit together, see the [Architecture overview](./architecture.md).
 
 OpenMUX uses a Swift Package Manager workspace for the native app shell, CLI, control plane, hooks, plugins, and terminal bridge. The vendored Ghostty runtime remains behind `OmuxTerminalBridge`.
 
@@ -239,6 +239,7 @@ The current shell is usable, but it is still intentionally narrow:
 - runtime-backed transcript snapshots are still minimal until the Ghostty bridge exposes richer capture
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
 - pane-tab drag behavior now supports same-stack reorder and cross-stack merge, but still needs further polish for large-stack ergonomics
+- floating pane modals reuse pane-stack renderers and can host popped-out pane tabs or plugin-owned extension panes without adding a second rendering stack
 - workspace, split, pane-stack, and session restore exists, but still needs polish under more workflows
 
 ## Guidance for future changes
