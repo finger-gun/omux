@@ -28,9 +28,7 @@ final class PaneFindBarView: NSView {
     // MARK: - Public interface
 
     func present(existingQuery: String = "") {
-        if !existingQuery.isEmpty {
-            searchField.stringValue = existingQuery
-        }
+        searchField.stringValue = existingQuery
         searchTotal = 0
         searchSelected = 0
         updateMatchUI()

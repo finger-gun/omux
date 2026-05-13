@@ -75,25 +75,14 @@ final class TerminalActionCoordinator {
         }
 
         let payload = controller.enrichedCommandCompletionPayload(for: event, context: context)
-        do {
-            try hookRunner.emit(
-                HookInvocation(
-                    category: hookCategory(for: event.action),
-                    name: event.action.hookName,
-                    workspaceID: context.workspaceID,
-                    tabID: context.tabID,
-                    paneID: context.paneID,
-                    sessionID: context.sessionID,
-                    payload: payload
-                )
-            )
-            if case .commandFinished(let exitCode, _) = event.action,
-               let exitCode,
-               exitCode != 0 {
+        if case .searchMatchesUpdated = event.action {
+            // Internal find-bar event; not forwarded to hooks or the control plane.
+        } else {
+            do {
                 try hookRunner.emit(
                     HookInvocation(
-                        category: .command,
-                        name: "command-failed",
+                        category: hookCategory(for: event.action),
+                        name: event.action.hookName,
                         workspaceID: context.workspaceID,
                         tabID: context.tabID,
                         paneID: context.paneID,
@@ -101,14 +90,24 @@ final class TerminalActionCoordinator {
                         payload: payload
                     )
                 )
+                if case .commandFinished(let exitCode, _) = event.action,
+                   let exitCode,
+                   exitCode != 0 {
+                    try hookRunner.emit(
+                        HookInvocation(
+                            category: .command,
+                            name: "command-failed",
+                            workspaceID: context.workspaceID,
+                            tabID: context.tabID,
+                            paneID: context.paneID,
+                            sessionID: context.sessionID,
+                            payload: payload
+                        )
+                    )
+                }
+            } catch {
+                fputs("warning: failed to emit terminal action hook \(event.action.hookName): \(error)\n", stderr)
             }
-        } catch {
-            fputs("warning: failed to emit terminal action hook \(event.action.hookName): \(error)\n", stderr)
-        }
-
-        if case .searchMatchesUpdated = event.action {
-            // Internal find-bar event; not forwarded to the control plane.
-        } else {
             controller.publishTerminalEvent(makeControlPlaneEvent(from: event, context: context, payload: payload))
         }
 

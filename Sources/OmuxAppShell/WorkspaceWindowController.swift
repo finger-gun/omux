@@ -214,6 +214,7 @@ final class WorkspaceShellViewController: NSViewController {
 
     deinit {
         MainActor.assumeIsolated {
+            stopFindSearch()
             terminalIconRefreshTimer?.invalidate()
         }
     }
@@ -856,8 +857,12 @@ final class WorkspaceShellViewController: NSViewController {
 
     func presentPaneFind(initialQuery: String = "") {
         if let existing = paneFindBarView {
-            existing.present(existingQuery: initialQuery)
-            applySearch(to: existing, query: initialQuery)
+            if initialQuery.isEmpty {
+                existing.present(existingQuery: existing.currentQuery)
+            } else {
+                existing.present(existingQuery: initialQuery)
+                applySearch(to: existing, query: initialQuery)
+            }
             return
         }
 

@@ -159,7 +159,7 @@ struct CommandPaletteCommandCatalog {
         case .paneTabClose, .paneTabNext, .paneTabPrevious:
             return controller.canFocusPaneTab()
         case .paneFind:
-            return controller.activeWorkspace()?.focusedPane != nil
+            return controller.activeWorkspace()?.focusedPane?.isTerminal == true
         }
     }
 }

@@ -857,6 +857,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
+        findInPaneMenuItem?.isEnabled = hasWorkspace
         previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
         moveWorkspaceUpMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceUp()
         moveWorkspaceDownMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceDown()
