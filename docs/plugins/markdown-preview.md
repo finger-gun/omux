@@ -52,6 +52,7 @@ omux markdown-preview README.md --axis rows
 ## Command-click activation
 
 When Markdown Preview is enabled, Command-clicking a readable local `.md` or `.markdown` path in terminal text opens or updates a preview pane for that file.
+Those click-opened previews keep watching the source file and rerender automatically.
 
 Examples that can be activated:
 

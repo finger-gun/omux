@@ -786,6 +786,34 @@ final class OmuxCoreTests: XCTestCase {
         XCTAssertNil(PaneScrollbackSnapshot.bounded(text: "\n\n"))
     }
 
+    func testWorkspaceReordersPaneTabsWithinSameStackByInsertionIndex() {
+        let firstPane = Pane(title: "one", session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp"))
+        let secondPane = Pane(title: "two", session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp"))
+        let thirdPane = Pane(title: "three", session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp"))
+        let stack = PaneStack(panes: [firstPane, secondPane, thirdPane], focusedPaneID: firstPane.id)
+        let tab = Tab(
+            title: "Main",
+            rootLayout: .paneStack(stack),
+            focusedPaneID: firstPane.id
+        )
+        var workspace = Workspace(
+            name: "Demo",
+            rootPath: "/tmp",
+            tabs: [tab],
+            focusedTabID: tab.id
+        )
+
+        XCTAssertTrue(workspace.reorderPaneTabInStack(
+            paneID: firstPane.id,
+            stackID: stack.id,
+            insertionIndex: 3
+        ))
+
+        let reordered = workspace.focusedTab?.focusedPaneStack?.panes.map(\.id)
+        XCTAssertEqual(reordered, [secondPane.id, thirdPane.id, firstPane.id])
+        XCTAssertEqual(workspace.focusedPane?.id, firstPane.id)
+    }
+
     func testOmuxValuePreservesStructuredPayloadShape() throws {
         let value: OmuxValue = .object([
             "path": .string("/tmp/project"),

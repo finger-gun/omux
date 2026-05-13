@@ -2,6 +2,7 @@ import AppKit
 import OmuxConfig
 import OmuxTheme
 import Foundation
+import WebKit
 import XCTest
 @testable import OmuxControlPlane
 @testable import OmuxAppShell
@@ -805,6 +806,18 @@ final class OmuxAppShellTests: XCTestCase {
         let session = try XCTUnwrap(pane.terminalSession)
         _ = try bridge.attach(session: session, to: pane)
 
+        let previewUpdated = expectation(description: "markdown preview updated after file change")
+        controller.onChange = { workspace in
+            let updatedPane = workspace.tabs
+                .flatMap(\.panes)
+                .compactMap(\.extensionPane)
+                .first { $0.source == readmeURL.path }
+            if updatedPane?.html?.contains("<h1>Updated</h1>") == true {
+                XCTAssertTrue(Thread.isMainThread)
+                previewUpdated.fulfill()
+            }
+        }
+
         let claimed = controller.handleTerminalTextActivation(
             TerminalTextActivationRequest(
                 paneID: pane.id,
@@ -828,6 +841,9 @@ final class OmuxAppShellTests: XCTestCase {
                 && event.paneID == pane.id
                 && event.payload.objectValue?["token"] == .string("README.md")
         })
+
+        try "# Updated\n".write(to: readmeURL, atomically: true, encoding: .utf8)
+        wait(for: [previewUpdated], timeout: 3)
     }
 
     func testTerminalTextActivationDoesNotClaimMarkdownWhenPluginDisabled() throws {
@@ -1290,6 +1306,75 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(bottomChildren.count, 2)
         XCTAssertTrue(bottomChildren[0].containsPane(id: bottomPaneID))
         XCTAssertTrue(bottomChildren[1].containsPane(id: movedPaneID))
+    }
+
+    func testWorkspaceControllerReordersPaneTabsWithinSameStack() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let stackID = try XCTUnwrap(workspace.focusedPaneStack?.id)
+
+        let withSecondPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let secondPaneID = try XCTUnwrap(withSecondPane.focusedPane?.id)
+        let withThirdPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let thirdPaneID = try XCTUnwrap(withThirdPane.focusedPane?.id)
+
+        let reordered = try XCTUnwrap(controller.reorderPaneTabInStack(
+            paneID: secondPaneID,
+            stackID: stackID,
+            insertionIndex: 3
+        ))
+
+        XCTAssertEqual(
+            reordered.focusedPaneStack?.panes.map(\.id),
+            [firstPaneID, thirdPaneID, secondPaneID]
+        )
+        XCTAssertEqual(reordered.focusedPane?.id, secondPaneID)
+    }
+
+    func testPaneReorderFlowKeepsKeyboardRoutingSemantics() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let stackID = try XCTUnwrap(workspace.focusedPaneStack?.id)
+        let withSecondPane = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        let secondPaneID = try XCTUnwrap(withSecondPane.focusedPane?.id)
+        _ = try XCTUnwrap(controller.createPaneTab(in: stackID))
+        _ = controller.reorderPaneTabInStack(
+            paneID: secondPaneID,
+            stackID: stackID,
+            insertionIndex: 3
+        )
+
+        let normalizer = DefaultKeyEventNormalizer()
+        let rightOption = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 19,
+                characters: "@",
+                charactersIgnoringModifiers: "2",
+                modifiers: [.rightOption],
+                isComposing: false
+            )
+        )
+        let deadKey = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 33,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                modifiers: [.rightOption],
+                isComposing: true
+            )
+        )
+
+        XCTAssertEqual(rightOption.route, .terminal)
+        XCTAssertEqual(deadKey.route, .composition)
     }
 
     func testWorkspaceControllerCyclesPanesInVisibleLayoutOrder() throws {
@@ -2980,6 +3065,74 @@ final class OmuxAppShellTests: XCTestCase {
         paneViews = findViews(ofType: HostedTerminalPaneView.self, in: rootView)
         XCTAssertEqual(paneViews.count, 2)
         XCTAssertTrue(window.firstResponder === paneViews.last?.focusTarget)
+    }
+
+    @MainActor
+    func testWorkspaceWindowReusesPaneStackViewOnNonStructuralUpdates() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let focusedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: focusedPaneID)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let initialStackView = try XCTUnwrap(findView(ofType: PaneStackView.self, in: rootView))
+
+        runtime.emit(.progressReported(state: .active, progress: 17), on: runtimeSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let updatedStackView = try XCTUnwrap(findView(ofType: PaneStackView.self, in: rootView))
+        XCTAssertTrue(initialStackView === updatedStackView)
+    }
+
+    @MainActor
+    func testWorkspaceWindowReusesExtensionPaneWebViewOnNonStructuralUpdates() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let initialDescriptor = ExtensionPaneDescriptor(
+            pluginID: "dev.fingergun.markdown-preview",
+            contentKind: .html,
+            source: "/tmp/example.md",
+            html: "<html><body><h1>First</h1></body></html>",
+            status: .ready
+        )
+        let created = try XCTUnwrap(controller.createExtensionPane(
+            title: "Preview",
+            descriptor: initialDescriptor
+        ))
+        let paneID = created.pane.id
+
+        let windowController = WorkspaceWindowController(workspace: created.workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let initialWebView = try XCTUnwrap(findView(ofType: WKWebView.self, in: rootView))
+
+        let updatedDescriptor = ExtensionPaneDescriptor(
+            pluginID: initialDescriptor.pluginID,
+            contentKind: .html,
+            source: initialDescriptor.source,
+            html: "<html><body><h1>Second</h1></body></html>",
+            status: .ready
+        )
+        _ = controller.updateExtensionPane(paneID: paneID, descriptor: updatedDescriptor)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let updatedWebView = try XCTUnwrap(findView(ofType: WKWebView.self, in: rootView))
+        XCTAssertTrue(initialWebView === updatedWebView)
     }
 
     @MainActor
@@ -4931,6 +5084,300 @@ final class OmuxAppShellTests: XCTestCase {
                 pressure: 1
             )
         )
+    }
+
+    @MainActor
+    func testControlPlaneTerminalEventStreamPreservesPublishOrder() throws {
+        enum StopStreaming: Error { case done }
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-events-order-\(UUID().uuidString.prefix(8)).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+        try service.start()
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let streamFinished = expectation(description: "stream finished")
+        let streamReady = DispatchSemaphore(value: 0)
+        let streamReadySignaled = LockedBox(false)
+        let captured = LockedBox<[String]>([])
+        let isCollecting = LockedBox(false)
+        let errorBox = LockedBox<Error?>(nil)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketURL.path(percentEncoded: false))
+                try client.streamTerminalEvents { event in
+                    guard case .object(let object) = event,
+                          case .string(let name)? = object["name"]
+                    else {
+                        return
+                    }
+                    if isCollecting.value == false {
+                        if streamReadySignaled.value == false {
+                            streamReadySignaled.value = true
+                            streamReady.signal()
+                        }
+                        return
+                    }
+                    captured.value.append(name)
+                    if captured.value.count >= 2 {
+                        throw StopStreaming.done
+                    }
+                }
+            } catch StopStreaming.done {
+                // expected
+            } catch {
+                errorBox.value = error
+            }
+            streamFinished.fulfill()
+        }
+
+        var streamIsReady = false
+        for _ in 0..<30 where streamIsReady == false {
+            try controller.notify(NotificationRequest(title: "Ready", body: "Handshake", severity: .info))
+            streamIsReady = streamReady.wait(timeout: .now() + 0.1) == .success
+        }
+        XCTAssertTrue(streamIsReady)
+        isCollecting.value = true
+        try controller.notify(NotificationRequest(title: "A", body: "First", severity: .info))
+        _ = controller.restore(workspaceID: workspace.id)
+        wait(for: [streamFinished], timeout: 3)
+
+        XCTAssertNil(errorBox.value)
+        XCTAssertEqual(captured.value.suffix(2), ["notification.raised", "workspace.restored"])
+    }
+
+    @MainActor
+    func testControlPlaneTerminalEventStreamStopsAfterClientCancellation() throws {
+        enum StopStreaming: Error { case done }
+
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/tmp"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = URL(fileURLWithPath: "/tmp/omux-events-cancel-\(UUID().uuidString.prefix(8)).sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL)
+        }
+        try service.start()
+
+        _ = try controller.openWorkspace(at: "/tmp")
+        let streamFinished = expectation(description: "stream cancelled")
+        let streamReady = DispatchSemaphore(value: 0)
+        let streamReadySignaled = LockedBox(false)
+        let captured = LockedBox<[String]>([])
+        let isCollecting = LockedBox(false)
+        let errorBox = LockedBox<Error?>(nil)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let client = OmuxControlClient(socketPath: socketURL.path(percentEncoded: false))
+                try client.streamTerminalEvents { event in
+                    guard case .object(let object) = event,
+                          case .string(let name)? = object["name"]
+                    else {
+                        return
+                    }
+                    if isCollecting.value == false {
+                        if streamReadySignaled.value == false {
+                            streamReadySignaled.value = true
+                            streamReady.signal()
+                        }
+                        return
+                    }
+                    captured.value.append(name)
+                    throw StopStreaming.done
+                }
+            } catch StopStreaming.done {
+                // expected
+            } catch {
+                errorBox.value = error
+            }
+            streamFinished.fulfill()
+        }
+
+        var streamIsReady = false
+        for _ in 0..<30 where streamIsReady == false {
+            try controller.notify(NotificationRequest(title: "Ready", body: "Handshake", severity: .info))
+            streamIsReady = streamReady.wait(timeout: .now() + 0.1) == .success
+        }
+        XCTAssertTrue(streamIsReady)
+        isCollecting.value = true
+        try controller.notify(NotificationRequest(title: "B", body: "Only", severity: .info))
+        wait(for: [streamFinished], timeout: 3)
+
+        XCTAssertNil(errorBox.value)
+        XCTAssertEqual(captured.value.filter { $0 == "notification.raised" }.count, 1)
+    }
+
+    func testWorkspaceControllerTargetResolutionMatchesWorkspaceScanAcrossMutations() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        var workspace = try controller.openWorkspace(at: "/tmp/scan-a")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        workspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondPane = try XCTUnwrap(workspace.focusedPane)
+        _ = try controller.createTab()
+        let workspaceB = try controller.createWorkspace()
+
+        let cases: [ControlPlaneTerminalTarget] = [
+            .pane(firstPane.id),
+            .pane(secondPane.id),
+            .session(firstPane.session.id),
+            .session(secondPane.session.id),
+            .workspace(workspaceB.id),
+            .focused,
+        ]
+
+        func scannedContext(_ target: ControlPlaneTerminalTarget) -> ControlPlaneTerminalContext? {
+            let workspaces = controller.allWorkspaces()
+            switch target {
+            case .pane(let paneID):
+                for workspace in workspaces {
+                    for tab in workspace.tabs {
+                        if let pane = tab.panes.first(where: { $0.id == paneID }),
+                           let sessionID = pane.terminalSession?.id {
+                            return ControlPlaneTerminalContext(
+                                workspaceID: workspace.id,
+                                tabID: tab.id,
+                                paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                                paneID: pane.id,
+                                sessionID: sessionID
+                            )
+                        }
+                    }
+                }
+            case .session(let sessionID):
+                for workspace in workspaces {
+                    for tab in workspace.tabs {
+                        if let pane = tab.panes.first(where: { $0.terminalSession?.id == sessionID }) {
+                            return ControlPlaneTerminalContext(
+                                workspaceID: workspace.id,
+                                tabID: tab.id,
+                                paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                                paneID: pane.id,
+                                sessionID: sessionID
+                            )
+                        }
+                    }
+                }
+            case .tab(let tabID):
+                for workspace in workspaces {
+                    if let tab = workspace.tabs.first(where: { $0.id == tabID }),
+                       let pane = tab.focusedPane,
+                       let sessionID = pane.terminalSession?.id {
+                        return ControlPlaneTerminalContext(
+                            workspaceID: workspace.id,
+                            tabID: tab.id,
+                            paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                            paneID: pane.id,
+                            sessionID: sessionID
+                        )
+                    }
+                }
+            case .workspace(let workspaceID):
+                guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
+                      let tab = workspace.focusedTab,
+                      let pane = tab.focusedPane,
+                      let sessionID = pane.terminalSession?.id
+                else {
+                    return nil
+                }
+                return ControlPlaneTerminalContext(
+                    workspaceID: workspace.id,
+                    tabID: tab.id,
+                    paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                    paneID: pane.id,
+                    sessionID: sessionID
+                )
+            case .focused:
+                guard let workspace = controller.activeWorkspace(),
+                      let tab = workspace.focusedTab,
+                      let pane = tab.focusedPane,
+                      let sessionID = pane.terminalSession?.id
+                else {
+                    return nil
+                }
+                return ControlPlaneTerminalContext(
+                    workspaceID: workspace.id,
+                    tabID: tab.id,
+                    paneStackID: tab.rootLayout.paneStack(containingPaneID: pane.id)?.id,
+                    paneID: pane.id,
+                    sessionID: sessionID
+                )
+            }
+            return nil
+        }
+
+        for target in cases {
+            let indexed = controller.resolveTerminalTarget(target)
+            let scanned = scannedContext(target)
+            XCTAssertEqual(indexed?.workspaceID, scanned?.workspaceID)
+            XCTAssertEqual(indexed?.tabID, scanned?.tabID)
+            XCTAssertEqual(indexed?.paneID, scanned?.paneID)
+            XCTAssertEqual(indexed?.sessionID, scanned?.sessionID)
+        }
+
+        _ = try controller.closePane(paneID: secondPane.id)
+        let remainingTargets: [ControlPlaneTerminalTarget] = [.pane(firstPane.id), .session(firstPane.session.id), .focused]
+        for target in remainingTargets {
+            let indexed = controller.resolveTerminalTarget(target)
+            let scanned = scannedContext(target)
+            XCTAssertEqual(indexed?.workspaceID, scanned?.workspaceID)
+            XCTAssertEqual(indexed?.tabID, scanned?.tabID)
+            XCTAssertEqual(indexed?.paneID, scanned?.paneID)
+            XCTAssertEqual(indexed?.sessionID, scanned?.sessionID)
+        }
     }
 
     private func runGit(_ arguments: [String]) throws {

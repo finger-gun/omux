@@ -99,6 +99,11 @@ omux send-text --focused -- "echo ready"
 
 Use `run` when you want OpenMUX to submit a command. Use `send-text` when you only want to insert text without pressing Return.
 
+In the app UI, pane tabs can be dragged:
+- drop on another stack header to merge into that stack
+- drop on the same stack header to reorder tabs in-place
+- drop on pane edges or the canvas edge zones to create splits
+
 Terminal-targeting commands accept one explicit selector:
 
 ```bash

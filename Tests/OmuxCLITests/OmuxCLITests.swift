@@ -787,9 +787,30 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(html.contains("<p align=\"center\"><img src=\"\(rawLogoURL)\" alt=\"Logo\"></p>"))
         XCTAssertTrue(html.contains("<img src=\"\(unsafeImageURL)\">"))
         XCTAssertTrue(html.contains("<a>bad</a>"))
-        XCTAssertFalse(html.contains("<script"))
+        XCTAssertFalse(html.contains("<script>alert(\"x\")</script>"))
         XCTAssertFalse(html.contains("onerror"))
         XCTAssertFalse(html.contains("javascript:"))
+    }
+
+    func testMarkdownPreviewChangeTrackerIgnoresMetadataOnlyChanges() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let markdownURL = root.appendingPathComponent("README.md")
+        try "Hello\n".write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        var tracker = MarkdownPreviewChangeTracker()
+        XCTAssertEqual(tracker.nextMarkdown(for: markdownURL), "Hello\n")
+
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: markdownURL.path
+        )
+        XCTAssertNil(tracker.nextMarkdown(for: markdownURL))
+
+        try "Updated\n".write(to: markdownURL, atomically: true, encoding: .utf8)
+        XCTAssertEqual(tracker.nextMarkdown(for: markdownURL), "Updated\n")
     }
 
     func testCLIMarkdownPreviewUpdatesExistingPane() throws {

@@ -8,6 +8,21 @@ OpenMUX release notes are committed here before tagging a release. Use `Scripts/
 
 
 
+
+## 0.15.2
+
+### Changed
+
+- Improved pane-tab drag and drop so existing pane stacks are updated more smoothly and tabs can be reordered more reliably within a stack.
+- Improved workspace update performance by reconciling more layout changes in place and coalescing layout persistence work.
+- Improved control-plane and workspace target resolution efficiency with faster event queues and indexed workspace, pane, tab, and session lookups.
+
+### Fixed
+
+- Fixed Markdown Preview watch behavior so preview panes rerender when the source Markdown file changes, including previews opened from terminal path activation.
+- Fixed Markdown Preview reload behavior to preserve scroll position across preview updates and pane refreshes.
+- Fixed preview and workspace lifecycle cleanup so watch tasks and extension-pane refreshes do not linger or reload unnecessarily.
+
 ## 0.15.1
 
 ### Changed

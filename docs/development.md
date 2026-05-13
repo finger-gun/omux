@@ -162,6 +162,8 @@ The current layout tree is now:
 
 This keeps shell structure in `OmuxCore` and `OmuxAppShell` while the terminal bridge still only owns pane/session surfaces. Splitting acts on the active local pane tab in the focused pane stack; creating a pane-local tab stays inside the current split region.
 
+`WorkspaceShellViewController` now applies keyed reconciliation for identity-stable pane stacks, so non-structural updates (pane status/title/content changes) reuse existing pane hosts instead of rebuilding the full canvas subtree. Structural layout changes still take the full rebuild path.
+
 ## Hosted pane path
 
 The current pane-hosting split is:
@@ -175,6 +177,8 @@ This keeps the shell AppKit-first while preserving one narrow terminal-engine se
 ## Control-plane event stream
 
 `omux events` now streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events for the first wave of short `omux` commands.
+
+Control-plane terminal event subscriptions now use a FIFO queue with head-indexed dequeue semantics (instead of repeated front-removal on an array). This preserves publish order and cancellation behavior while avoiding O(n) churn under sustained streams.
 
 Explicit OpenMUX input actions such as `omux run` and `send-text` publish `terminal.inputSent` after successful delivery. Native pane typing is intentionally not streamed as `terminal.inputSent`, because per-key input is noisy, sensitive, and not an authoritative shell command record; terminal title updates remain presentation metadata and are not used as command text.
 
@@ -234,7 +238,7 @@ The current shell is usable, but it is still intentionally narrow:
 
 - runtime-backed transcript snapshots are still minimal until the Ghostty bridge exposes richer capture
 - paste is supported in the pane UI, but richer clipboard workflows are still follow-on work
-- pane-local tabs cannot yet be reordered or dragged between stacks
+- pane-tab drag behavior now supports same-stack reorder and cross-stack merge, but still needs further polish for large-stack ergonomics
 - workspace, split, pane-stack, and session restore exists, but still needs polish under more workflows
 
 ## Guidance for future changes
@@ -244,3 +248,8 @@ The current shell is usable, but it is still intentionally narrow:
 3. Keep pane-stack behavior in shared workspace actions so the AppKit shell, JSON-RPC, and `omux` stay aligned.
 4. Preserve international keyboard correctness whenever input handling changes.
 5. Keep `omux`, JSON-RPC, and the native shell pointed at the same live session objects.
+
+## Performance invariants
+
+- Workspace layout persistence in `OpenMUXAppDelegate` must be scheduled through `WorkspaceLayoutPersistenceCoordinator` so bursty `onChange` updates are coalesced. Lifecycle boundaries that need durability (quit, power-off, full-state writes) should call the coordinator flush path.
+- `WorkspaceController` pane/session/tab/workspace target resolution should prefer the internal lookup indexes and keep index invalidation hooks aligned with every state mutation. If new mutations are added, update index dirtiness/rebuild wiring in the same change.

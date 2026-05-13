@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Fast, flexible, scriptable, and terminal-first.
+ Fast, flexible, scriptable, and terminal-first.
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@
 
 ---
 
-![OpenMUX in action](assets/screen-1.png)
+![OpenMUX in action](assets/animated.gif)
 
 ## What OpenMUX is
 
