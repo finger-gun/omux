@@ -3060,7 +3060,7 @@ public final class WorkspaceController: @unchecked Sendable {
             if didChange {
                 updatedWorkspace = workspaces[workspaceIndex]
             }
-        case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished:
+        case .openURL, .desktopNotification, .bell, .inputSent, .commandFinished, .searchMatchesUpdated:
             break
         }
 
@@ -3128,7 +3128,15 @@ public final class WorkspaceController: @unchecked Sendable {
             return
         }
         terminalDisplayTitleUpdateScheduled = true
-        let delay = terminalDisplayTitleUpdateMinimumInterval
+        let now = Date()
+        let delay = pendingTerminalDisplayTitlePaneIDs
+            .compactMap { paneID -> TimeInterval? in
+                guard let lastUpdate = lastTerminalDisplayTitleUpdateByPane[paneID] else {
+                    return 0
+                }
+                return max(0, terminalDisplayTitleUpdateMinimumInterval - now.timeIntervalSince(lastUpdate))
+            }
+            .min() ?? terminalDisplayTitleUpdateMinimumInterval
         lock.unlock()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -3155,6 +3163,11 @@ public final class WorkspaceController: @unchecked Sendable {
                 continue
             }
 
+            guard shouldApplyTerminalDisplayTitleUpdateLocked(for: paneID, at: now) else {
+                pendingTerminalDisplayTitlePaneIDs.insert(paneID)
+                continue
+            }
+
             deliveredTerminalDisplayTitleByPane[paneID] = displayTitle
             lastTerminalDisplayTitleUpdateByPane[paneID] = now
             _ = workspaces[location.workspaceIndex].updatePane(paneID) { pane in
@@ -3165,8 +3178,12 @@ public final class WorkspaceController: @unchecked Sendable {
             }
             updatedWorkspaceIDs.insert(workspaces[location.workspaceIndex].id)
         }
+        let shouldReschedule = pendingTerminalDisplayTitlePaneIDs.isEmpty == false
         lock.unlock()
 
+        if shouldReschedule {
+            scheduleTerminalDisplayTitleUpdate()
+        }
         for workspaceID in updatedWorkspaceIDs {
             scheduleTerminalStateChangeUpdate(for: workspaceID)
         }

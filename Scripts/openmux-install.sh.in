@@ -102,8 +102,12 @@ confirm_install() {
     return
   fi
 
+  if [ ! -t 0 ]; then
+    fail "confirmation requires an interactive terminal; re-run with --yes so ASSUME_YES is set"
+  fi
+
   printf 'Install OpenMUX %s to %s? [Y/n] ' "$VERSION" "$1"
-  read answer
+  read answer || fail "could not read confirmation; re-run with --yes"
   case "$answer" in
     ""|y|Y|yes|YES)
       ;;

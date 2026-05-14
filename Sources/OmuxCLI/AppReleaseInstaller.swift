@@ -333,7 +333,7 @@ final class OmuxAppReleaseInstaller {
             result.value = runningApplication != nil && error == nil
             semaphore.signal()
         }
-        _ = semaphore.wait(timeout: .now() + 10)
+        semaphore.wait()
         return result.value
     }
 
@@ -560,10 +560,20 @@ final class OmuxAppReleaseInstaller {
         let delegate = try OmuxURLSessionDownloadDelegate(destinationURL: destinationURL, progress: progress)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: queue)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        let resourceTimeout: TimeInterval = 15 * 60
+        configuration.timeoutIntervalForResource = resourceTimeout
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: queue)
         let task = session.dataTask(with: sourceURL)
+        let timeout = DispatchWorkItem {
+            delegate.cancel(with: OmuxAppReleaseInstaller.Error.downloadFailed("download timed out"))
+            task.cancel()
+        }
         task.resume()
+        DispatchQueue.global().asyncAfter(deadline: .now() + resourceTimeout, execute: timeout)
         delegate.waitUntilComplete()
+        timeout.cancel()
         session.finishTasksAndInvalidate()
         try delegate.getResult()
     }
@@ -740,6 +750,10 @@ private final class OmuxURLSessionDownloadDelegate: NSObject, URLSessionDataDele
         case nil:
             throw OmuxAppReleaseInstaller.Error.downloadFailed("download did not complete")
         }
+    }
+
+    func cancel(with error: Swift.Error) {
+        setResult(.failure(error))
     }
 
     func urlSession(

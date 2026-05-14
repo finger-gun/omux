@@ -35,6 +35,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var toggleSidebarMenuItem: NSMenuItem?
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
     private weak var commandPaletteCommandMenuItem: NSMenuItem?
+    private weak var findInPaneMenuItem: NSMenuItem?
     private weak var installCLIMenuItem: NSMenuItem?
     private weak var previousWorkspaceMenuItem: NSMenuItem?
     private weak var moveWorkspaceUpMenuItem: NSMenuItem?
@@ -359,6 +360,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         windowController?.presentCommandPalette(initialQuery: ">", keyBindings: keyBindingRegistry)
     }
 
+    @objc private func findInPaneFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.presentPaneFind()
+    }
+
     @objc private func focusPreviousWorkspaceFromMenu(_ sender: Any?) {
         _ = sender
         _ = workspaceController.focusPreviousWorkspace()
@@ -522,6 +528,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let findInPaneMenuItem = NSMenuItem(
+            title: "Find in Pane…",
+            action: #selector(findInPaneFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        findInPaneMenuItem.target = self
+        editMenu.addItem(findInPaneMenuItem)
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
@@ -799,6 +813,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
         self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
         self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
+        self.findInPaneMenuItem = findInPaneMenuItem
         self.installCLIMenuItem = installCLIMenuItem
         self.previousWorkspaceMenuItem = previousWorkspaceMenuItem
         self.moveWorkspaceUpMenuItem = moveWorkspaceUpMenuItem
@@ -842,6 +857,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
+        findInPaneMenuItem?.isEnabled = hasWorkspace
         previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
         moveWorkspaceUpMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceUp()
         moveWorkspaceDownMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceDown()
@@ -871,6 +887,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
         setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)
         setShortcut(for: commandPaletteCommandMenuItem, action: .commandPaletteCommand)
+        setShortcut(for: findInPaneMenuItem, action: .paneFind)
         setShortcut(for: previousWorkspaceMenuItem, action: .workspacePrevious)
         setShortcut(for: moveWorkspaceUpMenuItem, action: .workspaceMoveUp)
         setShortcut(for: moveWorkspaceDownMenuItem, action: .workspaceMoveDown)

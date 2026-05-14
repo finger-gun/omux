@@ -493,6 +493,14 @@ public enum OpenMUXCLICommandCatalog {
             aliases: ["cli install"],
             paletteExecution: .sendToTerminal
         ),
+        OpenMUXCLICommandSpec(
+            id: "omux.pane-find",
+            usage: "omux pane-find",
+            title: "omux: Find in Pane",
+            summary: "Search the scrollback of the focused pane",
+            aliases: ["find in pane", "search pane", "find pane"],
+            paletteExecution: .keyBindingAction(.paneFind)
+        ),
     ]
 
     public static let usage: String = {

@@ -134,6 +134,14 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.presentCommandPalette(initialQuery: initialQuery, keyBindings: keyBindings)
     }
 
+    func presentPaneFind() {
+        rootViewController.presentPaneFind()
+    }
+
+    func dismissPaneFind() {
+        rootViewController.dismissPaneFind()
+    }
+
     var themeCommitHandler: ((String) -> Void)? {
         get { rootViewController.themeCommitHandler }
         set { rootViewController.themeCommitHandler = newValue }
@@ -179,6 +187,8 @@ final class WorkspaceShellViewController: NSViewController {
     private var terminalIconRefreshTimer: Timer?
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
     private var commandPaletteView: CommandPaletteView?
+    private var paneFindBarView: PaneFindBarView?
+    private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
@@ -208,6 +218,7 @@ final class WorkspaceShellViewController: NSViewController {
 
     deinit {
         MainActor.assumeIsolated {
+            stopFindSearch()
             terminalIconRefreshTimer?.invalidate()
         }
     }
@@ -322,6 +333,7 @@ final class WorkspaceShellViewController: NSViewController {
             collapsedWorkspaceIDs.remove(workspace.id)
         }
         currentWorkspace = workspace
+        let focusedPaneID = workspace.focusedPane?.id
         apply(theme: currentTheme)
         let terminalTextCache = TerminalTextRenderCache()
         let terminalTextProvider: @MainActor (Pane) -> String? = { [weak self] pane in
@@ -440,6 +452,10 @@ final class WorkspaceShellViewController: NSViewController {
                     self.view.window?.makeFirstResponder(self.focusTarget(for: focusedPaneView))
                 }
             }
+        }
+
+        if previousWorkspaceID != workspace.id || previousFocusedPaneID != focusedPaneID {
+            reapplyActiveFindSearch(previousPaneID: previousFocusedPaneID)
         }
     }
 
@@ -792,6 +808,11 @@ final class WorkspaceShellViewController: NSViewController {
                 toggleSidebarVisibility()
                 return .invoked
             }
+            if result.invocationTarget == .action(.paneFind) {
+                commandPaletteView?.dismissAndRestoreFocus()
+                presentPaneFind()
+                return .invoked
+            }
             if result.invocationTarget == .themeSwitch {
                 themeBeforeSubPalette = currentTheme
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
@@ -844,6 +865,120 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         _ = try? controller.closePane(paneID: paneID)
+    }
+
+    func presentPaneFind(initialQuery: String = "") {
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
+        if let existing = paneFindBarView {
+            if initialQuery.isEmpty {
+                existing.present(existingQuery: existing.currentQuery)
+            } else {
+                existing.present(existingQuery: initialQuery)
+                applySearch(to: existing, query: initialQuery)
+            }
+            return
+        }
+
+        let findBar = PaneFindBarView()
+        paneFindBarView = findBar
+        canvasView.addSubview(findBar)
+        NSLayoutConstraint.activate([
+            findBar.trailingAnchor.constraint(equalTo: canvasView.trailingAnchor, constant: -8),
+            findBar.bottomAnchor.constraint(equalTo: canvasView.bottomAnchor, constant: -8),
+            findBar.widthAnchor.constraint(equalToConstant: 460),
+        ])
+
+        findBar.onDismiss = { [weak self, weak findBar] in
+            self?.stopFindSearch()
+            findBar?.removeFromSuperview()
+            if self?.paneFindBarView === findBar {
+                self?.paneFindBarView = nil
+            }
+        }
+
+        findBar.onSearch = { [weak self, weak findBar] query in
+            guard let self, let findBar else { return }
+            applySearch(to: findBar, query: query)
+        }
+
+        findBar.onNavigate = { [weak self, weak findBar] forward in
+            guard let self, let findBar else { return }
+            navigateSearch(in: findBar, forward: forward)
+        }
+
+        // Observe Ghostty search callbacks to update match count label
+        let token = controller.terminalBridge.addTerminalActionObserver { [weak findBar] event in
+            guard case .searchMatchesUpdated(let total, let selected) = event.action else { return }
+            DispatchQueue.main.async {
+                findBar?.updateMatchCount(total: total, selected: selected)
+            }
+        }
+        findSearchObserverToken = token
+
+        findBar.present(existingQuery: initialQuery)
+        if !initialQuery.isEmpty {
+            applySearch(to: findBar, query: initialQuery)
+        }
+    }
+
+    func dismissPaneFind() {
+        paneFindBarView?.onDismiss?()
+    }
+
+    private func applySearch(to findBar: PaneFindBarView, query: String) {
+        let bridge = controller.terminalBridge
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
+        try? bridge.search(paneID: pane.id, needle: query)
+        let snapshot = bridge.terminalTextSnapshot(for: pane.id)
+        if snapshot.isAvailable {
+            let total = PaneFindSearch.matchCount(query: query, in: snapshot.text)
+            findBar.updateMatchCount(total: total, selected: total > 0 ? 0 : -1)
+        }
+    }
+
+    private func navigateSearch(in findBar: PaneFindBarView, forward: Bool) {
+        let bridge = controller.terminalBridge
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
+        try? bridge.navigateSearch(paneID: pane.id, forward: forward)
+    }
+
+    private func reapplyActiveFindSearch(previousPaneID: PaneID?) {
+        guard let findBar = paneFindBarView else { return }
+        let query = findBar.currentQuery
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
+        let focusedPane = currentWorkspace?.focusedPane
+        if let previousPaneID,
+           previousPaneID != focusedPane?.id,
+           let previousPane = pane(withID: previousPaneID),
+           isSearchablePane(previousPane)
+        {
+            try? controller.terminalBridge.endSearch(paneID: previousPaneID)
+        }
+        guard let focusedPane, isSearchablePane(focusedPane) else { return }
+        applySearch(to: findBar, query: query)
+    }
+
+    private func stopFindSearch() {
+        if let token = findSearchObserverToken {
+            controller.terminalBridge.removeTerminalActionObserver(token: token)
+            findSearchObserverToken = nil
+        }
+        // End search on all active pane surfaces
+        let bridge = controller.terminalBridge
+        let allPanes = controller.allWorkspaces().flatMap(\.panes)
+        for pane in allPanes {
+            try? bridge.endSearch(paneID: pane.id)
+        }
+    }
+
+    private func isSearchablePane(_ pane: Pane) -> Bool {
+        pane.isTerminal
+    }
+
+    private func pane(withID paneID: PaneID) -> Pane? {
+        controller.allWorkspaces()
+            .flatMap(\.panes)
+            .first { $0.id == paneID }
     }
 
     private struct ConfigOpenContext {
@@ -1004,6 +1139,9 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func logReconciliationMetricsIfNeeded(_ metrics: WorkspaceReconciliationMetrics) {
         #if DEBUG
+        guard ProcessInfo.processInfo.environment["OMUX_DEBUG_RECONCILE"] == "1" else {
+            return
+        }
         guard metrics.reusedHostViews > 0 || metrics.rebuiltHostViews > 0 else {
             return
         }

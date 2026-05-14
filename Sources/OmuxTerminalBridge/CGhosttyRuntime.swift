@@ -556,6 +556,12 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         case GHOSTTY_ACTION_RENDERER_HEALTH:
             let isHealthy = action.action.renderer_health == GHOSTTY_RENDERER_HEALTH_HEALTHY
             return .supported(.rendererHealthChanged(isHealthy: isHealthy))
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            let total = Int(action.action.search_total.total)
+            return .supported(.searchMatchesUpdated(total: total, selected: -1))
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            let selected = Int(action.action.search_selected.selected)
+            return .supported(.searchMatchesUpdated(total: -1, selected: selected))
         case GHOSTTY_ACTION_NEW_WINDOW,
              GHOSTTY_ACTION_NEW_TAB,
              GHOSTTY_ACTION_CLOSE_TAB,
@@ -614,6 +620,48 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             ghostty_surface_text(surface, ptr, UInt(text.utf8.count))
         }
         scheduleTick()
+    }
+
+    public func searchSurface(runtimeSurfaceID: String, needle: String) throws {
+        let state = try surfaceState(for: runtimeSurfaceID)
+        guard let surface = state.surface else {
+            throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
+        }
+        mainActorValue {
+            let action = "search:\(needle)"
+            action.withCString { ptr in
+                _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+            }
+            self.scheduleTick()
+        }
+    }
+
+    public func navigateSearch(runtimeSurfaceID: String, forward: Bool) throws {
+        let state = try surfaceState(for: runtimeSurfaceID)
+        guard let surface = state.surface else {
+            throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
+        }
+        mainActorValue {
+            let action = forward ? "navigate_search:next" : "navigate_search:previous"
+            action.withCString { ptr in
+                _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+            }
+            self.scheduleTick()
+        }
+    }
+
+    public func endSearch(runtimeSurfaceID: String) throws {
+        let state = try surfaceState(for: runtimeSurfaceID)
+        guard let surface = state.surface else {
+            throw CGhosttyRuntimeError.missingSurface(runtimeSurfaceID)
+        }
+        mainActorValue {
+            let action = "end_search"
+            action.withCString { ptr in
+                _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+            }
+            self.scheduleTick()
+        }
     }
 
     public func clearScreenAndScrollback(runtimeSurfaceID: String) throws -> Bool {
