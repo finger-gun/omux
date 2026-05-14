@@ -165,7 +165,7 @@ final class WorkspaceShellViewController: NSViewController {
     private let iconResolver = WorkspaceIconResolver()
     private let sidebarView = WorkspaceSidebarView()
     private let canvasView = WorkspaceCanvasView()
-    private let floatingModalOverlayView = FloatingModalOverlayView()
+    private let shellOverlayHostView = ShellOverlayHostView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
     private var sidebarWidthConstraint: NSLayoutConstraint?
     private var mainColumnLeadingConstraint: NSLayoutConstraint?
@@ -181,6 +181,10 @@ final class WorkspaceShellViewController: NSViewController {
     private var commandPaletteView: CommandPaletteView?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
+
+    private var floatingModalOverlayView: FloatingModalOverlayView {
+        shellOverlayHostView.floatingModalOverlayView
+    }
 
     var themeCommitHandler: ((String) -> Void)?
 
@@ -229,7 +233,7 @@ final class WorkspaceShellViewController: NSViewController {
 
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
-        view.addSubview(floatingModalOverlayView)
+        view.addSubview(shellOverlayHostView)
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
         let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
@@ -251,10 +255,10 @@ final class WorkspaceShellViewController: NSViewController {
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
             canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
 
-            floatingModalOverlayView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
-            floatingModalOverlayView.leadingAnchor.constraint(equalTo: mainColumn.leadingAnchor),
-            floatingModalOverlayView.trailingAnchor.constraint(equalTo: mainColumn.trailingAnchor),
-            floatingModalOverlayView.bottomAnchor.constraint(equalTo: mainColumn.bottomAnchor),
+            shellOverlayHostView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
+            shellOverlayHostView.leadingAnchor.constraint(equalTo: mainColumn.leadingAnchor),
+            shellOverlayHostView.trailingAnchor.constraint(equalTo: mainColumn.trailingAnchor),
+            shellOverlayHostView.bottomAnchor.constraint(equalTo: mainColumn.bottomAnchor),
         ])
 
         applySidebarVisibility()
@@ -496,7 +500,7 @@ final class WorkspaceShellViewController: NSViewController {
         sidebarView.apply(theme: theme)
         canvasView.apply(theme: theme)
         commandPaletteView?.apply(theme: theme)
-        floatingModalOverlayView.apply(theme: theme)
+        shellOverlayHostView.apply(theme: theme)
     }
 
     private func shouldRestoreFocus(
@@ -750,13 +754,7 @@ final class WorkspaceShellViewController: NSViewController {
         } else {
             paletteView = CommandPaletteView()
             commandPaletteView = paletteView
-            view.addSubview(paletteView)
-            NSLayoutConstraint.activate([
-                paletteView.topAnchor.constraint(equalTo: view.topAnchor),
-                paletteView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                paletteView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                paletteView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            ])
+            shellOverlayHostView.present(commandPaletteView: paletteView)
         }
         paletteView.apply(theme: currentTheme)
 
@@ -830,8 +828,22 @@ final class WorkspaceShellViewController: NSViewController {
             if self?.commandPaletteView === paletteView {
                 self?.commandPaletteView = nil
             }
+            if let paletteView {
+                self?.shellOverlayHostView.dismiss(commandPaletteView: paletteView)
+            }
         }
         paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard commandPaletteView == nil,
+              let paneID = currentWorkspace?.focusedFloatingPaneModal?.focusedPane?.id
+        else {
+            super.cancelOperation(sender)
+            return
+        }
+
+        _ = try? controller.closePane(paneID: paneID)
     }
 
     private struct ConfigOpenContext {
@@ -1289,6 +1301,7 @@ final class WorkspaceShellViewController: NSViewController {
             return FloatingPaneModalView(
                 modalID: modal.id,
                 paneID: modal.paneStack.focusedPaneID,
+                sourceStackID: modal.paneStack.id,
                 title: modal.paneStack.focusedPane?.title ?? "Pane",
                 contentView: layout,
                 frameModel: modal.frame,
@@ -1299,11 +1312,22 @@ final class WorkspaceShellViewController: NSViewController {
                 onClose: { [weak self] paneID in
                     _ = try? self?.controller.closePane(paneID: paneID)
                 },
-                onDragChanged: { [weak self] _, frame, allowsDocking in
-                    self?.updateFloatingModalDragPreview(frame: frame, allowsDocking: allowsDocking)
+                onDragChanged: { [weak self] paneID, sourceStackID, _, frame, allowsDocking in
+                    self?.updateFloatingModalDragPreview(
+                        paneID: paneID,
+                        sourceStackID: sourceStackID,
+                        frame: frame,
+                        allowsDocking: allowsDocking
+                    )
                 },
-                onDragEnded: { [weak self] modalID, frame, allowsDocking in
-                    self?.finishFloatingModalDrag(modalID: modalID, frame: frame, allowsDocking: allowsDocking)
+                onDragEnded: { [weak self] paneID, sourceStackID, modalID, frame, allowsDocking in
+                    self?.finishFloatingModalDrag(
+                        paneID: paneID,
+                        sourceStackID: sourceStackID,
+                        modalID: modalID,
+                        frame: frame,
+                        allowsDocking: allowsDocking
+                    )
                 }
             )
         }
@@ -1312,31 +1336,105 @@ final class WorkspaceShellViewController: NSViewController {
         return focusedPaneView
     }
 
-    private func updateFloatingModalDragPreview(frame: NSRect, allowsDocking: Bool) {
+    private enum FloatingModalDropIntent {
+        case merge(PaneStackID)
+        case split(PaneStackID, PaneSplitDropDirection)
+        case splitAtRoot(PaneSplitDropDirection)
+    }
+
+    private func updateFloatingModalDragPreview(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        frame: NSRect,
+        allowsDocking: Bool
+    ) {
         clearPaneTabSplitPreview()
-        guard allowsDocking else {
+        guard let intent = floatingModalDropIntent(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            frame: frame,
+            allowsDocking: allowsDocking
+        ) else {
             return
         }
-        guard let direction = floatingModalRootSplitDirection(for: frame) else {
-            return
+
+        switch intent {
+        case .merge(let targetStackID):
+            paneStackView(with: targetStackID)?.setMergePreview(theme: currentTheme)
+        case .split(let targetStackID, let direction):
+            paneStackView(with: targetStackID)?.setSplitPreview(direction, theme: currentTheme)
+        case .splitAtRoot(let direction):
+            canvasView.setRootSplitPreview(direction, theme: currentTheme)
         }
-        canvasView.setRootSplitPreview(direction, theme: currentTheme)
     }
 
     private func finishFloatingModalDrag(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
         modalID: FloatingPaneModalID,
         frame: NSRect,
         allowsDocking: Bool
     ) {
         defer { clearPaneTabSplitPreview() }
-        if allowsDocking, let direction = floatingModalRootSplitDirection(for: frame) {
-            _ = controller.dockFloatingPaneModalToRootSplit(modalID: modalID, direction: direction)
-        } else {
-            _ = controller.updateFloatingPaneModalFrame(
-                modalID: modalID,
-                frame: FloatingPaneModalFrame(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
-            )
+        if let intent = floatingModalDropIntent(
+            paneID: paneID,
+            sourceStackID: sourceStackID,
+            frame: frame,
+            allowsDocking: allowsDocking
+        ) {
+            switch intent {
+            case .merge(let targetStackID):
+                _ = try? controller.movePaneTabToStack(
+                    paneID: paneID,
+                    sourceStackID: sourceStackID,
+                    targetStackID: targetStackID
+                )
+            case .split(let targetStackID, let direction):
+                _ = try? controller.movePaneTabToSplit(
+                    paneID: paneID,
+                    sourceStackID: sourceStackID,
+                    targetStackID: targetStackID,
+                    direction: direction
+                )
+            case .splitAtRoot(let direction):
+                _ = controller.dockFloatingPaneModalToRootSplit(modalID: modalID, direction: direction)
+            }
+            return
         }
+
+        _ = controller.updateFloatingPaneModalFrame(
+            modalID: modalID,
+            frame: FloatingPaneModalFrame(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+        )
+    }
+
+    private func floatingModalDropIntent(
+        paneID: PaneID,
+        sourceStackID: PaneStackID,
+        frame: NSRect,
+        allowsDocking: Bool
+    ) -> FloatingModalDropIntent? {
+        guard allowsDocking else {
+            return nil
+        }
+
+        let headerPoint = NSPoint(x: frame.midX, y: frame.minY + ShellLayoutMetrics.paneHeaderHeight / 2)
+        let headerPointInWindow = floatingModalOverlayView.convert(headerPoint, to: nil)
+        if let targetView = paneStackView(in: canvasView, atWindowLocation: headerPointInWindow),
+           let targetStackID = targetView.paneStackID,
+           targetStackID != sourceStackID
+        {
+            if targetView.isWindowPointInHeader(headerPointInWindow) {
+                return .merge(targetStackID)
+            }
+
+            let localPoint = targetView.convert(headerPointInWindow, from: nil)
+            if let direction = PaneSplitDropIntentResolver.direction(for: localPoint, in: targetView.bounds) {
+                return .split(targetStackID, direction)
+            }
+        }
+
+        return floatingModalRootSplitDirection(for: frame).map(FloatingModalDropIntent.splitAtRoot)
     }
 
     private func floatingModalRootSplitDirection(for frame: NSRect) -> PaneSplitDropDirection? {
@@ -1548,6 +1646,11 @@ final class WorkspaceShellViewController: NSViewController {
             ?? paneStackView(in: canvasView, atWindowLocation: location)
     }
 
+    private func paneStackView(with paneStackID: PaneStackID) -> PaneStackView? {
+        paneStackView(in: floatingModalOverlayView, paneStackID: paneStackID)
+            ?? paneStackView(in: canvasView, paneStackID: paneStackID)
+    }
+
     private func paneStackView(in root: NSView, atWindowLocation location: NSPoint) -> PaneStackView? {
         for subview in root.subviews.reversed() {
             if let match = paneStackView(in: subview, atWindowLocation: location) {
@@ -1557,6 +1660,18 @@ final class WorkspaceShellViewController: NSViewController {
         guard let stackView = root as? PaneStackView else { return nil }
         let point = stackView.convert(location, from: nil)
         return stackView.bounds.contains(point) ? stackView : nil
+    }
+
+    private func paneStackView(in root: NSView, paneStackID: PaneStackID) -> PaneStackView? {
+        if let stackView = root as? PaneStackView, stackView.paneStackID == paneStackID {
+            return stackView
+        }
+        for subview in root.subviews.reversed() {
+            if let match = paneStackView(in: subview, paneStackID: paneStackID) {
+                return match
+            }
+        }
+        return nil
     }
 
     private func clearPaneTabSplitPreview() {
@@ -2274,6 +2389,78 @@ private final class WorkspaceSidebarSectionView: NSView {
 }
 
 @MainActor
+final class ShellOverlayHostView: NSView {
+    private final class PassthroughOverlayView: NSView {
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            let hitView = super.hitTest(point)
+            return hitView === self ? nil : hitView
+        }
+    }
+
+    private let paletteHostView = PassthroughOverlayView()
+    let floatingModalOverlayView = FloatingModalOverlayView()
+    private var currentTheme: WorkspaceShellTheme = .defaultTheme
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        paletteHostView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(floatingModalOverlayView)
+        addSubview(paletteHostView)
+
+        NSLayoutConstraint.activate([
+            floatingModalOverlayView.topAnchor.constraint(equalTo: topAnchor),
+            floatingModalOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            floatingModalOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            floatingModalOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            paletteHostView.topAnchor.constraint(equalTo: topAnchor),
+            paletteHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            paletteHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            paletteHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hitView = super.hitTest(point)
+        return hitView === self ? nil : hitView
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        currentTheme = theme
+        floatingModalOverlayView.apply(theme: theme)
+    }
+
+    func present(commandPaletteView: CommandPaletteView) {
+        if commandPaletteView.superview !== paletteHostView {
+            paletteHostView.addSubview(commandPaletteView)
+            NSLayoutConstraint.activate([
+                commandPaletteView.topAnchor.constraint(equalTo: paletteHostView.topAnchor),
+                commandPaletteView.leadingAnchor.constraint(equalTo: paletteHostView.leadingAnchor),
+                commandPaletteView.trailingAnchor.constraint(equalTo: paletteHostView.trailingAnchor),
+                commandPaletteView.bottomAnchor.constraint(equalTo: paletteHostView.bottomAnchor),
+            ])
+        }
+        commandPaletteView.apply(theme: currentTheme)
+    }
+
+    func dismiss(commandPaletteView: CommandPaletteView) {
+        if commandPaletteView.superview === paletteHostView {
+            commandPaletteView.removeFromSuperview()
+        }
+    }
+}
+
+@MainActor
 final class FloatingModalOverlayView: NSView {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -2361,6 +2548,7 @@ final class FloatingPaneModalView: NSView {
 
     private let modalID: FloatingPaneModalID
     private let paneID: PaneID
+    private let sourceStackID: PaneStackID
     private let dragHandleView = FloatingPaneModalHeaderView()
     private let resizeHandleView = FloatingPaneModalResizeHandleView()
     private let resizeHandleGlyph = NSImageView()
@@ -2369,8 +2557,8 @@ final class FloatingPaneModalView: NSView {
     private let contentHostView = NSView()
     private let onFocus: @MainActor (PaneID) -> Void
     private let onClose: @MainActor (PaneID) -> Void
-    private let onDragChanged: @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
-    private let onDragEnded: @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
+    private let onDragChanged: @MainActor (PaneID, PaneStackID, FloatingPaneModalID, NSRect, Bool) -> Void
+    private let onDragEnded: @MainActor (PaneID, PaneStackID, FloatingPaneModalID, NSRect, Bool) -> Void
     private var dragOrigin: CGPoint?
     private var initialFrameOrigin: CGPoint = .zero
     private var resizeOrigin: CGPoint?
@@ -2382,17 +2570,19 @@ final class FloatingPaneModalView: NSView {
     init(
         modalID: FloatingPaneModalID,
         paneID: PaneID,
+        sourceStackID: PaneStackID,
         title: String,
         contentView: NSView,
         frameModel: FloatingPaneModalFrame,
         theme: WorkspaceShellTheme,
         onFocus: @escaping @MainActor (PaneID) -> Void,
         onClose: @escaping @MainActor (PaneID) -> Void,
-        onDragChanged: @escaping @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void,
-        onDragEnded: @escaping @MainActor (FloatingPaneModalID, NSRect, Bool) -> Void
+        onDragChanged: @escaping @MainActor (PaneID, PaneStackID, FloatingPaneModalID, NSRect, Bool) -> Void,
+        onDragEnded: @escaping @MainActor (PaneID, PaneStackID, FloatingPaneModalID, NSRect, Bool) -> Void
     ) {
         self.modalID = modalID
         self.paneID = paneID
+        self.sourceStackID = sourceStackID
         self.onFocus = onFocus
         self.onClose = onClose
         self.onDragChanged = onDragChanged
@@ -2537,7 +2727,7 @@ final class FloatingPaneModalView: NSView {
             x: max(0, min(initialFrameOrigin.x + delta.x, superview.bounds.width - frame.width)),
             y: max(0, min(initialFrameOrigin.y + delta.y, superview.bounds.height - frame.height))
         )
-        onDragChanged(modalID, frame, event.modifierFlags.contains(.command) == false)
+        onDragChanged(paneID, sourceStackID, modalID, frame, event.modifierFlags.contains(.command) == false)
     }
 
     private func handleHeaderMouseUp(_ event: NSEvent) {
@@ -2545,7 +2735,7 @@ final class FloatingPaneModalView: NSView {
             return
         }
         dragOrigin = nil
-        onDragEnded(modalID, frame, event.modifierFlags.contains(.command) == false)
+        onDragEnded(paneID, sourceStackID, modalID, frame, event.modifierFlags.contains(.command) == false)
     }
 
     private func handleResizeMouseDown(_ event: NSEvent) {
@@ -2568,7 +2758,7 @@ final class FloatingPaneModalView: NSView {
             width: max(Self.minimumWidth, min(initialFrameSize.width + delta.x, superview.bounds.width - initialFrameOrigin.x)),
             height: max(Self.minimumHeight, min(initialFrameSize.height + delta.y, superview.bounds.height - initialFrameOrigin.y))
         )
-        onDragChanged(modalID, frame, false)
+        onDragChanged(paneID, sourceStackID, modalID, frame, false)
     }
 
     private func handleResizeMouseUp(_ event: NSEvent) {
@@ -2576,7 +2766,7 @@ final class FloatingPaneModalView: NSView {
             return
         }
         resizeOrigin = nil
-        onDragEnded(modalID, frame, false)
+        onDragEnded(paneID, sourceStackID, modalID, frame, false)
     }
 
     @objc private func handleClose(_ sender: Any?) {
