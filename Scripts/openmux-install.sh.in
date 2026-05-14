@@ -1,0 +1,232 @@
+#!/bin/sh
+set -eu
+
+APP_NAME="OpenMUX.app"
+BUNDLE_ID="dev.fingergun.omux"
+VERSION="@RELEASE_VERSION@"
+APP_ARCHIVE_NAME="OpenMUX-$VERSION-macos-unsigned.zip"
+CHECKSUM_FILE_NAME="checksums.txt"
+ASSUME_YES=0
+INSTALL_CLI="${OPENMUX_INSTALL_CLI:-0}"
+TARGET_PATH="${OPENMUX_INSTALL_TARGET:-}"
+SCRIPT_NAME="openmux-install.sh"
+
+usage() {
+  cat <<EOF
+usage: $SCRIPT_NAME [--yes] [--install-cli] [--target /path/to/OpenMUX.app]
+
+Installs OpenMUX $VERSION from the matching GitHub Release assets.
+
+Options:
+  --yes, -y       Do not prompt before installing.
+  --install-cli   Run the bundled 'omux install-cli' step after installing the app.
+  --target PATH   Install to an explicit OpenMUX.app target path.
+  --help, -h      Show this help.
+
+Environment overrides:
+  OPENMUX_RELEASE_BASE_URL  Base URL for release assets.
+  OPENMUX_INSTALL_TARGET    Explicit OpenMUX.app install target.
+  OPENMUX_INSTALL_CLI=1     Same as --install-cli.
+EOF
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+warn() {
+  printf 'warning: %s\n' "$*" >&2
+}
+
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+ensure_bundle_target_path() {
+  case "$1" in
+    */"$APP_NAME") ;;
+    *)
+      fail "install target must end with $APP_NAME: $1"
+      ;;
+  esac
+}
+
+choose_install_target() {
+  if [ -n "$TARGET_PATH" ]; then
+    ensure_bundle_target_path "$TARGET_PATH"
+    target_parent=$(dirname "$TARGET_PATH")
+    mkdir -p "$target_parent"
+    [ -w "$target_parent" ] || fail "install target parent is not writable: $target_parent"
+    printf '%s\n' "$TARGET_PATH"
+    return
+  fi
+
+  system_target="/Applications/$APP_NAME"
+  if [ -d "/Applications" ] && [ -w "/Applications" ]; then
+    printf '%s\n' "$system_target"
+    return
+  fi
+
+  user_applications="${HOME:?HOME is required}/Applications"
+  mkdir -p "$user_applications"
+  [ -w "$user_applications" ] || fail "user Applications directory is not writable: $user_applications"
+  printf '%s\n' "$user_applications/$APP_NAME"
+}
+
+read_plist_value() {
+  plist_path="$1"
+  key="$2"
+  /usr/libexec/PlistBuddy -c "Print :$key" "$plist_path" 2>/dev/null || true
+}
+
+validate_bundle() {
+  app_path="$1"
+  [ -d "$app_path" ] || fail "missing installed app bundle: $app_path"
+  info_plist="$app_path/Contents/Info.plist"
+  [ -f "$info_plist" ] || fail "missing Info.plist in installed bundle"
+
+  bundle_id="$(read_plist_value "$info_plist" CFBundleIdentifier)"
+  [ "$bundle_id" = "$BUNDLE_ID" ] || fail "unexpected bundle identifier: $bundle_id"
+
+  bundle_version="$(read_plist_value "$info_plist" CFBundleShortVersionString)"
+  [ "$bundle_version" = "$VERSION" ] || fail "unexpected bundle version: $bundle_version"
+}
+
+confirm_install() {
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    return
+  fi
+
+  printf 'Install OpenMUX %s to %s? [Y/n] ' "$VERSION" "$1"
+  read answer
+  case "$answer" in
+    ""|y|Y|yes|YES)
+      ;;
+    *)
+      log "Cancelled."
+      exit 0
+      ;;
+  esac
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --yes|-y)
+      ASSUME_YES=1
+      ;;
+    --install-cli)
+      INSTALL_CLI=1
+      ;;
+    --target)
+      shift
+      [ "$#" -gt 0 ] || fail "--target requires a path"
+      TARGET_PATH="$1"
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+case "$VERSION" in
+  ""|"@""RELEASE_VERSION@")
+    fail "installer version placeholder was not rendered"
+    ;;
+esac
+
+require_command curl
+require_command ditto
+require_command shasum
+require_command /usr/libexec/PlistBuddy
+
+BASE_URL="${OPENMUX_RELEASE_BASE_URL:-https://github.com/finger-gun/omux/releases/download/v$VERSION}"
+APP_URL="$BASE_URL/$APP_ARCHIVE_NAME"
+CHECKSUM_URL="$BASE_URL/$CHECKSUM_FILE_NAME"
+INSTALL_TARGET="$(choose_install_target)"
+
+case "$INSTALL_TARGET" in
+  "${HOME:?HOME is required}"/Applications/*)
+    warn "installing to user Applications because /Applications is not writable"
+    ;;
+esac
+
+if [ -e "$INSTALL_TARGET" ] && pgrep -x OpenMUXApp >/dev/null 2>&1; then
+  fail "OpenMUX appears to be running; quit it before using the bootstrap installer"
+fi
+
+confirm_install "$INSTALL_TARGET"
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openmux-install.XXXXXX")"
+DOWNLOAD_DIR="$WORK_DIR/downloads"
+UNPACK_DIR="$WORK_DIR/unpacked"
+ARCHIVE_PATH="$DOWNLOAD_DIR/$APP_ARCHIVE_NAME"
+CHECKSUM_PATH="$DOWNLOAD_DIR/$CHECKSUM_FILE_NAME"
+BACKUP_PATH="$WORK_DIR/OpenMUX.app.backup"
+cleanup_backup=0
+
+cleanup() {
+  if [ "$cleanup_backup" -eq 1 ] && [ -d "$BACKUP_PATH" ] && [ ! -e "$INSTALL_TARGET" ]; then
+    mv "$BACKUP_PATH" "$INSTALL_TARGET" 2>/dev/null || true
+  fi
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -p "$DOWNLOAD_DIR" "$UNPACK_DIR"
+
+log "Downloading OpenMUX $VERSION..."
+curl -fL "$APP_URL" -o "$ARCHIVE_PATH"
+curl -fL "$CHECKSUM_URL" -o "$CHECKSUM_PATH"
+
+expected_checksum="$(awk '$2 == "'"$APP_ARCHIVE_NAME"'" { print $1 }' "$CHECKSUM_PATH" | head -n 1)"
+[ -n "$expected_checksum" ] || fail "checksums.txt does not contain an entry for $APP_ARCHIVE_NAME"
+
+actual_checksum="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{ print $1 }')"
+[ "$expected_checksum" = "$actual_checksum" ] || fail "checksum mismatch for $APP_ARCHIVE_NAME"
+
+ditto -x -k "$ARCHIVE_PATH" "$UNPACK_DIR"
+STAGED_APP="$UNPACK_DIR/$APP_NAME"
+validate_bundle "$STAGED_APP"
+
+if [ -e "$INSTALL_TARGET" ]; then
+  mv "$INSTALL_TARGET" "$BACKUP_PATH"
+  cleanup_backup=1
+fi
+
+if ! ditto "$STAGED_APP" "$INSTALL_TARGET"; then
+  rm -rf "$INSTALL_TARGET"
+  if [ -d "$BACKUP_PATH" ]; then
+    mv "$BACKUP_PATH" "$INSTALL_TARGET"
+  fi
+  cleanup_backup=0
+  fail "failed to install $APP_NAME"
+fi
+
+validate_bundle "$INSTALL_TARGET"
+
+if [ -d "$BACKUP_PATH" ]; then
+  rm -rf "$BACKUP_PATH"
+fi
+cleanup_backup=0
+
+log "Installed OpenMUX $VERSION at $INSTALL_TARGET"
+
+BUNDLED_OMUX="$INSTALL_TARGET/Contents/MacOS/omux"
+if [ "$INSTALL_CLI" = "1" ]; then
+  [ -x "$BUNDLED_OMUX" ] || fail "missing bundled omux executable at $BUNDLED_OMUX"
+  "$BUNDLED_OMUX" install-cli
+else
+  log "Install the bundled CLI with:"
+  log "  $BUNDLED_OMUX install-cli"
+fi

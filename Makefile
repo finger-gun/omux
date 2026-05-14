@@ -1,4 +1,4 @@
-.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release import-themes publish-unsigned package-release tag-release uninstall-local dev app cli-help
+.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release tag-release uninstall-local dev app cli-help
 
 help:
 	@printf "OpenMUX development commands\n\n"
@@ -9,6 +9,7 @@ help:
 	@printf "  make verify        Run build and test\n"
 	@printf "  make smoke         Launch and sample OpenMUXApp as a smoke test\n"
 	@printf "  make smoke-packaged-release Launch packaged release app with build resources hidden\n"
+	@printf "  make smoke-release-installer Run the packaged release installer smoke test\n"
 	@printf "  make import-themes Import selected iTerm2 Color Schemes into bundled themes\n"
 	@printf "  make publish-unsigned Build dist/OpenMUX.app (unsigned)\n"
 	@printf "  make package-release Build GitHub Release assets under dist/release/ using VERSION\n"
@@ -36,6 +37,9 @@ smoke:
 
 smoke-packaged-release:
 	./Scripts/smoke-packaged-release-app.sh
+
+smoke-release-installer:
+	./Scripts/smoke-release-installer.sh
 
 import-themes:
 	./Scripts/import-iterm2-themes.sh

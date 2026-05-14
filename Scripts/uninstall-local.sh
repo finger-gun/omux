@@ -131,7 +131,7 @@ remove_cli_path() {
 
 remove_update_staging() {
   found=0
-  for path in "$TMP_ROOT"/openmux-update-*; do
+  for path in "$TMP_ROOT"/openmux-update-* "$TMP_ROOT"/openmux-install-*; do
     if exists_or_symlink "$path"; then
       found=1
       run_rm "update staging directory" "$path"
@@ -139,7 +139,7 @@ remove_update_staging() {
   done
 
   if [ "$found" -eq 0 ]; then
-    log "skip missing update staging directories: $TMP_ROOT/openmux-update-*"
+    log "skip missing update staging directories: $TMP_ROOT/openmux-update-* $TMP_ROOT/openmux-install-*"
   fi
 }
 

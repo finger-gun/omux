@@ -61,9 +61,15 @@ OpenMUX is a beta, but the core workflow is usable:
 
 ## Start here
 
+Quick install from the latest GitHub Release:
+
+```bash
+curl -fsSL https://github.com/finger-gun/omux/releases/latest/download/openmux-install.sh | bash
+```
+
 User docs:
 
-- [Getting started](./docs/getting-started.md) - install, first launch, CLI setup, workspaces, panes, themes, hooks, and plugins.
+- [Getting started](./docs/getting-started.md) - install, first launch, CLI setup, workspaces, panes, themes, hooks, plugins, and the release installer script.
 - [Configuration and themes](./docs/configuration.md) - `~/.omux/config.toml`, themes, terminal settings, keybindings, and plugin config.
 - [Hooks](./docs/hooks.md) - executable user hooks, registry installs, hook payloads, and automation examples.
 - [Plugins](./docs/plugins/index.md) - bundled plugins, registry installs, and plugin management.

@@ -48,11 +48,12 @@ That command writes artifacts to `dist/release/`:
 
 - `OpenMUX-<version>-macos-unsigned.zip`
 - `omux-<version>-macos.tar.gz`
+- `openmux-install.sh`
 - `checksums.txt`
 
 The app archive is produced from the existing unsigned app bundle flow in `Scripts/publish-unsigned.sh`. That flow ad-hoc signs the assembled app bundle so macOS sees a structurally valid bundle, but it does not use a Developer ID certificate or notarization. The CLI archive packages the release-built `omux` binary, SwiftPM resource bundles needed by CLI commands such as `omux theme`, the release `VERSION`, and the repository license. The app bundle also includes `Contents/Resources/VERSION` so bundled tools can report their installed version offline.
 
-`checksums.txt` includes SHA-256 entries for both the app archive and CLI archive. `omux update` depends on the predictable app archive name and checksum entry to verify the downloaded app before it unarchives or installs anything.
+`checksums.txt` includes SHA-256 entries for the app archive, CLI archive, and release installer script. `omux update` depends on the predictable app archive name and checksum entry to verify the downloaded app before it unarchives or installs anything.
 
 The app bundle also includes a bundled CLI binary at `OpenMUX.app/Contents/MacOS/omux`, so users who install only the app can:
 
@@ -64,6 +65,14 @@ The app bundle also includes a bundled CLI binary at `OpenMUX.app/Contents/MacOS
 ```
 
 By default that command installs `omux` into the first preferred directory already on `PATH`, or falls back to `~/.local/bin/omux` and prints the shell export line to add.
+
+For direct-download installs outside Finder, the release also includes `openmux-install.sh`, intended for repo/website `curl | bash` use:
+
+```bash
+curl -fsSL https://github.com/finger-gun/omux/releases/latest/download/openmux-install.sh | bash
+```
+
+That bootstrap installer is version-pinned to the release it ships with, downloads the matching app archive plus `checksums.txt`, verifies the checksum, validates `OpenMUX.app`, and installs into `/Applications/OpenMUX.app` when writable or `~/Applications/OpenMUX.app` otherwise. It can optionally run `--install-cli` after installing the app. Like `omux update`, it does not attempt hidden privilege escalation.
 
 Users can inspect and update installed releases with:
 
@@ -92,8 +101,9 @@ The workflow:
 2. verifies the repository
 3. runs `make package-release RELEASE_VERSION=<tag-version>`
 4. launches the packaged app from the generated release archive
-5. extracts the matching section from `CHANGELOG.md`
-6. publishes a GitHub Release with the packaged artifacts attached and the committed changelog notes as the release body
+5. runs the packaged release installer smoke test
+6. extracts the matching section from `CHANGELOG.md`
+7. publishes a GitHub Release with the packaged artifacts attached and the committed changelog notes as the release body
 
 `CHANGELOG.md` is the committed release-note source of truth. The GitHub Release body is generated from the matching `## <version>` section at the tagged commit.
 

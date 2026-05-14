@@ -8,6 +8,20 @@ This guide is for people who want to use OpenMUX, not contribute to its internal
 
 OpenMUX currently publishes early macOS artifacts through [GitHub Releases](https://github.com/finger-gun/omux/releases).
 
+Fast path:
+
+```bash
+curl -fsSL https://github.com/finger-gun/omux/releases/latest/download/openmux-install.sh | bash
+```
+
+That script downloads the matching `OpenMUX-<version>-macos-unsigned.zip` and `checksums.txt`, verifies the SHA-256 checksum, validates the bundle, and installs `OpenMUX.app` into `/Applications` when writable or `~/Applications` otherwise. It does not invoke hidden `sudo` or request administrator privileges. Add `--install-cli` if you also want it to run the bundled `omux install-cli` step after the app install:
+
+```bash
+curl -fsSL https://github.com/finger-gun/omux/releases/latest/download/openmux-install.sh | bash -s -- --install-cli
+```
+
+Manual path:
+
 1. Download the latest `OpenMUX-<version>-macos-unsigned.zip` from the project releases.
 2. Unzip it and move `OpenMUX.app` to `/Applications`.
 3. Open the app from Finder.

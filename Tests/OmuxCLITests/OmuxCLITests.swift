@@ -289,7 +289,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertThrowsError(try updater.runHelper(manifest: fixture.manifest)) { error in
             XCTAssertEqual(
                 error as? OmuxSelfUpdater.UpdateError,
-                .appRelaunchFailed("Launch Services rejected \(fixture.targetAppURL.path)")
+                .installFailed(.appRelaunchFailed("Launch Services rejected \(fixture.targetAppURL.path)"))
             )
         }
         XCTAssertEqual(bundleVersion(at: fixture.targetAppURL), "0.4.0")

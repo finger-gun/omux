@@ -64,6 +64,9 @@ jobs:
       - name: Launch packaged app smoke test
         run: make smoke-packaged-release APP_ARCHIVE="dist/release/OpenMUX-${{ steps.release.outputs.version }}-macos-unsigned.zip"
 
+      - name: Run release installer smoke test
+        run: make smoke-release-installer INSTALLER_PATH="dist/release/openmux-install.sh"
+
       - name: Extract changelog release notes
         run: Scripts/extract-release-notes.sh "${{ steps.release.outputs.version }}" .build/release-notes.md
 
