@@ -9,6 +9,27 @@ OpenMUX release notes are committed here before tagging a release. Use `Scripts/
 
 
 
+
+## 0.16.0
+
+### Added
+
+- Added floating pane modals for extension content, including support for opening Markdown Preview as either a docked pane tab or a floating modal.
+- Added pane pop-out and dock-back workflows so pane tabs can be torn out into floating modals and docked back into the workspace layout.
+- Added `--modal`, `--pane-tab`, and `--presentation pane-tab|modal` to `omux markdown-preview`, plus `--presentation pane-tab|modal` to `omux extension-pane`, so plugins and scripts can choose initial pane presentation.
+- Added `[plugins.markdown-preview].presentation` to OpenMUX config so Markdown Preview can default to docked or modal presentation.
+- Added modal-aware control-plane workspace and pane metadata, including floating modal IDs, focused modal state, and modal frame data.
+
+### Changed
+
+- Added architecture and plugin documentation for modal presentation, pane ownership, and extension-pane presentation behavior.
+
+### Fixed
+
+- Fixed startup rendering and workspace restore so terminal surfaces are created lazily for visible panes and hidden restored panes are started when first used.
+- Fixed restored workspace behavior to avoid unnecessary terminal initialization across hidden tabs and floating-only layouts.
+- Fixed initial terminal snapshot handling so startup renders reuse cached terminal content more reliably.
+
 ## 0.15.2
 
 ### Changed
