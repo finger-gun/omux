@@ -856,6 +856,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func presentPaneFind(initialQuery: String = "") {
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
         if let existing = paneFindBarView {
             if initialQuery.isEmpty {
                 existing.present(existingQuery: existing.currentQuery)
@@ -914,7 +915,7 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func applySearch(to findBar: PaneFindBarView, query: String) {
         let bridge = controller.terminalBridge
-        guard let pane = currentWorkspace?.focusedPane else { return }
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
         try? bridge.search(paneID: pane.id, needle: query)
         let snapshot = bridge.terminalTextSnapshot(for: pane.id)
         if snapshot.isAvailable {
@@ -925,7 +926,7 @@ final class WorkspaceShellViewController: NSViewController {
 
     private func navigateSearch(in findBar: PaneFindBarView, forward: Bool) {
         let bridge = controller.terminalBridge
-        guard let pane = currentWorkspace?.focusedPane else { return }
+        guard let pane = currentWorkspace?.focusedPane, isSearchablePane(pane) else { return }
         try? bridge.navigateSearch(paneID: pane.id, forward: forward)
     }
 
@@ -933,9 +934,15 @@ final class WorkspaceShellViewController: NSViewController {
         guard let findBar = paneFindBarView else { return }
         let query = findBar.currentQuery
         guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
-        if let previousPaneID, previousPaneID != currentWorkspace?.focusedPane?.id {
+        let focusedPane = currentWorkspace?.focusedPane
+        if let previousPaneID,
+           previousPaneID != focusedPane?.id,
+           let previousPane = pane(withID: previousPaneID),
+           isSearchablePane(previousPane)
+        {
             try? controller.terminalBridge.endSearch(paneID: previousPaneID)
         }
+        guard let focusedPane, isSearchablePane(focusedPane) else { return }
         applySearch(to: findBar, query: query)
     }
 
@@ -946,10 +953,20 @@ final class WorkspaceShellViewController: NSViewController {
         }
         // End search on all active pane surfaces
         let bridge = controller.terminalBridge
-        let allPanes = controller.allWorkspaces().flatMap { ws in ws.tabs.flatMap(\.panes) }
+        let allPanes = controller.allWorkspaces().flatMap(\.panes)
         for pane in allPanes {
             try? bridge.endSearch(paneID: pane.id)
         }
+    }
+
+    private func isSearchablePane(_ pane: Pane) -> Bool {
+        pane.isTerminal
+    }
+
+    private func pane(withID paneID: PaneID) -> Pane? {
+        controller.allWorkspaces()
+            .flatMap(\.panes)
+            .first { $0.id == paneID }
     }
 
     private struct ConfigOpenContext {
