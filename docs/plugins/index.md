@@ -33,6 +33,7 @@ OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts
 
 | Plugin | Command | What it does |
 | --- | --- | --- |
+| AI Status | `omux ai-status` | Multi-vendor AI/tool status host installed from the official plugin registry. Starts with a Codex adapter and leaves future adapters behind the same command. |
 | Settings UI | `omux settings-ui` | Opens a graphical editor for supported `config.toml` settings and saves through OpenMUX validation. |
 | Hello Pane | `omux hello-pane` | Opens a small demo extension pane. Useful when testing plugin install and pane creation. |
 | macOS Notify | `omux macos-notify` | Sends a macOS notification from a plugin command. |
@@ -40,7 +41,7 @@ OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts
 Install one with:
 
 ```sh
-omux plugins install settings-ui
+omux plugins install ai-status
 ```
 
 Inspect plugin registration:
@@ -52,4 +53,4 @@ omux plugin path
 
 ## Create your own
 
-Read [Plugin Ecosystem](../plugins.md) for command registration, extension panes, process environment, menu contributions, and terminal text activation hooks.
+Read [Plugin Ecosystem](../plugins.md) for command registration, extension panes, process environment, menu contributions, and terminal text activation hooks. For the shared AI status host specifically, see [AI Status](./ai-status.md).

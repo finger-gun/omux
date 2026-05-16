@@ -46,7 +46,7 @@ targets.append(
         ),
         .target(
             name: "OmuxHooks",
-            dependencies: ["OmuxCore"]
+            dependencies: ["OmuxCore", "OmuxConfig"]
         ),
         .target(
             name: "OmuxMarkdownPreviewPlugin",

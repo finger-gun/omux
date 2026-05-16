@@ -675,6 +675,42 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLIPaneStatusSupportsAliasesAndClampsProgress() throws {
+        let socketPath = "/tmp/omux-pane-status-alias-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "running"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "input"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "completed"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "failed", "--progress", "140"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "remove"]), 0)
+
+        let states = requests.value.compactMap { request -> String? in
+            guard case .object(let params)? = request.params else { return nil }
+            guard case .string(let state)? = params["state"] else { return nil }
+            return state
+        }
+        let clampedValue = requests.value.compactMap { request -> Int? in
+            guard case .object(let params)? = request.params else { return nil }
+            guard case .number(let value)? = params["value"] else { return nil }
+            return Int(value)
+        }.last
+
+        XCTAssertEqual(states, ["working", "needs-input", "idle", "error", "clear"])
+        XCTAssertEqual(clampedValue, 100)
+    }
+
     func testCLIMarkdownPreviewCreatesExtensionPaneWhenEnabled() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1580,6 +1616,36 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(output[0].hasPrefix("\u{001B}[H\u{001B}[2J\u{001B}[3J"))
         XCTAssertEqual(output[0].replacingOccurrences(of: "\u{001B}[H\u{001B}[2J\u{001B}[3J", with: ""), "Cleared history for 1 pane.")
         XCTAssertEqual(output[1], "Cleared history for 1 pane.")
+    }
+
+    func testCLIPluginRunnerProvidesOMUXCLIPathToPlugins() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginDirectory = home.appendingPathComponent("plugins/echo-cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        let markerURL = home.appendingPathComponent("plugin-cli.txt")
+        try """
+        #!/bin/sh
+        printf "%s\\n" "$OMUX_CLI" "$OMUX_PLUGIN_COMMAND" > "\(markerURL.path)"
+        exit 0
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let command = OmuxCLICommand(writeLine: { _ in })
+        XCTAssertEqual(command.run(arguments: ["omux", "echo-cli"]), 0)
+
+        let marker = try String(contentsOf: markerURL, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(marker.count, 2)
+        XCTAssertFalse(marker[0].isEmpty)
+        XCTAssertEqual(marker[1], "echo-cli")
     }
 
     func testCLIHistoryPrintsUnavailablePane() throws {

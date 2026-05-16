@@ -22,6 +22,18 @@ The system SHALL define external AI/tool status adapters that translate tool-spe
 ### Requirement: Adapters SHALL be external and vendor-neutral
 AI/tool status adapters SHALL run as external executables, hook handlers, or plugin commands rather than in-process vendor integrations inside the OpenMUX app shell.
 
+#### Scenario: Shared host contains multiple vendor adapters
+- **WHEN** OpenMUX ships an official AI status plugin
+- **THEN** it may package Codex, Gemini, Claude, Copilot, and future tool adapters behind one shared `ai-status` host rather than requiring one plugin per vendor
+
+#### Scenario: Official host lives in plugin registry repo
+- **WHEN** OpenMUX ships an official installable `ai-status` host
+- **THEN** that plugin package lives in the official plugin registry repository (`https://github.com/finger-gun/omux-plugins`, local checkout `/Users/lejahmie/projects/omux-plugins/`) rather than in this repository
+
+#### Scenario: Core repo only owns host-side enablement
+- **WHEN** OpenMUX changes are needed to support the `ai-status` host
+- **THEN** this repository owns only the host-side integration work such as `omux pane-status`, plugin discovery/enablement, documentation, and shell rendering/tests, not the installable plugin package itself
+
 #### Scenario: Codex adapter uses external process boundary
 - **WHEN** OpenMUX provides Codex status support
 - **THEN** Codex-specific parsing or wrapping lives in an adapter executable or plugin command rather than in app-shell layout code
@@ -51,6 +63,17 @@ The system SHALL avoid starting AI/tool status adapters unless the user invokes,
 #### Scenario: Adapter polling is bounded
 - **WHEN** an observer adapter polls for status
 - **THEN** it uses bounded intervals and bounded input data so adapter activity does not degrade terminal performance
+
+### Requirement: Shared adapter hosts SHALL dedupe noisy observer signals
+Shared AI/tool adapter hosts SHALL treat noisy title, notification, or transcript surfaces as best-effort observer inputs and emit pane-status updates only for meaningful state transitions.
+
+#### Scenario: Spinner title frames do not flood pane-status
+- **WHEN** a tool emits many title changes while staying in the same effective state
+- **THEN** the shared host dedupes or debounces those raw signals instead of emitting one pane-status update per title frame
+
+#### Scenario: Host synthesizes clear after signal loss
+- **WHEN** a shared host no longer sees a supported tool identity for a pane after session end, explicit reset, or a configured stale timeout
+- **THEN** it emits `clear` according to host policy rather than requiring vendors to expose a first-class clear event
 
 ### Requirement: Adapters SHALL NOT interfere with terminal input correctness
 AI/tool status adapters SHALL NOT intercept, rewrite, block, or synthesize user keyboard input as part of status inference.

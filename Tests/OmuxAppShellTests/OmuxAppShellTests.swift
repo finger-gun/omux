@@ -3959,6 +3959,36 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowShowsActiveStatusOrbsForAdapterReportedWorkingState() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(pane.id),
+                state: .working,
+                label: "Codex",
+                source: "plugin.ai-status.codex"
+            )
+        )
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let visibleActiveOrbs = findViews(ofType: PaneProgressOrbView.self, in: rootView)
+            .filter { $0.isHidden == false && $0.progressStateForTesting == .active }
+        XCTAssertGreaterThanOrEqual(visibleActiveOrbs.count, 2)
+    }
+
+    @MainActor
     func testIdleStatusOrbsClearOnFocusByDefault() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -4011,6 +4041,34 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    @MainActor
+    func testPaneStatusUpdateDoesNotStealFocus() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(updatedWorkspace.focusedPane)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(firstPane.id),
+                state: .needsInput,
+                source: "plugin.ai-status.codex"
+            )
+        )
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first(where: { $0.id == firstPane.id })?.terminalState.progress?.state,
+            .needsInput
+        )
     }
 
     @MainActor
@@ -5030,6 +5088,17 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvent?.payload.objectValue?["label"], .string("Codex"))
         XCTAssertEqual(publishedEvent?.payload.objectValue?["message"], .string("tests failed"))
         XCTAssertEqual(publishedEvent?.payload.objectValue?["source"], .string("hook.codex"))
+
+        let missingResponse = try requestControlMethod(
+            .paneStatus,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: ControlPlanePaneStatusRequest(
+                target: .pane(PaneID(rawValue: "missing")),
+                state: .working
+            ).rpcValue
+        )
+
+        XCTAssertEqual(missingResponse.error?.code, 404)
     }
 
     @MainActor

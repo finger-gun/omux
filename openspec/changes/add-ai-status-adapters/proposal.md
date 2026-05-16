@@ -6,7 +6,7 @@ AI terminal tools do not consistently report progress to the terminal host: Copi
 
 - Let external adapters translate tool-specific activity from Codex, Claude, Copilot, and future terminal tools into OpenMUX pane status.
 - Reuse the public `omux pane-status` and local JSON-RPC control plane so adapters remain inspectable, scriptable, and replaceable.
-- Provide a small bundled adapter framework and at least one Codex adapter example without making OpenMUX an AI-first product.
+- Provide one shared `ai-status` plugin host with vendor-specific adapters, shipped from the official plugin registry repo (`https://github.com/finger-gun/omux-plugins`, local checkout `/Users/lejahmie/projects/omux-plugins/`), plus at least one Codex adapter example, without making OpenMUX an AI-first product.
 - Keep adapter execution lightweight and opt-in, with no always-on background service when no adapter is configured.
 
 ## Non-goals
@@ -19,7 +19,8 @@ AI terminal tools do not consistently report progress to the terminal host: Copi
 ## What Changes
 
 - Add an AI/tool status adapter capability that defines how external adapter executables map tool activity to `working`, `indeterminate`, `needs-input`, `idle`, `error`, and `clear` pane status states.
-- Add a bundled adapter runner contract for wrapper-style and observer-style adapters, starting with Codex-oriented behavior and leaving Claude/Copilot adapters as additional pluggable adapters.
+- Add a shared `ai-status` plugin host contract for wrapper-style and observer-style adapters, with adapter-owned vendor modules and a Codex-oriented first worked example while leaving Gemini, Claude, Copilot, and future adapters independently pluggable.
+- Keep repository ownership explicit: OpenMUX-side enablement, registry integration, control-plane support, docs, and rendering tests stay in this repo; the installable `ai-status` plugin package itself lives in the official plugin registry repo (`https://github.com/finger-gun/omux-plugins`, local checkout `/Users/lejahmie/projects/omux-plugins/`).
 - Clarify that adapters mutate OpenMUX only through public automation surfaces (`omux pane-status` or JSON-RPC), using `OMUX_PANE_ID` / `OMUX_SESSION_ID` or explicit targets.
 - Extend documentation and examples so users can install or write adapters for any terminal tool that exposes output, logs, hooks, or a CLI wrapper point.
 - Preserve the libghostty bridge boundary: terminal-native progress remains translated in `OmuxTerminalBridge`, while tool adapters live at the plugin/hook/control-plane layer.
@@ -40,6 +41,6 @@ AI terminal tools do not consistently report progress to the terminal host: Copi
 
 - Affected code: `OmuxCLI`, `OmuxControlPlane`, `OmuxAppShell`, `OmuxHooks`, plugin registry/docs, and status rendering tests.
 - Public API impact: documents and hardens `omux pane-status` / JSON-RPC pane status as the supported adapter reporting surface.
-- Plugin API impact: adds adapter conventions and example adapter locations without requiring in-process plugins.
+- Plugin API impact: adds `ai-status` host conventions, adapter module conventions, and example adapter locations without requiring in-process plugins; the host package itself is owned by the plugin registry repo rather than this repo.
 - Keyboard/input impact: adapters must not alter key routing, IME composition, dead keys, Option/right-Option behavior, or terminal input delivery; any observer mode must be read-only unless it calls explicit public automation.
 - Performance impact: adapters should run on demand or per configured tool process, avoid unbounded polling, and avoid long-lived background services by default.
