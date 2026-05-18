@@ -22,7 +22,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
             case .theme:
                 return "Themes"
             case .vaultSessions:
-                return "Vault Sessions"
+                return "Agent Sessions"
             }
         }
     }

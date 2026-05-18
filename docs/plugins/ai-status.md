@@ -25,7 +25,7 @@ The bundled plugin host owns:
 
 ## Shared host, not one plugin per vendor
 
-The intended shape is one installable `ai-status` package with adapter-owned vendor modules behind it:
+The intended shape is one bundled `ai-status` host with adapter-owned vendor modules behind it:
 
 ```text
 omux ai-status
@@ -35,22 +35,55 @@ omux ai-status
   └─ future adapters
 ```
 
-That keeps installation, discovery, and configuration simple for users while still isolating vendor-specific rules.
+That keeps discovery and configuration simple for users while still isolating vendor-specific rules.
 
-## Current first worked adapter: Codex
+## Current adapters
 
-The first implemented adapter is Codex-oriented and supports two practical paths:
+The bundled host has adapter-owned logic for Codex and Gemini passive title signals, plus a hook relay and JSONL event mappers for Codex, Gemini, and Claude.
 
-1. **Wrapper mode**
-   - `omux ai-status codex wrap -- codex ...`
-   - marks the pane as `working`
-   - reports `idle` or `error` on process exit
+### Passive title fallback
 
-2. **Observer mode**
-   - the installed plugin subscribes to `terminal-title-changed` itself through its manifest
-   - interprets Codex title changes as best-effort status signals
-   - dedupes repeated spinner frames so `pane-status` does not get spammed
-   - subscribes to `terminal-child-exited` so cached Codex observer state clears automatically when the process exits
+Passive title detection is the zero-setup fallback. It is useful when a user starts an agent manually in an existing pane and has not installed vendor hooks.
+
+- Codex title matching is best-effort and confidence-scored because Codex title strings are not a stable cross-version API.
+- Gemini title matching uses documented status icons where available.
+- Unknown titles leave the current pane status unchanged.
+
+### Hook relay
+
+For stronger interactive-session detection, install vendor hooks explicitly:
+
+```sh
+omux ai-status hooks setup
+omux ai-status hooks setup codex
+omux ai-status hooks setup gemini
+omux ai-status hooks setup claude
+omux ai-status hooks uninstall codex
+```
+
+Hook setup is never run automatically. Codex and Gemini setup write OpenMUX-owned marker entries into vendor configuration and uninstall removes only those marker-owned entries. Claude currently follows the conservative path: OpenMUX prints guided/wrapper setup and does not silently edit Claude-owned settings.
+
+Vendor hook entries call:
+
+```sh
+omux ai-status hook --source codex --event PermissionRequest
+omux ai-status hook --source gemini --event PreToolUse
+omux ai-status hook --source claude --event StopFailure
+```
+
+The command reads vendor JSON from stdin, maps it into normalized pane status, and reports through the public control plane. If the relay cannot find `OMUX_PANE_ID`, `OMUX_SESSION_ID`, or an explicit target, it no-ops so the vendor hook does not block the agent.
+
+### Wrapper modes
+
+Process lifecycle wrapper mode is available for Codex:
+
+```sh
+omux ai-status codex wrap -- codex ...
+```
+
+It marks the pane as `working`, runs the command, then reports `idle` or `error` based on process exit.
+
+The host also includes parser-level support for structured JSONL/stream-json events from Codex, Gemini, and Claude. JSONL wrappers are more precise than title matching when OpenMUX controls launch, but they are secondary to hooks/passive observation for arbitrary manually-started interactive panes.
 
 Advanced/manual entry points still exist when you need to test or replay signals directly:
 

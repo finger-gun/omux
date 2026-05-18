@@ -662,17 +662,17 @@ final class OmuxAppShellTests: XCTestCase {
 
         let vaultCommand = CommandPaletteCommand(
             id: "builtin:vault-sessions",
-            title: "Vault Sessions",
+            title: "Agent Sessions",
             subtitle: "Resume an indexed agent session",
             category: .action,
-            matchText: "vault sessions agent history resume codex copilot",
-            aliases: ["agent sessions", "resume session"],
+            matchText: "agent sessions vault history resume codex copilot",
+            aliases: ["vault sessions", "resume session"],
             invocationTarget: .vaultSessions
         )
         let vaultResult = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "codex sessions", commands: commands + [vaultCommand]).first {
             $0.invocationTarget == .vaultSessions
         })
-        XCTAssertEqual(vaultResult.title, "Vault Sessions")
+        XCTAssertEqual(vaultResult.title, "Agent Sessions")
         XCTAssertEqual(controller.invokeCommandPaletteResult(vaultResult), .inert)
     }
 

@@ -282,7 +282,7 @@ final class WorkspaceShellViewController: NSViewController {
         mainColumn.addArrangedSubview(canvasView)
 
         vaultToggleButton.isBordered = false
-        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Toggle Vault")
+        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Toggle Agent Sessions")
         vaultToggleButton.target = self
         vaultToggleButton.action = #selector(toggleVaultSidebarPressed)
         vaultToggleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1441,11 +1441,11 @@ final class WorkspaceShellViewController: NSViewController {
         _ = keyBindings
         return CommandPaletteCommand(
             id: "builtin:vault-sessions",
-            title: "Vault Sessions",
+            title: "Agent Sessions",
             subtitle: "Resume an indexed agent session",
             category: .action,
-            matchText: "vault sessions agent history resume codex copilot",
-            aliases: ["agent sessions", "resume session", "codex sessions", "copilot sessions"],
+            matchText: "agent sessions vault history resume codex copilot",
+            aliases: ["vault sessions", "resume session", "codex sessions", "copilot sessions"],
             requiresArguments: false,
             hasSafeDefaultTarget: true,
             invocationTarget: .vaultSessions
@@ -3166,7 +3166,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         let filter: WorkspaceShellViewController.VaultWorkspaceFilter
     }
 
-    private let titleLabel = NSTextField(labelWithString: "VAULT")
+    private let titleLabel = NSTextField(labelWithString: "AGENT SESSIONS")
     private let refreshButton = NSButton()
     private let collapseButton = NSButton()
     private let searchField = NSSearchField()
@@ -3201,13 +3201,13 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
         refreshButton.isBordered = false
-        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Vault")
+        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Agent Sessions")
         refreshButton.target = self
         refreshButton.action = #selector(refreshPressed)
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
 
         collapseButton.isBordered = false
-        collapseButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Hide Vault")
+        collapseButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Hide Agent Sessions")
         collapseButton.target = self
         collapseButton.action = #selector(collapsePressed)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
@@ -3281,13 +3281,15 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             refreshButton.heightAnchor.constraint(equalToConstant: 22),
             collapseButton.widthAnchor.constraint(equalToConstant: 22),
             collapseButton.heightAnchor.constraint(equalToConstant: 22),
+            searchField.heightAnchor.constraint(equalToConstant: 28),
             searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             searchField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             searchField.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            filterRow.heightAnchor.constraint(equalToConstant: 24),
             filterRow.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
             filterRow.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             filterRow.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 8),
+            scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 10),
             scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -6),
@@ -3298,7 +3300,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            stack.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
         ])
     }
 
