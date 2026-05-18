@@ -571,6 +571,91 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLIWorktreeCreatesGitWorktreeThenPaneTab() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "worktree.sock")
+            .path(percentEncoded: false)
+        let receivedParams = LockedValue<[String: RPCValue]?>(nil)
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            receivedParams.value = request.params?.objectValue
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        let gitCommands = LockedValue<[GitProcessCommand]>([])
+        let repoURL = URL(fileURLWithPath: "/tmp/openmux", isDirectory: true)
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: { ["PWD": repoURL.path] },
+            gitRunner: { command in
+                var commands = gitCommands.value
+                commands.append(command)
+                gitCommands.value = commands
+                switch command.arguments {
+                case ["rev-parse", "--show-toplevel"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "\(repoURL.path)\n", standardError: "")
+                case ["rev-parse", "--git-common-dir"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: ".git\n", standardError: "")
+                case ["worktree", "add", "-b", "feature/new-api", "/tmp/openmux-feature-new-api"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "", standardError: "")
+                default:
+                    return GitProcessResult(terminationStatus: 1, standardOutput: "", standardError: "unexpected git command")
+                }
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "worktree", "feature/new-api"]), 0)
+
+        XCTAssertEqual(gitCommands.value.map(\.arguments), [
+            ["rev-parse", "--show-toplevel"],
+            ["rev-parse", "--git-common-dir"],
+            ["worktree", "add", "-b", "feature/new-api", "/tmp/openmux-feature-new-api"],
+        ])
+        XCTAssertEqual(receivedParams.value?["workingDirectory"]?.stringValue, "/tmp/openmux-feature-new-api")
+        XCTAssertEqual(receivedParams.value?["title"]?.stringValue, "new-api")
+    }
+
+    func testCLIWorktreeReportsGitFailureWithoutRPC() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: "wtfail-\(UUID().uuidString).sock")
+            .path(percentEncoded: false)
+        let requestCount = LockedValue(0)
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            _ = request
+            requestCount.value += 1
+            return JSONRPCResponse(id: request.id, result: .string("unexpected"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: { ["PWD": "/tmp/not-a-repo"] },
+            gitRunner: { command in
+                _ = command
+                return GitProcessResult(terminationStatus: 128, standardOutput: "", standardError: "fatal: not a git repository\n")
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "worktree", "feature/new-api"]), 1)
+
+        XCTAssertEqual(requestCount.value, 0)
+        XCTAssertEqual(output, ["omux git error: fatal: not a git repository"])
+    }
+
     func testCLIListFullRequestsDetailedWorkspaceTopology() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -2394,6 +2479,22 @@ final class OmuxCLITests: XCTestCase {
         let installedURL = binDirectory.appendingPathComponent("omux", isDirectory: false)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: installedURL.path), appExecutableURL.path)
         XCTAssertEqual(output[0], "Installed omux at \(installedURL.path) -> \(appExecutableURL.path)")
+    }
+}
+
+private extension RPCValue {
+    var objectValue: [String: RPCValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
     }
 }
 

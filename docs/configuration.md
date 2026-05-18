@@ -90,6 +90,7 @@ plugins = ["https://github.com/finger-gun/omux-plugins"]
 "cmd+ctrl+left" = "pane.resize-left"
 "cmd+ctrl+right" = "pane.resize-right"
 "cmd+t" = "pane-tab.create"
+"cmd+shift+t" = "pane-tab.create-worktree"
 "cmd+w" = "pane-tab.close"
 "ctrl+tab" = "pane-tab.next"
 
@@ -421,6 +422,7 @@ Supported action identifiers:
 | `pane.resize-left` | Move the active split divider left. |
 | `pane.resize-right` | Move the active split divider right. |
 | `pane-tab.create` | Create a pane-local tab. |
+| `pane-tab.create-worktree` | Create a git worktree branch and open it in a pane-local tab. |
 | `pane-tab.close` | Close the active pane-local tab. |
 | `pane-tab.next` | Focus the next pane-local tab. |
 | `pane-tab.previous` | Focus the previous pane-local tab. |

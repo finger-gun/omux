@@ -65,6 +65,7 @@ final class WorkspaceWindowController: NSWindowController {
         initialPanes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared,
+        onClosePaneTab: (@MainActor (PaneID) -> Void)? = nil,
         onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void = { _ in }
     ) {
         self.controller = controller
@@ -74,6 +75,9 @@ final class WorkspaceWindowController: NSWindowController {
             initialPanes: initialPanes,
             initialIcons: initialIcons,
             sidebarVisibilityStore: sidebarVisibilityStore,
+            onClosePaneTab: onClosePaneTab ?? { [controller] paneID in
+                _ = try? controller.closePane(paneID: paneID)
+            },
             onExtensionPaneAction: onExtensionPaneAction
         )
         let window = NSWindow(
@@ -91,7 +95,7 @@ final class WorkspaceWindowController: NSWindowController {
         window.contentViewController = rootViewController
         window.setContentSize(NSSize(width: 1220, height: 780))
         super.init(window: window)
-        rootViewController.update(workspace: workspace)
+        update(workspace: workspace)
     }
 
     @available(*, unavailable)
@@ -107,7 +111,7 @@ final class WorkspaceWindowController: NSWindowController {
             fputs("warning: failed to ensure visible terminal surfaces: \(error)\n", stderr)
         }
         window?.title = displayedWorkspace.name
-        rootViewController.update(workspace: controller.activeWorkspace() ?? displayedWorkspace)
+        rootViewController.update(workspace: displayedWorkspace)
     }
 
     func updateTheme(_ theme: WorkspaceShellTheme) {
@@ -190,6 +194,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var paneFindBarView: PaneFindBarView?
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
+    private let onClosePaneTab: @MainActor (PaneID) -> Void
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
     private var floatingModalOverlayView: FloatingModalOverlayView {
@@ -204,6 +209,7 @@ final class WorkspaceShellViewController: NSViewController {
         initialPanes: OmuxConfigUI.Panes,
         initialIcons: OmuxConfigUI.Icons,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring,
+        onClosePaneTab: @escaping @MainActor (PaneID) -> Void,
         onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
     ) {
         self.controller = controller
@@ -212,6 +218,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.currentIcons = initialIcons
         self.sidebarVisibilityStore = sidebarVisibilityStore
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
+        self.onClosePaneTab = onClosePaneTab
         self.onExtensionPaneAction = onExtensionPaneAction
         super.init(nibName: nil, bundle: nil)
     }
@@ -305,7 +312,7 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         windowIsKey = true
-        if let workspace = currentWorkspace { update(workspace: workspace) }
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace { update(workspace: workspace) }
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
@@ -313,7 +320,7 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         windowIsKey = false
-        if let workspace = currentWorkspace { update(workspace: workspace) }
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace { update(workspace: workspace) }
     }
 
     func update(workspace: Workspace) {
@@ -437,7 +444,6 @@ final class WorkspaceShellViewController: NSViewController {
         if shouldRestoreFocus, let focusedPaneView {
             focusRestoreGeneration &+= 1
             let generation = focusRestoreGeneration
-
             if let window = view.window {
                 window.makeFirstResponder(focusTarget(for: focusedPaneView))
             } else {
@@ -813,6 +819,13 @@ final class WorkspaceShellViewController: NSViewController {
                 presentPaneFind()
                 return .invoked
             }
+            if result.invocationTarget == .action(.paneTabClose) {
+                guard controller.canClosePaneTab(), let paneID = currentWorkspace?.focusedPane?.id else {
+                    return .failed("Pane tab could not be closed")
+                }
+                onClosePaneTab(paneID)
+                return .invoked
+            }
             if result.invocationTarget == .themeSwitch {
                 themeBeforeSubPalette = currentTheme
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
@@ -864,7 +877,7 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
 
-        _ = try? controller.closePane(paneID: paneID)
+        onClosePaneTab(paneID)
     }
 
     func presentPaneFind(initialQuery: String = "") {
@@ -1107,7 +1120,7 @@ final class WorkspaceShellViewController: NSViewController {
         let closeItem = menu.addItem(withTitle: "Close", action: nil, keyEquivalent: "")
         closeItem.isEnabled = paneStack.panes.count > 1 || canCloseSinglePaneStack
         closeItem.onSelect { [weak self] in
-            _ = try? self?.controller.closePane(paneID: pane.id)
+            self?.onClosePaneTab(pane.id)
         }
 
         let targetIndex = paneStack.panes.firstIndex(where: { $0.id == pane.id }) ?? 0
@@ -1181,7 +1194,7 @@ final class WorkspaceShellViewController: NSViewController {
                 },
                 canCloseSinglePaneStack: canCloseSinglePaneStack,
                 onClosePane: { [weak self] paneID in
-                    _ = try self?.controller.closePane(paneID: paneID)
+                    self?.onClosePaneTab(paneID)
                 },
                 contextMenuProvider: { [weak self] pane in
                     guard let self else { return NSMenu() }
@@ -1294,7 +1307,7 @@ final class WorkspaceShellViewController: NSViewController {
                 },
                 canCloseSinglePaneStack: canCloseSinglePaneStack,
                 onClosePane: { [weak self] paneID in
-                    _ = try self?.controller.closePane(paneID: paneID)
+                    self?.onClosePaneTab(paneID)
                 },
                 contextMenuProvider: { [weak self] pane in
                     guard let self else { return NSMenu() }
@@ -1408,7 +1421,7 @@ final class WorkspaceShellViewController: NSViewController {
                 },
                 canCloseSinglePaneStack: true,
                 onClosePane: { [weak self] paneID in
-                    _ = try self?.controller.closePane(paneID: paneID)
+                    self?.onClosePaneTab(paneID)
                 },
                 contextMenuProvider: { [weak self] pane in
                     guard let self else { return NSMenu() }
@@ -1448,7 +1461,7 @@ final class WorkspaceShellViewController: NSViewController {
                     _ = self?.controller.focus(paneID: paneID)
                 },
                 onClose: { [weak self] paneID in
-                    _ = try? self?.controller.closePane(paneID: paneID)
+                    self?.onClosePaneTab(paneID)
                 },
                 onDragChanged: { [weak self] paneID, sourceStackID, _, frame, allowsDocking in
                     self?.updateFloatingModalDragPreview(

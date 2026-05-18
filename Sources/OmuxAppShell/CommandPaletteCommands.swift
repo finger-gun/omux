@@ -132,6 +132,8 @@ struct CommandPaletteCommandCatalog {
             return false
         case .workspaceCreate, .paneSplitRight, .paneSplitDown, .paneTabCreate, .sidebarToggle:
             return controller.activeWorkspace() != nil
+        case .paneTabCreateWorktree:
+            return controller.resolveTerminalTarget(.focused) != nil
         case .workspaceClose:
             return controller.canDeleteActiveWorkspace()
         case .workspacePrevious:
@@ -235,6 +237,10 @@ extension WorkspaceController {
                 guard resizeSplit(.right) != nil else { return .failed("Divider could not move right") }
             case .paneTabCreate:
                 guard try createPaneTab() != nil else { return .failed("Pane tab could not be created") }
+            case .paneTabCreateWorktree:
+                guard try runCommand(target: .focused, command: "omux worktree \(Self.generatedWorktreeBranchName().shellEscaped)") != nil else {
+                    return .failed("No focused terminal")
+                }
             case .paneTabClose:
                 guard try closePaneTab() != nil else { return .failed("Pane tab could not be closed") }
             case .paneTabNext:
@@ -274,6 +280,16 @@ extension WorkspaceController {
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    private static func generatedWorktreeBranchName() -> String {
+        "worktree/\(UUID().uuidString.prefix(8).lowercased())"
+    }
+}
+
+private extension String {
+    var shellEscaped: String {
+        "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 

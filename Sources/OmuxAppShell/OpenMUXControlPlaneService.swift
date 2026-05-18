@@ -269,7 +269,15 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 ).rpcValue
             )
         case .createPaneTab:
-            if let workspace = try controller.createPaneTab() {
+            let params = request.params?.objectValue ?? [:]
+            let workingDirectory = Self.nonEmptyString(params["workingDirectory"])
+            let title = Self.nonEmptyString(params["title"])
+            let paneStackID = Self.nonEmptyString(params["paneStackID"]).map(PaneStackID.init(rawValue:))
+            if let workspace = try controller.createPaneTab(
+                in: paneStackID,
+                workingDirectory: workingDirectory,
+                title: title
+            ) {
                 let created = workspace.focusedPane.flatMap { pane -> ControlPlaneTerminalContext? in
                     guard let session = pane.terminalSession else {
                         return nil
@@ -845,6 +853,17 @@ private extension Pane {
             "progress": terminalState.progress.rpcValue,
             "focused": .bool(focused),
         ]
+    }
+}
+
+private extension OpenMUXControlPlaneService {
+    static func nonEmptyString(_ value: RPCValue?) -> String? {
+        guard let string = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              string.isEmpty == false
+        else {
+            return nil
+        }
+        return string
     }
 }
 

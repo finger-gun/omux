@@ -105,7 +105,7 @@ pane.split-right         pane.split-down
 pane.remove              pane.find        pane.next        pane.previous
 pane.resize-up           pane.resize-down pane.resize-left pane.resize-right
 pane.resize-equalize     sidebar.toggle
-pane-tab.create          pane-tab.close
+pane-tab.create          pane-tab.create-worktree          pane-tab.close
 pane-tab.next            pane-tab.previous
 ```
 

@@ -838,19 +838,22 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         onTextActivation: (@MainActor (TerminalTextActivationRequest) -> Bool)?,
         onTextActivationHover: (@MainActor (TerminalTextActivationRequest) -> Bool)?
     ) -> any TerminalSurfaceContentHosting {
-        if let surface = surface(for: pane.id),
-            let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID) {
-            return RuntimeTerminalSurfaceContentHost(
-                pane: pane,
-                runtimeView: runtimeView,
-                bridge: self,
-                isFocused: isFocused,
-                themePalette: themePalette,
-                onFocus: onFocus,
-                terminalSizeProvider: terminalSizeProvider,
-                onTextActivation: onTextActivation,
-                onTextActivationHover: onTextActivationHover
-            )
+        let surface = surface(for: pane.id)
+        if let surface {
+            let runtimeView = runtime.makeHostedSurfaceView(for: pane.id, runtimeSurfaceID: surface.runtimeSurfaceID)
+            if let runtimeView {
+                return RuntimeTerminalSurfaceContentHost(
+                    pane: pane,
+                    runtimeView: runtimeView,
+                    bridge: self,
+                    isFocused: isFocused,
+                    themePalette: themePalette,
+                    onFocus: onFocus,
+                    terminalSizeProvider: terminalSizeProvider,
+                    onTextActivation: onTextActivation,
+                    onTextActivationHover: onTextActivationHover
+                )
+            }
         }
 
         preconditionFailure("Missing Ghostty runtime view for pane \(pane.id.rawValue)")

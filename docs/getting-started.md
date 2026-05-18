@@ -164,6 +164,7 @@ default_root_path = "~"
 "cmd+shift+w" = "pane.remove"
 "cmd+f" = "pane.find"
 "cmd+t" = "pane-tab.create"
+"cmd+shift+t" = "pane-tab.create-worktree"
 "cmd+w" = "pane-tab.close"
 "ctrl+tab" = "pane-tab.next"
 ```

@@ -1,0 +1,12 @@
+{
+  "id": "action:pane-tab.create-worktree",
+  "title": "New Worktree Pane Tab",
+  "subtitle": "Create a git worktree branch and open it in a pane tab",
+  "category": "action",
+  "matchText": "New Worktree Pane Tab Create a git worktree branch and pane tab worktree git branch",
+  "aliases": ["new worktree", "git worktree", "worktree tab"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No focused terminal",
+  "command": { "kind": "action", "target": "pane-tab.create-worktree" }
+}

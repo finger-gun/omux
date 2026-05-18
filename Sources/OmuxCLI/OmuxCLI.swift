@@ -21,6 +21,7 @@ public struct OmuxCLICommand {
     private let pluginRegistry: OmuxCLIPluginRegistry
     private let pluginRunner: OmuxCLIPluginRunner
     private let environment: () -> [String: String]
+    private let gitRunner: (GitProcessCommand) throws -> GitProcessResult
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
@@ -38,6 +39,7 @@ public struct OmuxCLICommand {
             installer: OmuxCLIInstaller(),
             versionProvider: OpenMUXVersionProvider(),
             environment: { ProcessInfo.processInfo.environment },
+            gitRunner: Self.runGitProcess,
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
             selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) },
             isInteractivePluginPickerAvailable: TerminalPluginPicker.isAvailable,
@@ -56,6 +58,7 @@ public struct OmuxCLICommand {
         pluginRegistry: OmuxCLIPluginRegistry = OmuxCLIPluginRegistry(),
         pluginRunner: OmuxCLIPluginRunner = OmuxCLIPluginRunner(),
         environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
+        gitRunner: @escaping (GitProcessCommand) throws -> GitProcessResult = OmuxCLICommand.runGitProcess,
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
         selectThemeInteractively: @escaping ([OmuxTheme], String?) throws -> OmuxTheme? = {
             try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1)
@@ -79,6 +82,7 @@ public struct OmuxCLICommand {
         self.pluginRegistry = pluginRegistry
         self.pluginRunner = pluginRunner
         self.environment = environment
+        self.gitRunner = gitRunner
     }
 
     @discardableResult
@@ -153,6 +157,8 @@ public struct OmuxCLICommand {
             case "pane-tab":
                 let response = try client.request(method: .createPaneTab)
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "worktree":
+                return try runWorktreeCommand(arguments: Array(commandArguments.dropFirst()))
             case "pane-tab-next":
                 let response = try client.request(method: .focusNextPaneTab)
                 writeLine(response.result?.prettyPrinted ?? "")
@@ -332,16 +338,266 @@ public struct OmuxCLICommand {
     public static let usage = OpenMUXCLICommandCatalog.usage
 
     private func resolveCLIPath(_ path: String) -> String {
+        resolveCLIPath(path, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+    }
+
+    private func resolveCLIPath(_ path: String, relativeTo baseURL: URL) -> String {
         if let resolved = OmuxWorkspacePathResolver.resolve(path) {
             return resolved
         }
 
         return URL(
             fileURLWithPath: path,
-            relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            relativeTo: baseURL
         )
         .standardizedFileURL
         .path
+    }
+
+    private struct WorktreeCommandRequest {
+        var branch: String
+        var path: String?
+        var fromRef: String?
+        var paneStackID: String?
+        var clear: Bool = false
+    }
+
+    private func runWorktreeCommand(arguments: [String]) throws -> Int32 {
+        guard var request = parseWorktreeCommand(arguments) else {
+            writeLine("usage: omux worktree <branch> [path] [--from <ref>] [--pane-stack <id>] [--clear]")
+            return 1
+        }
+
+        if request.clear {
+            // Clear screen and prompt interactively for branch name.
+            FileHandle.standardOutput.write(Data("\u{1B}[2J\u{1B}[H".utf8))
+            let defaultBranch = Self.generatedWorktreeBranchName()
+            FileHandle.standardOutput.write(Data("Worktree branch name [\(defaultBranch)]: ".utf8))
+            let input = readLine() ?? ""
+            let branch = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            request.branch = branch.isEmpty ? defaultBranch : branch
+        }
+
+        let cwd = currentWorkingDirectoryURL()
+        guard let repoRoot = try successfulGitOutput(["rev-parse", "--show-toplevel"], workingDirectory: cwd) else {
+            return 1
+        }
+        guard repoRoot.isEmpty == false else {
+            writeLine("omux git error: unable to resolve repository root")
+            return 1
+        }
+
+        guard let gitCommonDirectory = try successfulGitOutput(["rev-parse", "--git-common-dir"], workingDirectory: cwd) else {
+            return 1
+        }
+        guard gitCommonDirectory.isEmpty == false else {
+            writeLine("omux git error: unable to resolve git common directory")
+            return 1
+        }
+
+        let repoRootURL = URL(fileURLWithPath: repoRoot, isDirectory: true).standardizedFileURL
+        let gitCommonDirectoryURL = URL(
+            fileURLWithPath: gitCommonDirectory,
+            relativeTo: cwd
+        ).standardizedFileURL
+        let worktreePath = request.path.map { resolveCLIPath($0, relativeTo: cwd) }
+            ?? Self.defaultWorktreePath(
+                branch: request.branch,
+                gitCommonDirectory: gitCommonDirectoryURL,
+                repoRoot: repoRootURL
+            )
+
+        var addArguments = ["worktree", "add", "-b", request.branch, worktreePath]
+        if let fromRef = request.fromRef {
+            addArguments.append(fromRef)
+        }
+        let addResult = try runGit(arguments: addArguments, workingDirectory: cwd)
+        guard addResult.terminationStatus == 0 else {
+            writeLine("omux git error: \(Self.gitFailureMessage(addResult))")
+            return 1
+        }
+
+        if request.clear {
+            // Stay in current tab: clear screen, then cd into the worktree.
+            let focusedTarget = RPCValue.object(["type": .string("focused")])
+            let response = try client.request(
+                method: .runCommand,
+                params: .object([
+                    "target": focusedTarget,
+                    "command": .string("cd \(worktreePath.shellEscaped)"),
+                ])
+            )
+            if let error = response.error {
+                writeLine("omux error: cd failed: \(error.message)")
+            }
+            _ = try client.request(
+                method: .runCommand,
+                params: .object([
+                    "target": focusedTarget,
+                    "command": .string("clear"),
+                ])
+            )
+        } else {
+            // Default: open a new pane tab in the worktree directory.
+            var params: [String: RPCValue] = [
+                "workingDirectory": .string(worktreePath),
+                "title": .string(Self.worktreePaneTitle(branch: request.branch)),
+            ]
+            if let paneStackID = request.paneStackID {
+                params["paneStackID"] = .string(paneStackID)
+            }
+            let response = try client.request(method: .createPaneTab, params: .object(params))
+            writeLine(response.result?.prettyPrinted ?? "")
+        }
+        return 0
+    }
+
+    private func parseWorktreeCommand(_ arguments: [String]) -> WorktreeCommandRequest? {
+        var positional: [String] = []
+        var fromRef: String?
+        var paneStackID: String?
+        var clear = false
+        var index = 0
+
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--from":
+                guard index + 1 < arguments.count else { return nil }
+                fromRef = arguments[index + 1]
+                index += 2
+            case "--pane-stack":
+                guard index + 1 < arguments.count else { return nil }
+                paneStackID = arguments[index + 1]
+                index += 2
+            case "--clear":
+                clear = true
+                index += 1
+            default:
+                guard arguments[index].hasPrefix("--") == false else { return nil }
+                positional.append(arguments[index])
+                index += 1
+            }
+        }
+
+        if clear {
+            let branch = positional.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return WorktreeCommandRequest(
+                branch: branch,
+                path: positional.count >= 2 ? positional[1] : nil,
+                fromRef: fromRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                paneStackID: paneStackID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                clear: true
+            )
+        }
+
+        guard (1...2).contains(positional.count) else { return nil }
+        let branch = positional[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard branch.isEmpty == false else { return nil }
+        return WorktreeCommandRequest(
+            branch: branch,
+            path: positional.count == 2 ? positional[1] : nil,
+            fromRef: fromRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            paneStackID: paneStackID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            clear: false
+        )
+    }
+
+    private func currentWorkingDirectoryURL() -> URL {
+        let path = environment()["PWD"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return URL(
+            fileURLWithPath: path?.isEmpty == false ? path! : FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        ).standardizedFileURL
+    }
+
+    private func successfulGitOutput(_ arguments: [String], workingDirectory: URL) throws -> String? {
+        let result = try runGit(arguments: arguments, workingDirectory: workingDirectory)
+        guard result.terminationStatus == 0 else {
+            writeLine("omux git error: \(Self.gitFailureMessage(result))")
+            return nil
+        }
+        return result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runGit(arguments: [String], workingDirectory: URL) throws -> GitProcessResult {
+        try gitRunner(GitProcessCommand(arguments: arguments, workingDirectory: workingDirectory))
+    }
+
+    private static func defaultWorktreePath(
+        branch: String,
+        gitCommonDirectory: URL,
+        repoRoot: URL
+    ) -> String {
+        let commonParent = gitCommonDirectory.deletingLastPathComponent()
+        let parent = gitCommonDirectory.lastPathComponent == ".git"
+            ? commonParent.deletingLastPathComponent()
+            : (commonParent.path.isEmpty ? repoRoot.deletingLastPathComponent() : commonParent)
+        return parent
+            .appendingPathComponent(
+                "\(repoRoot.lastPathComponent)-\(sanitizedWorktreeDirectoryName(branch))",
+                isDirectory: true
+            )
+            .standardizedFileURL
+            .path
+    }
+
+    private static func sanitizedWorktreeDirectoryName(_ branch: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        var result = ""
+        var previousWasSeparator = false
+        for scalar in branch.unicodeScalars {
+            if allowed.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+                previousWasSeparator = false
+            } else if previousWasSeparator == false {
+                result.append("-")
+                previousWasSeparator = true
+            }
+        }
+        let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-._"))
+        return trimmed.isEmpty ? "worktree" : trimmed
+    }
+
+    private static func worktreePaneTitle(branch: String) -> String {
+        let title = branch.split(separator: "/").last.map(String.init) ?? branch
+        return title.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? branch
+    }
+
+    private static func generatedWorktreeBranchName() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate, .withDashSeparatorInDate]
+        let date = formatter.string(from: Date())
+        let suffix = UUID().uuidString.prefix(8).lowercased()
+        return "worktree/\(date)-\(suffix)"
+    }
+
+    private static func gitFailureMessage(_ result: GitProcessResult) -> String {
+        let message = [result.standardError, result.standardOutput]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.isEmpty == false }
+        return message ?? "git exited with status \(result.terminationStatus)"
+    }
+
+    private static func runGitProcess(_ command: GitProcessCommand) throws -> GitProcessResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = command.arguments
+        process.currentDirectoryURL = command.workingDirectory
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+        return GitProcessResult(
+            terminationStatus: process.terminationStatus,
+            standardOutput: String(decoding: stdoutData, as: UTF8.self),
+            standardError: String(decoding: stderrData, as: UTF8.self)
+        )
     }
 
     private func runPluginCommand(arguments: [String]) -> Int32 {
@@ -1774,6 +2030,23 @@ public struct OmuxCLICommand {
             return "omux error: OpenMUX is not reachable on the local control socket. Start or restart the current app build, for example with `make app`."
         }
         return "omux error: \(error)"
+    }
+}
+
+struct GitProcessCommand: Equatable {
+    let arguments: [String]
+    let workingDirectory: URL
+}
+
+struct GitProcessResult: Equatable {
+    let terminationStatus: Int32
+    let standardOutput: String
+    let standardError: String
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

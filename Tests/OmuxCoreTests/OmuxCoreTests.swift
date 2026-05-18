@@ -277,19 +277,19 @@ final class OmuxCoreTests: XCTestCase {
             charactersIgnoringModifiers: "a",
             modifiers: [.leftCommand]
         )
-        let commandShiftT = RawKeyInput(
-            keyCode: 17,
-            characters: "T",
-            charactersIgnoringModifiers: "t",
+        let commandShiftU = RawKeyInput(
+            keyCode: 32,
+            characters: "U",
+            charactersIgnoringModifiers: "u",
             modifiers: [.leftCommand, .leftShift]
         )
 
         let event = DefaultKeyEventNormalizer().normalize(commandA)
-        let removedPaneAddAlias = DefaultKeyEventNormalizer().normalize(commandShiftT)
+        let unknownShiftChord = DefaultKeyEventNormalizer().normalize(commandShiftU)
 
         XCTAssertEqual(event.route, .terminal)
         XCTAssertTrue(event.modifiers.contains(.leftCommand))
-        XCTAssertEqual(removedPaneAddAlias.route, .terminal)
+        XCTAssertEqual(unknownShiftChord.route, .terminal)
     }
 
     func testModifiedBackspaceRemainsTerminalInput() {

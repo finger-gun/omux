@@ -29,6 +29,7 @@ public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
     case paneResizeLeft = "pane.resize-left"
     case paneResizeRight = "pane.resize-right"
     case paneTabCreate = "pane-tab.create"
+    case paneTabCreateWorktree = "pane-tab.create-worktree"
     case paneTabClose = "pane-tab.close"
     case paneTabNext = "pane-tab.next"
     case paneTabPrevious = "pane-tab.previous"
@@ -213,6 +214,7 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+left"), .paneResizeLeft),
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+right"), .paneResizeRight),
         (try! OpenMUXKeyChord(parsing: "cmd+t"), .paneTabCreate),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+t"), .paneTabCreateWorktree),
         (try! OpenMUXKeyChord(parsing: "cmd+w"), .paneTabClose),
         (try! OpenMUXKeyChord(parsing: "ctrl+tab"), .paneTabNext),
         (try! OpenMUXKeyChord(parsing: "cmd+f"), .paneFind),

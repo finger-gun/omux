@@ -39,6 +39,11 @@ private struct WorkspacePaneResolution: Sendable {
     let pane: Pane
 }
 
+public struct PaneTabCloseCandidate: Equatable, Sendable {
+    public let paneID: PaneID
+    public let workingDirectory: String
+}
+
 public struct ExtensionPaneActionResult: Sendable {
     public let workspace: Workspace
     public let tabID: TabID?
@@ -161,6 +166,7 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
         onChange?(workspace)
+
         try hookRunner.emit(
             HookInvocation(
                 category: .lifecycle,
@@ -642,6 +648,40 @@ public final class WorkspaceController: @unchecked Sendable {
 
     public func canFocusPaneTab() -> Bool {
         canClosePaneTab()
+    }
+
+    public func paneTabCloseCandidate(paneID: PaneID? = nil) -> PaneTabCloseCandidate? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let index = activeWorkspaceIndex else { return nil }
+        let targetPaneID = paneID ?? workspaces[index].focusedPane?.id
+        guard let targetPaneID,
+              let location = paneLocationLocked(for: targetPaneID),
+              let pane = workspacePaneLocked(at: location)?.pane,
+              let workingDirectory = Self.terminalWorkingDirectory(for: pane)
+        else {
+            return nil
+        }
+        return PaneTabCloseCandidate(paneID: targetPaneID, workingDirectory: workingDirectory)
+    }
+
+    public func hasOtherTerminalPane(
+        inside directory: String,
+        excluding excludedPaneID: PaneID
+    ) -> Bool {
+        let normalizedDirectory = Self.normalizedDirectoryPath(directory)
+        lock.lock()
+        defer { lock.unlock() }
+        return workspaces.contains { workspace in
+            workspace.panes.contains { pane in
+                guard pane.id != excludedPaneID,
+                      let workingDirectory = Self.terminalWorkingDirectory(for: pane)
+                else {
+                    return false
+                }
+                return Self.normalizedDirectoryPath(workingDirectory).isContained(in: normalizedDirectory)
+            }
+        }
     }
 
     public func canFocusPane() -> Bool {
@@ -1325,7 +1365,11 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
-    public func createPaneTab(in paneStackID: PaneStackID? = nil) throws -> Workspace? {
+    public func createPaneTab(
+        in paneStackID: PaneStackID? = nil,
+        workingDirectory explicitWorkingDirectory: String? = nil,
+        title explicitTitle: String? = nil
+    ) throws -> Workspace? {
         lock.lock()
         guard let index = activeWorkspaceIndex else {
             lock.unlock()
@@ -1347,9 +1391,11 @@ public final class WorkspaceController: @unchecked Sendable {
         let sourceWorkingDirectory = sourcePane.terminalState.reportedWorkingDirectory
             ?? sourcePane.terminalSession?.workingDirectory
             ?? workspaces[index].rootPath
+        let workingDirectory = explicitWorkingDirectory ?? sourceWorkingDirectory
+        let title = explicitTitle ?? Self.basePaneTitle(for: workingDirectory)
         let pane = makePane(
-            title: Self.basePaneTitle(for: sourceWorkingDirectory),
-            workingDirectory: sourceWorkingDirectory
+            title: title,
+            workingDirectory: workingDirectory
         )
         let success: Bool
         if let paneStackID {
@@ -2534,7 +2580,16 @@ public final class WorkspaceController: @unchecked Sendable {
         else {
             return nil
         }
-        return pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory
+        return Self.terminalWorkingDirectory(for: pane)
+    }
+
+    private static func terminalWorkingDirectory(for pane: Pane) -> String? {
+        let path = pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory
+        return path?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    private static func normalizedDirectoryPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
     }
 
     private func terminalTextActivationContext(
@@ -3762,6 +3817,16 @@ private extension PaneHistoryTarget {
             truncated: truncated,
             unavailable: unavailable
         )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+
+    func isContained(in directory: String) -> Bool {
+        self == directory || hasPrefix(directory + "/")
     }
 }
 

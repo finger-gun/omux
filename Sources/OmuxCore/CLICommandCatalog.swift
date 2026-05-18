@@ -361,6 +361,16 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .keyBindingAction(.paneTabCreate)
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.worktree",
+            usage: "omux worktree <branch> [path]",
+            title: "omux: Create Git Worktree Pane Tab",
+            summary: "Create a git worktree branch and open it in a new pane tab",
+            aliases: ["git worktree", "new worktree", "worktree branch"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.pane-tab-next",
             usage: "omux pane-tab-next",
             title: "omux: Next Pane Tab",
