@@ -48,7 +48,7 @@ public actor VaultStore {
     public func search(_ request: VaultSearchRequest) throws -> VaultSearchResponse {
         let trimmed = request.query.trimmingCharacters(in: .whitespacesAndNewlines)
         var bindings: [SQLiteBinding] = []
-        var whereClauses: [String] = []
+        var whereClauses: [String] = [Self.visibleSessionWhereClause]
 
         if let agents = request.agents, agents.isEmpty == false {
             let placeholders = agents.map { _ in "?" }.joined(separator: ", ")
@@ -79,7 +79,9 @@ public actor VaultStore {
                 row: decodeSummary
             )
         } else {
-            let ftsQuery = ftsQuery(for: trimmed)
+            guard let ftsQuery = ftsQuery(for: trimmed) else {
+                return VaultSearchResponse(sessions: [], totalCount: 0)
+            }
             let ftsWhere = baseWhere.isEmpty ? "WHERE vault_messages_fts MATCH ?" : "\(baseWhere) AND vault_messages_fts MATCH ?"
             let ftsBindings = bindings + [.string(ftsQuery)]
             total = try count(
@@ -109,6 +111,10 @@ public actor VaultStore {
         }
         return VaultSearchResponse(sessions: rows, totalCount: total)
     }
+
+    private static let visibleSessionWhereClause = """
+    s.title NOT GLOB '????????-????-????-????-????????????'
+    """
 
     public func preview(sessionID: String, maxBytes: Int? = nil) throws -> VaultPreview? {
         guard let session = try session(id: sessionID) else {
@@ -355,8 +361,17 @@ public actor VaultStore {
     }
 }
 
-private func ftsQuery(for raw: String) -> String {
-    raw.split(whereSeparator: \.isWhitespace)
+private func ftsQuery(for raw: String) -> String? {
+    let tokens = raw
+        .split { character in
+            character.isLetter == false && character.isNumber == false
+        }
+        .map(String.init)
+        .filter { $0.isEmpty == false }
+    guard tokens.isEmpty == false else {
+        return nil
+    }
+    return tokens
         .map { token in
             let escaped = token.replacingOccurrences(of: "\"", with: "\"\"")
             return "\"\(escaped)\""

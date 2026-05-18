@@ -188,6 +188,8 @@ extension WorkspaceController {
             return invokePaletteCLICommand(commandID)
         case .themeSwitch:
             return .inert
+        case .vaultSessions, .vaultSession:
+            return .inert
         case .configOpen:
             return .inert
         }

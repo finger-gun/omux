@@ -16,6 +16,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let markdownPreviewRenderer: String
         public let markdownPreviewTheme: String
         public let markdownPreviewPresentation: String
+        public let aiStatusEnabled: Bool
         public let hookRegistries: [String]
         public let pluginRegistries: [String]
         public let persistedScrollbackEnabled: Bool
@@ -71,6 +72,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
 
     public struct Plugins: Codable, Equatable, Sendable {
         public let markdownPreview: MarkdownPreview
+        public let aiStatus: AIStatus
     }
 
     public struct MarkdownPreview: Codable, Equatable, Sendable {
@@ -78,6 +80,10 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let renderer: String
         public let theme: String
         public let presentation: String
+    }
+
+    public struct AIStatus: Codable, Equatable, Sendable {
+        public let enabled: Bool
     }
 
     public struct Registries: Codable, Equatable, Sendable {
@@ -129,6 +135,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
 
     public struct Plugins: Codable, Equatable, Sendable {
         public var markdownPreview: MarkdownPreview?
+        public var aiStatus: AIStatus?
     }
 
     public struct MarkdownPreview: Codable, Equatable, Sendable {
@@ -136,6 +143,10 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var renderer: String?
         public var theme: String?
         public var presentation: String?
+    }
+
+    public struct AIStatus: Codable, Equatable, Sendable {
+        public var enabled: Bool?
     }
 
     public struct Registries: Codable, Equatable, Sendable {
@@ -293,6 +304,7 @@ public struct OmuxConfigEditor {
         let panesPayload = payload.ui?.panes
         let iconsPayload = payload.ui?.icons
         let markdownPreviewPayload = payload.plugins?.markdownPreview
+        let aiStatusPayload = payload.plugins?.aiStatus
         return OmuxConfig(
             schema: current.schema,
             autoCheckUpdate: payload.autoCheckUpdate ?? current.autoCheckUpdate,
@@ -325,6 +337,9 @@ public struct OmuxConfigEditor {
                     renderer: markdownPreviewPayload?.renderer ?? current.plugins.markdownPreview.renderer,
                     theme: markdownPreviewPayload?.theme ?? current.plugins.markdownPreview.theme,
                     presentation: markdownPreviewPayload?.presentation ?? current.plugins.markdownPreview.presentation
+                ),
+                aiStatus: OmuxConfigPlugins.AIStatus(
+                    enabled: aiStatusPayload?.enabled ?? current.plugins.aiStatus.enabled
                 )
             ),
             registries: OmuxConfigRegistries(
@@ -417,6 +432,9 @@ public struct OmuxConfigEditor {
                     "theme": true,
                     "presentation": true,
                 ],
+                "aiStatus": [
+                    "enabled": true,
+                ],
             ],
             "registries": [
                 "hooks": true,
@@ -492,6 +510,9 @@ public enum OmuxConfigRenderer {
         lines.append("renderer = \(render(.string(markdownPreview.renderer)))")
         lines.append("theme = \(render(.string(markdownPreview.theme)))")
         lines.append("presentation = \(render(.string(markdownPreview.presentation)))")
+        lines.append("")
+        lines.append("[plugins.ai-status]")
+        lines.append("enabled = \(config.plugins.aiStatus.enabled ? "true" : "false")")
         lines.append("")
         lines.append("[registries]")
         lines.append("hooks = \(render(.array(config.registries.hooks.map(OmuxTOMLValue.string))))")
@@ -573,6 +594,7 @@ private extension OmuxConfigExport.Defaults {
             markdownPreviewRenderer: config.plugins.markdownPreview.renderer,
             markdownPreviewTheme: config.plugins.markdownPreview.theme,
             markdownPreviewPresentation: config.plugins.markdownPreview.presentation,
+            aiStatusEnabled: config.plugins.aiStatus.enabled,
             hookRegistries: config.registries.hooks,
             pluginRegistries: config.registries.plugins,
             persistedScrollbackEnabled: config.terminal.persistedScrollback.enabled,
@@ -636,7 +658,8 @@ private extension OmuxConfigExport.Plugins {
                 renderer: config.markdownPreview.renderer,
                 theme: config.markdownPreview.theme,
                 presentation: config.markdownPreview.presentation
-            )
+            ),
+            aiStatus: .init(enabled: config.aiStatus.enabled)
         )
     }
 }

@@ -659,6 +659,21 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
         XCTAssertEqual(runtime.executedCommands, ["omux version", "omux config open"])
         XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+
+        let vaultCommand = CommandPaletteCommand(
+            id: "builtin:vault-sessions",
+            title: "Vault Sessions",
+            subtitle: "Resume an indexed agent session",
+            category: .action,
+            matchText: "vault sessions agent history resume codex copilot",
+            aliases: ["agent sessions", "resume session"],
+            invocationTarget: .vaultSessions
+        )
+        let vaultResult = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "codex sessions", commands: commands + [vaultCommand]).first {
+            $0.invocationTarget == .vaultSessions
+        })
+        XCTAssertEqual(vaultResult.title, "Vault Sessions")
+        XCTAssertEqual(controller.invokeCommandPaletteResult(vaultResult), .inert)
     }
 
     func testCommandPaletteConfigOpenCommandsReflectTerminalRequirement() throws {

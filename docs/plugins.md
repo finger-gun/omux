@@ -147,16 +147,7 @@ OpenMUX invokes the plugin entrypoint with the callback name and arguments, and 
 
 ## AI status host pattern
 
-The official multi-vendor AI status host is an installable registry plugin, not a bundled in-process feature. OpenMUX-side enablement stays in the main `omux` repository, while the installable `ai-status` package itself lives in the official plugin registry:
-
-```text
-https://github.com/finger-gun/omux-plugins
-```
-
-The intended split is:
-
-- **This repo (`omux`)**: `omux pane-status`, plugin discovery/install UX, shell rendering, docs, and tests
-- **Plugin registry repo (`omux-plugins`)**: the installable `ai-status` package and vendor adapters such as Codex
+The official multi-vendor AI status host is a bundled Swift plugin. It is enabled by default, appears in the plugin picker, and still talks to OpenMUX through the public pane-status surface instead of private terminal state.
 
 The shared `ai-status` host exists so users install one capability and then enable tool-specific adapters behind it, rather than installing one plugin per AI vendor. The host owns debounce, dedupe, target resolution, stale-clear behavior, and manifest-declared hook callbacks. Vendor adapters own their own title rules, hook handling, log reading, and other best-effort detection logic.
 

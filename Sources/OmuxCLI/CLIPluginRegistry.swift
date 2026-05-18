@@ -1,4 +1,5 @@
 import Foundation
+import OmuxAIStatusPlugin
 import OmuxConfig
 import OmuxMarkdownPreviewPlugin
 
@@ -47,6 +48,10 @@ struct OmuxCLIPluginRegistry {
             OmuxBundledCLIPlugin(
                 commandName: OmuxMarkdownPreviewPlugin.commandName,
                 displayPath: OmuxMarkdownPreviewPlugin.commandDisplayPath
+            ),
+            OmuxBundledCLIPlugin(
+                commandName: OmuxAIStatusPlugin.commandName,
+                displayPath: OmuxAIStatusPlugin.commandDisplayPath
             ),
         ]
     ) {

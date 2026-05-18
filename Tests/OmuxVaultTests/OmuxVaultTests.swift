@@ -78,6 +78,82 @@ struct OmuxVaultTests {
         #expect(try await target.preview(sessionID: "copilot:one")?.turns.first?.text == "hello copilot")
     }
 
+    @Test("Vault hides UUID-only sessions from browse results")
+    func hidesUUIDOnlySessionsFromBrowseResults() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let bundle = VaultExportBundle(
+            sessions: [
+                VaultSessionSummary(
+                    id: "copilot:empty",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "20936e63-4f27-4f1b-b61b-1248b38b0000",
+                    workingDirectory: "/tmp/project",
+                    modifiedAt: Date(timeIntervalSince1970: 2),
+                    previewAvailable: true,
+                    resumeAvailable: true
+                ),
+                VaultSessionSummary(
+                    id: "copilot:named",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "Create release notes",
+                    workingDirectory: "/tmp/project",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    previewAvailable: false,
+                    resumeAvailable: true
+                ),
+            ],
+            resumeSnapshots: [:],
+            turns: [
+                "copilot:empty": [
+                    VaultTranscriptTurn(sessionID: "copilot:empty", turnID: "0", role: "assistant", text: "created empty session", ordinal: 0, modifiedAt: Date(timeIntervalSince1970: 2)),
+                ],
+            ]
+        )
+        try await store.import(data: JSONEncoder.vaultTest.encode(bundle))
+
+        let list = try await store.list()
+        #expect(list.sessions.map(\.id) == ["copilot:named"])
+        #expect(list.totalCount == 1)
+        let search = try await store.search(VaultSearchRequest(query: "created"))
+        #expect(search.sessions.isEmpty)
+        #expect(search.totalCount == 0)
+    }
+
+    @Test("Vault search ignores punctuation-only FTS queries")
+    func searchIgnoresPunctuationOnlyQueries() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let bundle = VaultExportBundle(
+            sessions: [
+                VaultSessionSummary(
+                    id: "codex:one",
+                    agent: .codex,
+                    sourceKind: "fixture",
+                    title: "Implement parser",
+                    workingDirectory: "/tmp/project",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    previewAvailable: true,
+                    resumeAvailable: true
+                ),
+            ],
+            resumeSnapshots: [:],
+            turns: [
+                "codex:one": [
+                    VaultTranscriptTurn(sessionID: "codex:one", turnID: "0", role: "user", text: "handle braces", ordinal: 0, modifiedAt: Date(timeIntervalSince1970: 1)),
+                ],
+            ]
+        )
+        try await store.import(data: JSONEncoder.vaultTest.encode(bundle))
+
+        let result = try await store.search(VaultSearchRequest(query: "{"))
+
+        #expect(result.sessions.isEmpty)
+        #expect(result.totalCount == 0)
+    }
+
     @Test("Codex adapter prefers SQLite thread timestamps")
     func codexAdapterPrefersSQLiteThreadTimestamps() async throws {
         let root = try temporaryDirectory()

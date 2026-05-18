@@ -308,10 +308,23 @@ public struct OmuxConfigPlugins: Equatable, Sendable {
         }
     }
 
-    public let markdownPreview: MarkdownPreview
+    public struct AIStatus: Equatable, Sendable {
+        public let enabled: Bool
 
-    public init(markdownPreview: MarkdownPreview = MarkdownPreview()) {
+        public init(enabled: Bool = true) {
+            self.enabled = enabled
+        }
+    }
+
+    public let markdownPreview: MarkdownPreview
+    public let aiStatus: AIStatus
+
+    public init(
+        markdownPreview: MarkdownPreview = MarkdownPreview(),
+        aiStatus: AIStatus = AIStatus()
+    ) {
         self.markdownPreview = markdownPreview
+        self.aiStatus = aiStatus
     }
 }
 
@@ -559,6 +572,9 @@ public enum OmuxConfigTemplate {
         renderer = "builtin"
         theme = "auto"
         presentation = "pane-tab"
+
+        [plugins.ai-status]
+        enabled = true
 
         [registries]
         hooks = ["https://github.com/finger-gun/omux-hooks"]
@@ -921,7 +937,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "vault", "plugins.markdown-preview", "registries", "keys", "ghostty"]
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "vault", "plugins.markdown-preview", "plugins.ai-status", "registries", "keys", "ghostty"]
         for tableName in document.tableNames
         where allowedTables.contains(tableName) == false && tableName.hasPrefix("vault.agents.") == false {
             diagnostics.append(
@@ -1480,6 +1496,40 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let aiStatusAllowedKeys: Set<String> = ["enabled"]
+        var aiStatusEnabled = config.plugins.aiStatus.enabled
+        for entry in document.entries(in: "plugins.ai-status") {
+            guard aiStatusAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [plugins.ai-status] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.ai-status.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                aiStatusEnabled = value
+            default:
+                break
+            }
+        }
+
         let registriesAllowedKeys: Set<String> = ["hooks", "plugins"]
         var hookRegistries = config.registries.hooks
         var pluginRegistries = config.registries.plugins
@@ -1761,7 +1811,8 @@ public struct OmuxConfigLoader {
                     renderer: markdownPreviewRenderer,
                     theme: markdownPreviewTheme,
                     presentation: markdownPreviewPresentation
-                )
+                ),
+                aiStatus: OmuxConfigPlugins.AIStatus(enabled: aiStatusEnabled)
             ),
             registries: OmuxConfigRegistries(
                 hooks: hookRegistries,

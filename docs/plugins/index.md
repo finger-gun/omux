@@ -29,11 +29,16 @@ omux plugins uninstall <plugin-id>
 
 OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts `--registry <url>` for custom registries.
 
+## Bundled plugins
+
+| Plugin | Command | What it does |
+| --- | --- | --- |
+| AI Status | `omux ai-status` | Bundled multi-vendor AI/tool status host. Starts with a Codex adapter and leaves future adapters behind the same command. |
+
 ## Registry-hosted plugins
 
 | Plugin | Command | What it does |
 | --- | --- | --- |
-| AI Status | `omux ai-status` | Multi-vendor AI/tool status host installed from the official plugin registry. Starts with a Codex adapter and leaves future adapters behind the same command. |
 | Settings UI | `omux settings-ui` | Opens a graphical editor for supported `config.toml` settings and saves through OpenMUX validation. |
 | Hello Pane | `omux hello-pane` | Opens a small demo extension pane. Useful when testing plugin install and pane creation. |
 | macOS Notify | `omux macos-notify` | Sends a macOS notification from a plugin command. |

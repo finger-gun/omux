@@ -1,27 +1,21 @@
 # AI Status
 
-`ai-status` is an installable registry-hosted OpenMUX plugin that translates tool-specific AI/runtime signals into normalized pane status updates.
+`ai-status` is a bundled OpenMUX plugin that translates tool-specific AI/runtime signals into normalized pane status updates.
 
-Install it with:
+It is enabled by default and can be toggled from the plugin picker:
 
 ```sh
-omux plugins install ai-status
+omux plugins
 ```
 
-The package itself lives in the official OpenMUX plugin registry repo:
-
-```text
-https://github.com/finger-gun/omux-plugins
-```
-
-OpenMUX core owns the host-side surfaces that make it work:
+OpenMUX owns the host-side surfaces that make it work:
 
 - `omux pane-status`
 - plugin discovery/install UX
 - shell rendering for pane status orbs
 - docs and tests
 
-The plugin host owns:
+The bundled plugin host owns:
 
 - adapter selection
 - noisy observer dedupe/debounce

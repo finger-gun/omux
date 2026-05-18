@@ -219,6 +219,9 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultIsLoading = false
     private var isVaultSidebarVisible = false
     private var vaultWorkspaceFilter: VaultWorkspaceFilter = .current
+    private var vaultPaletteSessions: [VaultSessionSummary] = []
+    private var vaultPaletteEntries: [VaultPaletteEntry] = []
+    private var vaultPaletteLoadGeneration = UUID()
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
@@ -285,26 +288,32 @@ final class WorkspaceShellViewController: NSViewController {
 
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
-        view.addSubview(vaultSidebarView)
-        view.addSubview(vaultToggleButton)
+        if vaultConfiguration.enabled {
+            view.addSubview(vaultSidebarView)
+            view.addSubview(vaultToggleButton)
+        }
         view.addSubview(shellOverlayHostView)
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
-        let vaultSidebarWidthConstraint = vaultSidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultSidebarWidth)
+        let vaultSidebarWidthConstraint = vaultConfiguration.enabled
+            ? vaultSidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultSidebarWidth)
+            : nil
         let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
             equalTo: sidebarView.trailingAnchor,
             constant: ShellLayoutMetrics.interRegionSpacing
         )
-        let mainColumnTrailingConstraint = mainColumn.trailingAnchor.constraint(
-            equalTo: vaultSidebarView.leadingAnchor,
-            constant: -ShellLayoutMetrics.interRegionSpacing
-        )
+        let mainColumnTrailingConstraint = vaultConfiguration.enabled
+            ? mainColumn.trailingAnchor.constraint(
+                equalTo: vaultSidebarView.leadingAnchor,
+                constant: -ShellLayoutMetrics.interRegionSpacing
+            )
+            : mainColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -ShellLayoutMetrics.outerPadding)
         self.sidebarWidthConstraint = sidebarWidthConstraint
         self.vaultSidebarWidthConstraint = vaultSidebarWidthConstraint
         self.mainColumnLeadingConstraint = mainColumnLeadingConstraint
         self.mainColumnTrailingConstraint = mainColumnTrailingConstraint
 
-        NSLayoutConstraint.activate([
+        var constraints = [
             sidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             sidebarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -315,7 +324,10 @@ final class WorkspaceShellViewController: NSViewController {
             mainColumnTrailingConstraint,
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
             canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
+        ]
 
+        if vaultConfiguration.enabled, let vaultSidebarWidthConstraint {
+            constraints += [
             vaultSidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             vaultSidebarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             vaultSidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -325,12 +337,16 @@ final class WorkspaceShellViewController: NSViewController {
             vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             vaultToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
             vaultToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
+            ]
+        }
 
+        constraints += [
             shellOverlayHostView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
             shellOverlayHostView.leadingAnchor.constraint(equalTo: mainColumn.leadingAnchor),
             shellOverlayHostView.trailingAnchor.constraint(equalTo: mainColumn.trailingAnchor),
             shellOverlayHostView.bottomAnchor.constraint(equalTo: mainColumn.bottomAnchor),
-        ])
+        ]
+        NSLayoutConstraint.activate(constraints)
 
         applySidebarVisibility()
         applyVaultSidebarVisibility()
@@ -1202,13 +1218,17 @@ final class WorkspaceShellViewController: NSViewController {
                     workspaces: controller.commandPaletteWorkspaces()
                 )
             case .command:
+                var commands = CommandPaletteCommandCatalog.commands(
+                    controller: controller,
+                    keyBindings: keyBindings,
+                    subtitleOverrides: configOpenContext.map { ["cli:omux.config.open": $0.subtitle] } ?? [:]
+                )
+                if vaultConfiguration.enabled && vaultStore != nil {
+                    commands.append(vaultSessionsCommand(keyBindings: keyBindings))
+                }
                 return CommandPaletteSearch.commandResults(
                     query: parsed.matchingText,
-                    commands: CommandPaletteCommandCatalog.commands(
-                        controller: controller,
-                        keyBindings: keyBindings,
-                        subtitleOverrides: configOpenContext.map { ["cli:omux.config.open": $0.subtitle] } ?? [:]
-                    )
+                    commands: commands
                 )
             }
         }
@@ -1231,6 +1251,10 @@ final class WorkspaceShellViewController: NSViewController {
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
                 return .inert
             }
+            if result.invocationTarget == .vaultSessions {
+                presentVaultSessionsSubPalette(in: paletteView)
+                return .inert
+            }
             if result.invocationTarget == .configOpen {
                 NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
                 return .invoked
@@ -1246,6 +1270,10 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         paletteView.subPaletteCommitHandler = { [weak self] identifier in
+            if self?.vaultPaletteSessions.contains(where: { $0.id == identifier }) == true {
+                self?.resumeVaultSession(identifier)
+                return
+            }
             themeBeforeSubPalette = nil
             self?.themeCommitHandler?(identifier)
         }
@@ -1392,6 +1420,168 @@ final class WorkspaceShellViewController: NSViewController {
         controller.allWorkspaces()
             .flatMap(\.panes)
             .first { $0.id == paneID }
+    }
+
+    private func vaultSessionsCommand(keyBindings: OpenMUXKeyBindingRegistry) -> CommandPaletteCommand {
+        _ = keyBindings
+        return CommandPaletteCommand(
+            id: "builtin:vault-sessions",
+            title: "Vault Sessions",
+            subtitle: "Resume an indexed agent session",
+            category: .action,
+            matchText: "vault sessions agent history resume codex copilot",
+            aliases: ["agent sessions", "resume session", "codex sessions", "copilot sessions"],
+            requiresArguments: false,
+            hasSafeDefaultTarget: true,
+            invocationTarget: .vaultSessions
+        )
+    }
+
+    private func presentVaultSessionsSubPalette(in paletteView: CommandPaletteView) {
+        vaultPaletteSessions = []
+        vaultPaletteEntries = []
+        paletteView.enterVaultSessionsSubPalette { [weak self] query in
+            self?.vaultPaletteResults(query: query) ?? []
+        }
+        loadVaultPaletteSessions(paletteView: paletteView)
+    }
+
+    private func loadVaultPaletteSessions(paletteView: CommandPaletteView) {
+        guard let vaultStore else {
+            return
+        }
+
+        let generation = UUID()
+        vaultPaletteLoadGeneration = generation
+        Task.detached { [weak self, weak paletteView] in
+            var sessions: [VaultSessionSummary] = []
+            var offset = 0
+            var totalCount = Int.max
+
+            do {
+                repeat {
+                    let response = try await vaultStore.search(VaultSearchRequest(offset: offset, limit: 500))
+                    sessions += response.sessions
+                    offset += response.sessions.count
+                    totalCount = response.totalCount
+
+                    await MainActor.run {
+                        guard let self,
+                              let paletteView,
+                              self.vaultPaletteLoadGeneration == generation
+                        else {
+                            return
+                        }
+                        self.vaultPaletteSessions = sessions
+                        self.vaultPaletteEntries = sessions.enumerated().map { index, session in
+                            VaultPaletteEntry(session: session, searchTexts: self.vaultPaletteSearchTexts(for: session), index: index)
+                        }
+                        paletteView.refreshPresentedResults()
+                    }
+
+                    if response.sessions.isEmpty {
+                        break
+                    }
+                } while offset < totalCount
+            } catch {
+                fputs("vault palette search failed: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private func vaultPaletteResults(query: String) -> [CommandPaletteResult] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        let ranked: [VaultPaletteEntry]
+        if normalizedQuery.isEmpty {
+            ranked = Array(vaultPaletteEntries.prefix(Self.vaultPaletteResultLimit))
+        } else {
+            ranked = vaultPaletteEntries.compactMap { entry -> (entry: VaultPaletteEntry, score: Int)? in
+                let score = entry.searchTexts
+                    .compactMap { Self.vaultPaletteMatchScore(query: normalizedQuery, candidate: $0) }
+                    .min()
+                guard let score else { return nil }
+                return (entry, score)
+            }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score { return lhs.score < rhs.score }
+                return lhs.entry.index < rhs.entry.index
+            }
+            .prefix(Self.vaultPaletteResultLimit)
+            .map(\.entry)
+        }
+
+        return ranked.map { entry in
+            let session = entry.session
+            let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? session.id
+                : session.title
+            let subtitleParts = [
+                session.agent.rawValue,
+                session.workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent },
+            ].compactMap { $0 }.filter { $0.isEmpty == false }
+
+            return CommandPaletteResult(
+                id: session.id,
+                title: title,
+                subtitle: subtitleParts.joined(separator: " · "),
+                category: .action,
+                matchText: [
+                    title,
+                    session.id,
+                    session.agent.rawValue,
+                    session.workingDirectory,
+                    session.model,
+                    session.gitBranch,
+                ].compactMap { $0 }.joined(separator: " "),
+                invocationTarget: .vaultSession(session.id)
+            )
+        }
+    }
+
+    private static let vaultPaletteResultLimit = 80
+
+    private struct VaultPaletteEntry {
+        let session: VaultSessionSummary
+        let searchTexts: [String]
+        let index: Int
+    }
+
+    private func vaultPaletteSearchTexts(for session: VaultSessionSummary) -> [String] {
+        [
+            session.title,
+            session.id,
+            session.agent.rawValue,
+            session.workingDirectory,
+            session.model,
+            session.gitBranch,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase }
+        .filter { $0.isEmpty == false }
+    }
+
+    private static func vaultPaletteMatchScore(query: String, candidate: String) -> Int? {
+        guard query.isEmpty == false else {
+            return 0
+        }
+        if candidate == query { return 0 }
+        if candidate.hasPrefix(query) { return 10 }
+        if candidate.contains(query) { return 20 }
+        let parts = query.split(separator: " ")
+        if parts.allSatisfy({ candidate.contains($0) }) { return 30 }
+        return fuzzySubsequenceScore(query: query, candidate: candidate).map { 40 + $0 }
+    }
+
+    private static func fuzzySubsequenceScore(query: String, candidate: String) -> Int? {
+        var score = 0
+        var searchStart = candidate.startIndex
+        for character in query {
+            guard let match = candidate[searchStart...].firstIndex(of: character) else {
+                return nil
+            }
+            score += candidate.distance(from: searchStart, to: match)
+            searchStart = candidate.index(after: match)
+        }
+        return score
     }
 
     private struct ConfigOpenContext {

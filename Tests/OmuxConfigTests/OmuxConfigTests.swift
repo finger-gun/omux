@@ -486,6 +486,26 @@ struct OmuxConfigTests {
         #expect(result.config.plugins.markdownPreview.renderer == "builtin")
         #expect(result.config.plugins.markdownPreview.theme == "auto")
         #expect(result.config.plugins.markdownPreview.presentation == "pane-tab")
+        #expect(result.config.plugins.aiStatus.enabled)
+    }
+
+    @Test
+    func loadsAIStatusPluginSettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [plugins.ai-status]
+            enabled = false
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.plugins.aiStatus.enabled == false)
     }
 
     @Test
@@ -506,6 +526,32 @@ struct OmuxConfigTests {
                 schema = 1
 
                 [plugins.markdown-preview]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
+    func rejectsInvalidAIStatusPluginSettings() throws {
+        let cases = [
+            ("enabled = \"yes\"", "plugins.ai-status.enabled must be a boolean"),
+            ("unknown = true", "Unknown [plugins.ai-status] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [plugins.ai-status]
                 \(entry)
                 """,
                 to: home.appendingPathComponent("config.toml")

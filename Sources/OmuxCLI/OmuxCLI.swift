@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import OmuxAIStatusPlugin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
@@ -724,6 +725,9 @@ public struct OmuxCLICommand {
                 case OmuxMarkdownPreviewPlugin.commandName:
                     isEnabled = config.plugins.markdownPreview.enabled
                     canToggle = true
+                case OmuxAIStatusPlugin.commandName:
+                    isEnabled = config.plugins.aiStatus.enabled
+                    canToggle = true
                 default:
                     isEnabled = true
                     canToggle = false
@@ -771,8 +775,15 @@ public struct OmuxCLICommand {
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: !markdownPreview.enabled,
                     renderer: markdownPreview.renderer,
-                    theme: markdownPreview.theme
-                )
+                    theme: markdownPreview.theme,
+                    presentation: markdownPreview.presentation
+                ),
+                aiStatus: current.plugins.aiStatus
+            )
+        case OmuxAIStatusPlugin.commandName:
+            plugins = OmuxConfigPlugins(
+                markdownPreview: current.plugins.markdownPreview,
+                aiStatus: OmuxConfigPlugins.AIStatus(enabled: !current.plugins.aiStatus.enabled)
             )
         default:
             writeLine("Plugin \(item.commandName) cannot be toggled from OpenMUX config.")
@@ -810,6 +821,8 @@ public struct OmuxCLICommand {
             switch bundledPlugin.commandName {
             case OmuxMarkdownPreviewPlugin.commandName:
                 return try runMarkdownPreviewCommand(arguments: arguments)
+            case OmuxAIStatusPlugin.commandName:
+                return try runAIStatusCommand(arguments: arguments)
             default:
                 writeLine("omux error: bundled plugin '\(bundledPlugin.commandName)' is not available")
                 return 1
@@ -864,6 +877,24 @@ public struct OmuxCLICommand {
                 axis: request.axis,
                 presentationStyle: presentationStyle
             ),
+            client: client,
+            writeLine: writeLine
+        )
+    }
+
+    private func runAIStatusCommand(arguments: [String]) throws -> Int32 {
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        guard configResult.config.plugins.aiStatus.enabled else {
+            writeLine("AI status plugin is disabled. Enable [plugins.ai-status] enabled = true in ~/.omux/config.toml.")
+            return 1
+        }
+
+        return try OmuxAIStatusPlugin(environment: environment()).run(
+            arguments: arguments,
             client: client,
             writeLine: writeLine
         )

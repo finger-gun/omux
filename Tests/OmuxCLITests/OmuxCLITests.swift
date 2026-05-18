@@ -4,6 +4,7 @@ import XCTest
 @testable import OmuxConfig
 @testable import OmuxControlPlane
 @testable import OmuxCore
+@testable import OmuxAIStatusPlugin
 @testable import OmuxMarkdownPreviewPlugin
 @testable import OmuxTheme
 
@@ -675,6 +676,48 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLIBundledAIStatusPluginSendsPaneStatus() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "ai-status.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "ai-status", "codex", "title",
+                "--pane", "pane-1",
+                "--title", "waiting for approval",
+            ]),
+            0
+        )
+
+        XCTAssertEqual(requests.value.map(\.method), [ControlMethod.paneStatus.rawValue])
+        guard case .object(let params)? = requests.value.first?.params,
+              case .object(let target)? = params["target"],
+              case .string("pane")? = target["type"],
+              case .string("pane-1")? = target["id"],
+              case .string("needs-input")? = params["state"],
+              case .string("Codex")? = params["label"],
+              case .string("waiting for approval")? = params["message"],
+              case .string("plugin.ai-status.codex")? = params["source"] else {
+            return XCTFail("expected ai-status pane-status params")
+        }
+        XCTAssertEqual(output, ["ok"])
+    }
+
     func testCLIPaneStatusSupportsAliasesAndClampsProgress() throws {
         let socketPath = "/tmp/omux-pane-status-alias-\(UUID().uuidString).sock"
         let requests = LockedValue<[JSONRPCRequest]>([])
@@ -1113,6 +1156,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "plugin", "list"]), 0)
         XCTAssertEqual(output.first, pluginsDirectory.path)
         XCTAssertEqual(output.dropFirst(), [
+            "\(OmuxAIStatusPlugin.commandName)\t\(OmuxAIStatusPlugin.commandDisplayPath)",
             "alpha\t\(alphaURL.path)",
             "beta\t\(betaURL.path)",
             "\(OmuxMarkdownPreviewPlugin.commandName)\t\(OmuxMarkdownPreviewPlugin.commandDisplayPath)",
@@ -1304,6 +1348,9 @@ final class OmuxCLITests: XCTestCase {
                 let markdownPreview = try XCTUnwrap(items.first { $0.commandName == OmuxMarkdownPreviewPlugin.commandName })
                 XCTAssertTrue(markdownPreview.isEnabled)
                 XCTAssertTrue(markdownPreview.canToggle)
+                let aiStatus = try XCTUnwrap(items.first { $0.commandName == OmuxAIStatusPlugin.commandName })
+                XCTAssertTrue(aiStatus.isEnabled)
+                XCTAssertTrue(aiStatus.canToggle)
                 return markdownPreview
             }
         )
@@ -1334,6 +1381,33 @@ final class OmuxCLITests: XCTestCase {
             PluginPickerSearch.filteredItems(items, query: "external").map(\.commandName),
             ["hello-world", "session-tools"]
         )
+    }
+
+    func testCLIBundledAIStatusPluginCannotBeShadowedByExternalPlugin() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = home.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let markerURL = home.appendingPathComponent("should-not-exist.txt")
+        let executableURL = pluginsDirectory.appendingPathComponent(OmuxAIStatusPlugin.commandName)
+        try """
+        #!/bin/sh
+        echo shadowed > "\(markerURL.path)"
+        exit 42
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", OmuxAIStatusPlugin.commandName]), 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+        XCTAssertEqual(output, [OmuxAIStatusPlugin.usage])
     }
 
     func testCLIBuiltInCommandTakesPrecedenceOverPlugin() throws {

@@ -61,8 +61,16 @@ targets.append(
             path: "Sources/Plugins/MarkdownPreview"
         ),
         .target(
+            name: "OmuxAIStatusPlugin",
+            dependencies: [
+                "OmuxControlPlane",
+                "OmuxCore",
+            ],
+            path: "Sources/Plugins/AIStatus"
+        ),
+        .target(
             name: "OmuxCLI",
-            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxTheme", "OmuxHooks", "OmuxMarkdownPreviewPlugin"],
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxTheme", "OmuxHooks", "OmuxMarkdownPreviewPlugin", "OmuxAIStatusPlugin"],
             path: "Sources/OmuxCLI"
         ),
         .target(
@@ -115,7 +123,7 @@ targets.append(
         ),
         .testTarget(
             name: "OmuxCLITests",
-            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxMarkdownPreviewPlugin"]
+            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxMarkdownPreviewPlugin", "OmuxAIStatusPlugin"]
         ),
         .testTarget(
             name: "OmuxHooksTests",
