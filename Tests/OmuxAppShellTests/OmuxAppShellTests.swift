@@ -3961,7 +3961,7 @@ final class OmuxAppShellTests: XCTestCase {
             bridge: bridge,
             hookRunner: ExternalHookRunner(),
             terminalStateChangeCoalescingDelay: 0.01,
-            terminalDisplayTitleUpdateMinimumInterval: 0.08
+            terminalDisplayTitleUpdateMinimumInterval: 0.5
         )
 
         let workspace = try controller.openWorkspace(at: "/tmp")
@@ -3982,18 +3982,18 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         runtime.emit(.titleChanged("Codex reading"), on: runtimeSurfaceID)
-        wait(for: [firstChangeDelivered], timeout: 1)
+        wait(for: [firstChangeDelivered], timeout: 2)
 
         runtime.emit(.titleChanged("Codex thinking"), on: runtimeSurfaceID)
         runtime.emit(.titleChanged("Codex writing"), on: runtimeSurfaceID)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "Codex writing")
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
 
-        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertEqual(changeCount, 1)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
 
-        wait(for: [trailingChangeDelivered], timeout: 1)
+        wait(for: [trailingChangeDelivered], timeout: 3)
         XCTAssertEqual(changeCount, 2)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
         XCTAssertEqual(deliveredTitles, ["Codex reading", "Codex writing"])
