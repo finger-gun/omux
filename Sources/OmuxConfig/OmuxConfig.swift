@@ -331,6 +331,48 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigVault: Equatable, Sendable {
+    public struct Agent: Equatable, Sendable {
+        public let enabled: Bool?
+        public let home: String?
+        public let resumeCommand: String?
+
+        public init(enabled: Bool? = nil, home: String? = nil, resumeCommand: String? = nil) {
+            self.enabled = enabled
+            self.home = home
+            self.resumeCommand = resumeCommand
+        }
+    }
+
+    public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+
+    public let enabled: Bool
+    public let previewEnabled: Bool
+    public let indexOnLaunch: Bool
+    public let includedAgents: [String]
+    public let excludedPaths: [String]
+    public let maxPreviewBytes: Int
+    public let agents: [String: Agent]
+
+    public init(
+        enabled: Bool = true,
+        previewEnabled: Bool = true,
+        indexOnLaunch: Bool = true,
+        includedAgents: [String] = Self.defaultIncludedAgents,
+        excludedPaths: [String] = [],
+        maxPreviewBytes: Int = 1_048_576,
+        agents: [String: Agent] = [:]
+    ) {
+        self.enabled = enabled
+        self.previewEnabled = previewEnabled
+        self.indexOnLaunch = indexOnLaunch
+        self.includedAgents = includedAgents
+        self.excludedPaths = excludedPaths
+        self.maxPreviewBytes = maxPreviewBytes
+        self.agents = agents
+    }
+}
+
 public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
     public let autoCheckUpdate: Bool
@@ -338,6 +380,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
+    public let vault: OmuxConfigVault
     public let plugins: OmuxConfigPlugins
     public let registries: OmuxConfigRegistries
     public let keyBindings: [OpenMUXKeyBindingOverride]
@@ -351,6 +394,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
+        vault: OmuxConfigVault = OmuxConfigVault(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
@@ -363,6 +407,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
+        self.vault = vault
         self.plugins = plugins
         self.registries = registries
         self.keyBindings = keyBindings
@@ -377,6 +422,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
+        vault: OmuxConfigVault(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
         keyBindings: [],
@@ -463,6 +509,10 @@ public enum OmuxConfigPaths {
     public static var generatedGhosttyDirectoryURL: URL {
         generatedDirectoryURL.appendingPathComponent("ghostty", isDirectory: true)
     }
+
+    public static var vaultDatabaseURL: URL {
+        baseDirectoryURL.appendingPathComponent("vault.sqlite", isDirectory: false)
+    }
 }
 
 public enum OmuxConfigTemplate {
@@ -495,6 +545,14 @@ public enum OmuxConfigTemplate {
         # provider = "nerd-font"
         # colors_enabled = true
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
+
+        [vault]
+        enabled = true
+        preview_enabled = true
+        index_on_launch = true
+        included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+        excluded_paths = []
+        max_preview_bytes = 1048576
 
         [plugins.markdown-preview]
         enabled = true
@@ -863,8 +921,9 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "plugins.markdown-preview", "registries", "keys", "ghostty"]
-        for tableName in document.tableNames where allowedTables.contains(tableName) == false {
+        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "vault", "plugins.markdown-preview", "registries", "keys", "ghostty"]
+        for tableName in document.tableNames
+        where allowedTables.contains(tableName) == false && tableName.hasPrefix("vault.agents.") == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
                     severity: .error,
@@ -946,6 +1005,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                vault: config.vault,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -960,6 +1020,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                vault: config.vault,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1468,6 +1529,133 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let supportedVaultAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+        let vaultAllowedKeys: Set<String> = [
+            "enabled",
+            "preview_enabled",
+            "index_on_launch",
+            "included_agents",
+            "excluded_paths",
+            "max_preview_bytes",
+        ]
+        var vaultEnabled = config.vault.enabled
+        var vaultPreviewEnabled = config.vault.previewEnabled
+        var vaultIndexOnLaunch = config.vault.indexOnLaunch
+        var vaultIncludedAgents = config.vault.includedAgents
+        var vaultExcludedPaths = config.vault.excludedPaths
+        var vaultMaxPreviewBytes = config.vault.maxPreviewBytes
+        for entry in document.entries(in: "vault") {
+            guard vaultAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [vault] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultEnabled = value
+            case "preview_enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.preview_enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultPreviewEnabled = value
+            case "index_on_launch":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.index_on_launch must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultIndexOnLaunch = value
+            case "included_agents":
+                guard let values = stringArray(from: entry.value),
+                      values.allSatisfy(supportedVaultAgents.contains)
+                else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.included_agents must contain supported agent names.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultIncludedAgents = values
+            case "excluded_paths":
+                guard let values = stringArray(from: entry.value) else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.excluded_paths must be an array of strings.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultExcludedPaths = values
+            case "max_preview_bytes":
+                guard let value = entry.value.intValue, value >= 1024 else {
+                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.max_preview_bytes must be an integer greater than or equal to 1024.", filePath: sourceURL.path, line: entry.line))
+                    continue
+                }
+                vaultMaxPreviewBytes = value
+            default:
+                break
+            }
+        }
+
+        var vaultAgents = config.vault.agents
+        for tableName in document.tableNames where tableName.hasPrefix("vault.agents.") {
+            let agentName = String(tableName.dropFirst("vault.agents.".count))
+            guard supportedVaultAgents.contains(agentName) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unsupported vault agent '\(agentName)'.",
+                        filePath: sourceURL.path
+                    )
+                )
+                continue
+            }
+            let allowedAgentKeys: Set<String> = ["enabled", "home", "resume_command"]
+            var enabled: Bool?
+            var home: String?
+            var resumeCommand: String?
+            for entry in document.entries(in: tableName) {
+                guard allowedAgentKeys.contains(entry.key) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                switch entry.key {
+                case "enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    enabled = value
+                case "home":
+                    guard let value = entry.value.stringValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).home must be a string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    home = value
+                case "resume_command":
+                    guard let value = entry.value.stringValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    resumeCommand = value
+                default:
+                    break
+                }
+            }
+            vaultAgents[agentName] = OmuxConfigVault.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
+        }
+
         var keyBindings: [OpenMUXKeyBindingOverride] = []
         var seenKeyChords = Set<OpenMUXKeyChord>()
         for entry in document.entries(in: "keys") {
@@ -1558,6 +1746,15 @@ public struct OmuxConfigLoader {
                     colorsEnabled: iconsColorsEnabled
                 )
             ),
+            vault: OmuxConfigVault(
+                enabled: vaultEnabled,
+                previewEnabled: vaultPreviewEnabled,
+                indexOnLaunch: vaultIndexOnLaunch,
+                includedAgents: vaultIncludedAgents,
+                excludedPaths: vaultExcludedPaths,
+                maxPreviewBytes: vaultMaxPreviewBytes,
+                agents: vaultAgents
+            ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: markdownPreviewEnabled,
@@ -1592,6 +1789,10 @@ public struct OmuxConfigLoader {
     }
 
     private func registryURLStrings(from value: OmuxTOMLValue) -> [String]? {
+        stringArray(from: value)
+    }
+
+    private func stringArray(from value: OmuxTOMLValue) -> [String]? {
         guard case .array(let values) = value else {
             return nil
         }

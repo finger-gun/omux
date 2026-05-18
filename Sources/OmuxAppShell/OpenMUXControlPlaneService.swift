@@ -2,8 +2,33 @@ import Foundation
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxVault
 
 final class OpenMUXControlPlaneService: @unchecked Sendable {
+    private final class VaultAwaitBox<T>: @unchecked Sendable {
+        var result: Result<T, Error>?
+    }
+
+    private final class VaultWaiter: @unchecked Sendable {
+        func wait<T>(
+            store: VaultStore,
+            operation: @escaping @Sendable (VaultStore) async throws -> T
+        ) throws -> T {
+            let semaphore = DispatchSemaphore(value: 0)
+            let box = VaultAwaitBox<T>()
+            Task.detached {
+                do {
+                    box.result = Result<T, Error>.success(try await operation(store))
+                } catch {
+                    box.result = Result<T, Error>.failure(error)
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            return try box.result!.get()
+        }
+    }
+
     private struct EventQueue<Element> {
         private var storage: [Element] = []
         private var headIndex = 0
@@ -109,18 +134,25 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     private let controller: WorkspaceController
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let extensionPaneActionService: ExtensionPaneActionService
+    private let vaultStore: VaultStore
     private let server: LocalControlServer
     private let terminalEventBroadcaster = TerminalEventBroadcaster()
+    private let vaultWaiter = VaultWaiter()
 
     init(
         controller: WorkspaceController,
         configurationCoordinator: OpenMUXConfigurationCoordinator,
         extensionPaneActionService: ExtensionPaneActionService? = nil,
+        vaultStore: VaultStore? = nil,
         socketPath: String = ControlPlaneSocket.defaultPath()
     ) {
         self.controller = controller
         self.configurationCoordinator = configurationCoordinator
         self.extensionPaneActionService = extensionPaneActionService ?? ExtensionPaneActionService(controller: controller)
+        self.vaultStore = vaultStore ?? (try! VaultStore(
+            databaseURL: FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-control-\(UUID().uuidString).sqlite"),
+            configuration: VaultConfiguration(enabled: false)
+        ))
         self.server = LocalControlServer(socketPath: socketPath)
     }
 
@@ -389,6 +421,73 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .vaultList:
+            let searchRequest = VaultSearchRequest(rpcValue: request.params)
+            let result = try awaitVault { store in
+                try await store.list(limit: searchRequest.limit, offset: searchRequest.offset)
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .vaultSearch:
+            let searchRequest = VaultSearchRequest(rpcValue: request.params)
+            let result = try awaitVault { store in
+                try await store.search(searchRequest)
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .vaultPreview:
+            guard let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? request.params?.objectValue?["id"]?.stringValue else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing sessionID"))
+            }
+            guard let preview = try awaitVault({ store in try await store.preview(sessionID: sessionID) }) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "vault session not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: preview.rpcValue)
+        case .vaultResume:
+            guard let params = request.params?.objectValue,
+                  let sessionID = params["sessionID"]?.stringValue ?? params["id"]?.stringValue
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing sessionID"))
+            }
+            let destination = params["destination"]?.stringValue.flatMap(VaultResumeDestination.init(rawValue:)) ?? .focused
+            guard let snapshot = try awaitVault({ store in try await store.resumeSnapshot(sessionID: sessionID) }),
+                  let command = snapshot.resumeCommand,
+                  command.isEmpty == false
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "vault session cannot be resumed"))
+            }
+            guard let result = try resumeVault(command: command, workingDirectory: snapshot.workingDirectory, destination: destination) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "resume target unavailable"))
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .vaultReindex:
+            let agent = request.params?.objectValue?["agent"]?.stringValue.flatMap(VaultAgentKind.init(rawValue:))
+            let warnings = try awaitVault { store in
+                try await store.reindex(agent: agent)
+            }
+            return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true), "warnings": .array(warnings.map(RPCValue.string))]))
+        case .vaultExport:
+            guard case .array(let rawIDs)? = request.params?.objectValue?["ids"] else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing ids"))
+            }
+            let ids = rawIDs.compactMap(\.stringValue)
+            let data = try awaitVault { store in
+                try await store.export(ids: ids)
+            }
+            return JSONRPCResponse(id: request.id, result: .object(["data": .string(data.base64EncodedString())]))
+        case .vaultImport:
+            guard let dataString = request.params?.objectValue?["data"]?.stringValue,
+                  let data = Data(base64Encoded: dataString)
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing base64 data"))
+            }
+            try awaitVault { store in
+                try await store.import(data: data)
+            }
+            return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))
+        case .vaultAgents:
+            return JSONRPCResponse(
+                id: request.id,
+                result: .array(VaultAgentKind.allCases.filter { $0 != .custom }.map { .string($0.rawValue) })
+            )
         case .createExtensionPane:
             guard let params = request.params?.objectValue,
                   let pluginID = params["pluginID"]?.stringValue,
@@ -515,6 +614,42 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 workspace: .object(workspace.rpcObject)
             ).rpcValue
         )
+    }
+
+    private func awaitVault<T>(_ operation: @escaping @Sendable (VaultStore) async throws -> T) throws -> T {
+        try vaultWaiter.wait(store: vaultStore, operation: operation)
+    }
+
+    @MainActor
+    private func resumeVault(
+        command: String,
+        workingDirectory: String?,
+        destination: VaultResumeDestination
+    ) throws -> ControlPlaneActionResult? {
+        switch destination {
+        case .focused:
+            return try controller.runCommand(target: .focused, command: command)
+        case .newPaneTab:
+            guard try controller.createPaneTab() != nil else {
+                return nil
+            }
+            return try controller.runCommand(target: .focused, command: command)
+        case .split:
+            guard try controller.splitFocusedPane(axis: .columns) != nil else {
+                return nil
+            }
+            return try controller.runCommand(target: .focused, command: command)
+        case .workspace:
+            guard let workingDirectory else {
+                return try controller.runCommand(target: .focused, command: command)
+            }
+            let workspace = try controller.openWorkspace(at: workingDirectory)
+            guard let context = controller.resolveTerminalTarget(.focused) else {
+                return ControlPlaneActionResult(workspace: .object(workspace.rpcObject))
+            }
+            let runResult = try controller.runCommand(target: .focused, command: command)
+            return runResult ?? ControlPlaneActionResult(target: context, workspace: .object(workspace.rpcObject))
+        }
     }
 
     private func handleStream(descriptor: Int32, request: JSONRPCRequest) throws -> Bool {

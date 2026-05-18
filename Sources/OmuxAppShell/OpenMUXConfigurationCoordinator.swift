@@ -3,6 +3,7 @@ import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
 import OmuxTheme
+import OmuxVault
 
 @MainActor
 struct OpenMUXPreparedConfiguration: Sendable {
@@ -11,6 +12,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     let panes: OmuxConfigUI.Panes
     let icons: OmuxConfigUI.Icons
     let markdownPreview: OmuxConfigPlugins.MarkdownPreview
+    let vault: VaultConfiguration
     let autoCheckUpdate: Bool
     let defaultWorkspaceRootPath: String
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
@@ -24,6 +26,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         panes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         icons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         markdownPreview: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
+        vault: VaultConfiguration = VaultConfiguration(),
         autoCheckUpdate: Bool = true,
         defaultWorkspaceRootPath: String,
         keyBindingRegistry: OpenMUXKeyBindingRegistry,
@@ -36,6 +39,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         self.panes = panes
         self.icons = icons
         self.markdownPreview = markdownPreview
+        self.vault = vault
         self.autoCheckUpdate = autoCheckUpdate
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.keyBindingRegistry = keyBindingRegistry
@@ -109,6 +113,7 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                vault: VaultConfiguration(config: evaluation.config.vault),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
@@ -127,6 +132,7 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                vault: VaultConfiguration(config: evaluation.config.vault),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
@@ -141,6 +147,7 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                vault: VaultConfiguration(config: evaluation.config.vault),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,

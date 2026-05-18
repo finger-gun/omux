@@ -663,6 +663,41 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(OpenMUXKeyBindingRegistry.effective(overrides: result.config.keyBindings).chord(for: .paneRemove)?.description == "cmd+shift+w")
     }
+
+    @Test
+    func vaultConfigParsesAgentOverride() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [vault]
+            enabled = true
+            preview_enabled = false
+            index_on_launch = false
+            included_agents = ["codex", "copilot"]
+            excluded_paths = ["~/secret"]
+            max_preview_bytes = 2048
+
+            [vault.agents.copilot]
+            enabled = true
+            home = "~/.copilot-test"
+            resume_command = "copilot --resume {session_id}"
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.vault.previewEnabled == false)
+        #expect(result.config.vault.indexOnLaunch == false)
+        #expect(result.config.vault.includedAgents == ["codex", "copilot"])
+        #expect(result.config.vault.excludedPaths == ["~/secret"])
+        #expect(result.config.vault.maxPreviewBytes == 2048)
+        #expect(result.config.vault.agents["copilot"]?.home == "~/.copilot-test")
+    }
 }
 
 private func temporaryMissingConfigURL() -> URL {

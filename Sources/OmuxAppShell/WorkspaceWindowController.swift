@@ -2,11 +2,14 @@ import AppKit
 import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
+import OmuxVault
 import QuartzCore
 import WebKit
 
 private enum ShellLayoutMetrics {
     static let sidebarWidth: CGFloat = 224
+    static let vaultSidebarWidth: CGFloat = 280
+    static let vaultToggleSize: CGFloat = 28
     static let outerPadding: CGFloat = 0
     static let interRegionSpacing: CGFloat = 0
     static let canvasPadding: CGFloat = 0
@@ -64,6 +67,8 @@ final class WorkspaceWindowController: NSWindowController {
         initialTheme: WorkspaceShellTheme = .defaultTheme,
         initialPanes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
+        vaultStore: VaultStore? = nil,
+        vaultConfiguration: VaultConfiguration = VaultConfiguration(enabled: false),
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared,
         onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void = { _ in }
     ) {
@@ -73,6 +78,8 @@ final class WorkspaceWindowController: NSWindowController {
             initialTheme: initialTheme,
             initialPanes: initialPanes,
             initialIcons: initialIcons,
+            vaultStore: vaultStore,
+            vaultConfiguration: vaultConfiguration,
             sidebarVisibilityStore: sidebarVisibilityStore,
             onExtensionPaneAction: onExtensionPaneAction
         )
@@ -150,6 +157,12 @@ final class WorkspaceWindowController: NSWindowController {
 
 @MainActor
 final class WorkspaceShellViewController: NSViewController {
+    fileprivate enum VaultWorkspaceFilter: Equatable {
+        case current
+        case all
+        case workspace(WorkspaceID)
+    }
+
     private enum CachedTerminalText {
         case loaded(String?)
     }
@@ -172,11 +185,15 @@ final class WorkspaceShellViewController: NSViewController {
     private let metadataResolver = TerminalSidebarMetadataResolver()
     private let iconResolver = WorkspaceIconResolver()
     private let sidebarView = WorkspaceSidebarView()
+    private let vaultSidebarView = WorkspaceVaultSidebarView()
+    private let vaultToggleButton = NSButton()
     private let canvasView = WorkspaceCanvasView()
     private let shellOverlayHostView = ShellOverlayHostView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
     private var sidebarWidthConstraint: NSLayoutConstraint?
+    private var vaultSidebarWidthConstraint: NSLayoutConstraint?
     private var mainColumnLeadingConstraint: NSLayoutConstraint?
+    private var mainColumnTrailingConstraint: NSLayoutConstraint?
     private var currentWorkspace: Workspace?
     private var currentTheme: WorkspaceShellTheme
     private var currentPanes: OmuxConfigUI.Panes
@@ -188,6 +205,20 @@ final class WorkspaceShellViewController: NSViewController {
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
     private var commandPaletteView: CommandPaletteView?
     private var paneFindBarView: PaneFindBarView?
+    private let vaultStore: VaultStore?
+    private let vaultConfiguration: VaultConfiguration
+    private var vaultSessions: [VaultSessionSummary] = []
+    private var vaultLoadGeneration = UUID()
+    private var vaultAgentLoadGeneration = UUID()
+    private let vaultPageSize = 100
+    private var vaultSearchQuery = ""
+    private var vaultAgentFilter: VaultAgentKind?
+    private var availableVaultAgents = Set<VaultAgentKind>()
+    private var vaultResultOffset = 0
+    private var vaultHasMore = true
+    private var vaultIsLoading = false
+    private var isVaultSidebarVisible = false
+    private var vaultWorkspaceFilter: VaultWorkspaceFilter = .current
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
@@ -203,6 +234,8 @@ final class WorkspaceShellViewController: NSViewController {
         initialTheme: WorkspaceShellTheme,
         initialPanes: OmuxConfigUI.Panes,
         initialIcons: OmuxConfigUI.Icons,
+        vaultStore: VaultStore?,
+        vaultConfiguration: VaultConfiguration,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring,
         onExtensionPaneAction: @escaping @MainActor (ExtensionPaneActionRequest) -> Void
     ) {
@@ -210,6 +243,8 @@ final class WorkspaceShellViewController: NSViewController {
         self.currentTheme = initialTheme
         self.currentPanes = initialPanes
         self.currentIcons = initialIcons
+        self.vaultStore = vaultStore
+        self.vaultConfiguration = vaultConfiguration
         self.sidebarVisibilityStore = sidebarVisibilityStore
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
         self.onExtensionPaneAction = onExtensionPaneAction
@@ -242,17 +277,32 @@ final class WorkspaceShellViewController: NSViewController {
 
         mainColumn.addArrangedSubview(canvasView)
 
+        vaultToggleButton.isBordered = false
+        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Toggle Vault")
+        vaultToggleButton.target = self
+        vaultToggleButton.action = #selector(toggleVaultSidebarPressed)
+        vaultToggleButton.translatesAutoresizingMaskIntoConstraints = false
+
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
+        view.addSubview(vaultSidebarView)
+        view.addSubview(vaultToggleButton)
         view.addSubview(shellOverlayHostView)
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
+        let vaultSidebarWidthConstraint = vaultSidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultSidebarWidth)
         let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
             equalTo: sidebarView.trailingAnchor,
             constant: ShellLayoutMetrics.interRegionSpacing
         )
+        let mainColumnTrailingConstraint = mainColumn.trailingAnchor.constraint(
+            equalTo: vaultSidebarView.leadingAnchor,
+            constant: -ShellLayoutMetrics.interRegionSpacing
+        )
         self.sidebarWidthConstraint = sidebarWidthConstraint
+        self.vaultSidebarWidthConstraint = vaultSidebarWidthConstraint
         self.mainColumnLeadingConstraint = mainColumnLeadingConstraint
+        self.mainColumnTrailingConstraint = mainColumnTrailingConstraint
 
         NSLayoutConstraint.activate([
             sidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -262,9 +312,19 @@ final class WorkspaceShellViewController: NSViewController {
 
             mainColumn.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: ShellLayoutMetrics.outerPadding),
             mainColumnLeadingConstraint,
-            mainColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -ShellLayoutMetrics.outerPadding),
+            mainColumnTrailingConstraint,
             mainColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -ShellLayoutMetrics.outerPadding),
             canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
+
+            vaultSidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            vaultSidebarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            vaultSidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            vaultSidebarWidthConstraint,
+
+            vaultToggleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            vaultToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
+            vaultToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
 
             shellOverlayHostView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
             shellOverlayHostView.leadingAnchor.constraint(equalTo: mainColumn.leadingAnchor),
@@ -273,6 +333,7 @@ final class WorkspaceShellViewController: NSViewController {
         ])
 
         applySidebarVisibility()
+        applyVaultSidebarVisibility()
         startTerminalIconRefreshTimer()
     }
 
@@ -350,6 +411,8 @@ final class WorkspaceShellViewController: NSViewController {
             activeWorkspace: workspace,
             terminalTextProvider: terminalTextProvider
         )
+        let scopedVaultSessions = vaultSessions(for: vaultWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
+        let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
             theme: currentTheme,
@@ -377,6 +440,43 @@ final class WorkspaceShellViewController: NSViewController {
                 _ = self?.controller.focus(paneID: paneID)
             }
         )
+        vaultSidebarView.render(
+            sessions: scopedVaultSessions,
+            searchQuery: vaultSearchQuery,
+            selectedAgent: vaultAgentFilter,
+            availableAgents: availableVaultAgents,
+            workspaceFilter: vaultWorkspaceFilter,
+            workspaceFilterItems: workspaceFilterItems,
+            isLoading: vaultIsLoading,
+            hasMore: vaultHasMore,
+            theme: currentTheme,
+            onToggle: { [weak self] in
+                self?.toggleVaultSidebar()
+            },
+            onRefresh: { [weak self] in
+                self?.reloadVaultSessions(reset: true)
+            },
+            onSearchChanged: { [weak self] query in
+                self?.updateVaultSearchQuery(query)
+            },
+            onAgentFilterChanged: { [weak self] agent in
+                self?.updateVaultAgentFilter(agent)
+            },
+            onWorkspaceFilterChanged: { [weak self] filter in
+                self?.updateVaultWorkspaceFilter(filter)
+            },
+            onNeedsMore: { [weak self] in
+                self?.loadMoreVaultSessions()
+            },
+            onResume: { [weak self] sessionID in
+                self?.resumeVaultSession(sessionID)
+            }
+        )
+        if vaultConfiguration.enabled && isVaultSidebarVisible && vaultSessions.isEmpty && vaultIsLoading == false {
+            reloadVaultSessions(reset: true)
+        } else if vaultConfiguration.enabled && isVaultSidebarVisible && scopedVaultSessions.isEmpty && vaultHasMore && vaultIsLoading == false {
+            loadMoreVaultSessions()
+        }
 
         let plan = WorkspaceRenderReconciliationPlanner.classify(
             previousWorkspaceID: previousWorkspace?.id,
@@ -514,6 +614,8 @@ final class WorkspaceShellViewController: NSViewController {
         view.layer?.backgroundColor = theme.shell.windowBackground.cgColor
         view.window?.backgroundColor = theme.shell.windowBackground
         sidebarView.apply(theme: theme)
+        vaultSidebarView.apply(theme: theme)
+        vaultToggleButton.contentTintColor = theme.shell.textMuted
         canvasView.apply(theme: theme)
         commandPaletteView?.apply(theme: theme)
         shellOverlayHostView.apply(theme: theme)
@@ -568,11 +670,322 @@ final class WorkspaceShellViewController: NSViewController {
         applySidebarVisibility()
     }
 
+    private func reloadVaultSessions(reset: Bool) {
+        guard let vaultStore else {
+            return
+        }
+        if vaultIsLoading {
+            return
+        }
+        if reset {
+            vaultSessions = []
+            vaultResultOffset = 0
+            vaultHasMore = true
+            vaultIsLoading = true
+            reloadAvailableVaultAgents()
+            if let workspace = currentWorkspace {
+                update(workspace: workspace)
+            }
+        } else if vaultHasMore == false {
+            return
+        }
+
+        let generation = UUID()
+        vaultLoadGeneration = generation
+        vaultIsLoading = true
+        let offset = vaultResultOffset
+        let request = VaultSearchRequest(
+            query: vaultSearchQuery,
+            agents: vaultAgentFilter.map { [$0] },
+            offset: offset,
+            limit: vaultPageSize
+        )
+        Task.detached { [weak self] in
+            do {
+                let response = try await vaultStore.search(request)
+                await MainActor.run {
+                    guard let self, self.vaultLoadGeneration == generation else { return }
+                    if offset == 0 {
+                        self.vaultSessions = response.sessions
+                    } else {
+                        let knownIDs = Set(self.vaultSessions.map(\.id))
+                        self.vaultSessions += response.sessions.filter { knownIDs.contains($0.id) == false }
+                    }
+                    self.vaultResultOffset = offset + response.sessions.count
+                    self.vaultHasMore = self.vaultResultOffset < response.totalCount && response.sessions.isEmpty == false
+                    self.vaultIsLoading = false
+                    if let workspace = self.currentWorkspace {
+                        self.update(workspace: workspace)
+                    }
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.vaultIsLoading = false
+                    if let workspace = self?.currentWorkspace {
+                        self?.update(workspace: workspace)
+                    }
+                }
+                fputs("vault list failed: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private func loadMoreVaultSessions() {
+        reloadVaultSessions(reset: false)
+    }
+
+    private func reloadAvailableVaultAgents() {
+        guard let vaultStore else {
+            return
+        }
+        let generation = UUID()
+        vaultAgentLoadGeneration = generation
+        Task.detached { [weak self] in
+            var agents = Set<VaultAgentKind>()
+            for agent in VaultAgentKind.allCases {
+                do {
+                    let response = try await vaultStore.search(VaultSearchRequest(agents: [agent], limit: 1))
+                    if response.totalCount > 0 {
+                        agents.insert(agent)
+                    }
+                } catch {
+                    fputs("vault agent availability failed for \(agent.rawValue): \(error)\n", stderr)
+                }
+            }
+            await MainActor.run {
+                guard let self, self.vaultAgentLoadGeneration == generation else { return }
+                self.availableVaultAgents = agents
+                if let workspace = self.currentWorkspace {
+                    self.update(workspace: workspace)
+                }
+            }
+        }
+    }
+
+    private func updateVaultSearchQuery(_ query: String) {
+        guard vaultSearchQuery != query else {
+            return
+        }
+        vaultSearchQuery = query
+        reloadVaultSessions(reset: true)
+    }
+
+    private func updateVaultAgentFilter(_ agent: VaultAgentKind?) {
+        guard vaultAgentFilter != agent else {
+            return
+        }
+        vaultAgentFilter = agent
+        reloadVaultSessions(reset: true)
+    }
+
+    private func updateVaultWorkspaceFilter(_ filter: VaultWorkspaceFilter) {
+        guard vaultWorkspaceFilter != filter else {
+            return
+        }
+        vaultWorkspaceFilter = filter
+        if let workspace = currentWorkspace {
+            update(workspace: workspace)
+        }
+    }
+
+    private func resumeVaultSession(_ sessionID: String) {
+        guard let vaultStore else {
+            return
+        }
+        Task.detached { [weak self] in
+            do {
+                guard let snapshot = try await vaultStore.resumeSnapshot(sessionID: sessionID),
+                      let command = snapshot.resumeCommand
+                else {
+                    return
+                }
+                await MainActor.run {
+                    guard let self else { return }
+                    let connectedPaths = self.currentWorkspace.map { self.vaultConnectedPaths(for: $0) } ?? []
+                    let pathMatches = Self.vaultPathMatches(snapshot.workingDirectory, connectedPaths: connectedPaths)
+                    if pathMatches {
+                        _ = try? self.controller.runCommand(target: .focused, command: command)
+                        return
+                    }
+
+                    switch self.confirmMismatchedVaultResume(workingDirectory: snapshot.workingDirectory) {
+                    case .resumeHere:
+                        _ = try? self.controller.runCommand(target: .focused, command: command)
+                    case .openWorkspace:
+                        if let workingDirectory = snapshot.workingDirectory {
+                            _ = try? self.controller.openWorkspace(at: workingDirectory)
+                            _ = try? self.controller.runCommand(target: .focused, command: command)
+                        }
+                    case .cancel:
+                        return
+                    }
+                }
+            } catch {
+                fputs("vault resume failed: \(error)\n", stderr)
+            }
+        }
+    }
+
+    private enum MismatchedVaultResumeChoice {
+        case resumeHere
+        case openWorkspace
+        case cancel
+    }
+
+    private func confirmMismatchedVaultResume(workingDirectory: String?) -> MismatchedVaultResumeChoice {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Session path differs"
+        if let workingDirectory {
+            alert.informativeText = "This session was captured in \(workingDirectory), which is not connected to the current workspace."
+            alert.addButton(withTitle: "Resume Here")
+            alert.addButton(withTitle: "Open Workspace")
+            alert.addButton(withTitle: "Cancel")
+        } else {
+            alert.informativeText = "This session does not include a working directory that matches the current workspace."
+            alert.addButton(withTitle: "Resume Here")
+            alert.addButton(withTitle: "Cancel")
+        }
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .resumeHere
+        case .alertSecondButtonReturn where workingDirectory != nil:
+            return .openWorkspace
+        default:
+            return .cancel
+        }
+    }
+
     private func applySidebarVisibility() {
         sidebarView.isHidden = !isSidebarVisible
         sidebarWidthConstraint?.constant = isSidebarVisible ? ShellLayoutMetrics.sidebarWidth : 0
         mainColumnLeadingConstraint?.constant = isSidebarVisible ? ShellLayoutMetrics.interRegionSpacing : 0
         view.layoutSubtreeIfNeeded()
+    }
+
+    @objc private func toggleVaultSidebarPressed() {
+        toggleVaultSidebar()
+    }
+
+    private func toggleVaultSidebar() {
+        isVaultSidebarVisible.toggle()
+        applyVaultSidebarVisibility()
+        if isVaultSidebarVisible, vaultSessions.isEmpty, vaultIsLoading == false {
+            reloadVaultSessions(reset: true)
+        }
+    }
+
+    private func applyVaultSidebarVisibility() {
+        let isVisible = vaultConfiguration.enabled && isVaultSidebarVisible
+        vaultSidebarView.isHidden = !isVisible
+        vaultToggleButton.isHidden = !vaultConfiguration.enabled || isVisible
+        vaultToggleButton.contentTintColor = currentTheme.shell.textMuted
+        vaultSidebarWidthConstraint?.constant = isVisible ? ShellLayoutMetrics.vaultSidebarWidth : 0
+        mainColumnTrailingConstraint?.constant = isVisible ? -ShellLayoutMetrics.interRegionSpacing : 0
+        view.layoutSubtreeIfNeeded()
+    }
+
+    private func vaultSessions(
+        for filter: VaultWorkspaceFilter,
+        activeWorkspace: Workspace,
+        allWorkspaces: [Workspace]
+    ) -> [VaultSessionSummary] {
+        switch filter {
+        case .all:
+            return vaultSessions
+        case .current:
+            let connectedPaths = vaultConnectedPaths(for: activeWorkspace)
+            return vaultSessions.filter {
+                Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
+            }
+        case .workspace(let workspaceID):
+            guard let workspace = allWorkspaces.first(where: { $0.id == workspaceID }) else {
+                return []
+            }
+            let connectedPaths = vaultConnectedPaths(for: workspace)
+            return vaultSessions.filter {
+                Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
+            }
+        }
+    }
+
+    private func vaultWorkspaceFilterItems(
+        activeWorkspace: Workspace,
+        allWorkspaces: [Workspace]
+    ) -> [WorkspaceVaultSidebarView.WorkspaceFilterItem] {
+        var items: [WorkspaceVaultSidebarView.WorkspaceFilterItem] = [
+            .init(title: "Current workspace", filter: .current),
+            .init(title: "All workspaces", filter: .all),
+        ]
+        items += allWorkspaces.map { workspace in
+            let title = workspace.id == activeWorkspace.id ? "\(workspace.name) (active)" : workspace.name
+            return WorkspaceVaultSidebarView.WorkspaceFilterItem(title: title, filter: .workspace(workspace.id))
+        }
+        return items
+    }
+
+    private func vaultConnectedPaths(for workspace: Workspace) -> [String] {
+        let panes = workspace.tabs.flatMap(\.panes) + workspace.floatingPaneModals.flatMap(\.panes)
+        let panePaths = panes.compactMap { pane in
+            (pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory)
+                .flatMap(Self.standardizedVaultPath)
+        }
+
+        let scopePaths = Self.workspaceScopePaths(from: panePaths)
+        if scopePaths.isEmpty == false {
+            return scopePaths
+        }
+
+        return [workspace.rootPath].compactMap(Self.standardizedVaultPath)
+    }
+
+    private static func workspaceScopePaths(from panePaths: [String]) -> [String] {
+        let roots = panePaths.map(projectLikeRoot)
+        let counts = roots.reduce(into: [String: Int]()) { result, root in
+            result[root, default: 0] += 1
+        }
+        guard let maxCount = counts.values.max(), maxCount > 1 else {
+            return Array(Set(roots)).sorted { $0.count < $1.count }
+        }
+        return counts
+            .filter { $0.value == maxCount }
+            .map(\.key)
+            .sorted { $0.count < $1.count }
+    }
+
+    private static func projectLikeRoot(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let components = url.standardizedFileURL.pathComponents
+        let markers: Set<String> = ["projects", "project", "src", "source", "workspace", "workspaces", "developer"]
+        guard let markerIndex = components.firstIndex(where: { markers.contains($0.lowercased()) }),
+              markerIndex + 1 < components.count
+        else {
+            return path
+        }
+
+        let rootComponents = Array(components.prefix(markerIndex + 2))
+        return NSString.path(withComponents: rootComponents)
+    }
+
+    private static func vaultPathMatches(_ candidate: String?, connectedPaths: [String]) -> Bool {
+        guard let candidate = candidate.flatMap(standardizedVaultPath) else {
+            return false
+        }
+        return connectedPaths.contains { connectedPath in
+            candidate == connectedPath
+                || candidate.hasPrefix(connectedPath + "/")
+        }
+    }
+
+    private static func standardizedVaultPath(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+        return URL(fileURLWithPath: NSString(string: trimmed).expandingTildeInPath)
+            .standardizedFileURL
+            .path
     }
 
     private func makeWorkspaceSidebarItems(
@@ -2084,6 +2497,7 @@ final class WorkspaceSidebarView: NSView {
     private let scrollView = NSScrollView()
     private let updateNoticeView = SidebarUpdateNoticeView()
     private let container = NSStackView()
+    private let scrollContent = NSStackView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -2095,6 +2509,11 @@ final class WorkspaceSidebarView: NSView {
         container.distribution = .fill
         container.spacing = 0
         container.translatesAutoresizingMaskIntoConstraints = false
+        scrollContent.orientation = .vertical
+        scrollContent.alignment = .leading
+        scrollContent.distribution = .fill
+        scrollContent.spacing = 10
+        scrollContent.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.drawsBackground = false
@@ -2103,11 +2522,12 @@ final class WorkspaceSidebarView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
-        scrollView.documentView = workspacesSection
+        scrollView.documentView = scrollContent
         scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
         scrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
         addSubview(container)
+        scrollContent.addArrangedSubview(workspacesSection)
         container.addArrangedSubview(scrollView)
         container.addArrangedSubview(updateNoticeView)
         updateNoticeView.isHidden = true
@@ -2119,11 +2539,12 @@ final class WorkspaceSidebarView: NSView {
             container.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             scrollView.widthAnchor.constraint(equalTo: container.widthAnchor),
             updateNoticeView.widthAnchor.constraint(equalTo: container.widthAnchor),
-            workspacesSection.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            workspacesSection.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            workspacesSection.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-            workspacesSection.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            workspacesSection.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
+            scrollContent.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            scrollContent.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            scrollContent.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            scrollContent.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            scrollContent.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
+            workspacesSection.widthAnchor.constraint(equalTo: scrollContent.widthAnchor),
         ])
     }
 
@@ -2523,6 +2944,380 @@ private final class WorkspaceSidebarSectionView: NSView {
             }
             itemStack.layoutSubtreeIfNeeded()
         }
+    }
+}
+
+@MainActor
+private final class VaultWorkspaceFilterBox {
+    let filter: WorkspaceShellViewController.VaultWorkspaceFilter
+
+    init(_ filter: WorkspaceShellViewController.VaultWorkspaceFilter) {
+        self.filter = filter
+    }
+}
+
+@MainActor
+private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
+    struct WorkspaceFilterItem {
+        let title: String
+        let filter: WorkspaceShellViewController.VaultWorkspaceFilter
+    }
+
+    private let titleLabel = NSTextField(labelWithString: "VAULT")
+    private let refreshButton = NSButton()
+    private let collapseButton = NSButton()
+    private let searchField = NSSearchField()
+    private let agentPopup = NSPopUpButton()
+    private let workspacePopup = NSPopUpButton()
+    private let scrollView = NSScrollView()
+    private let stack = NSStackView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private var onToggle: (() -> Void)?
+    private var onRefresh: (() -> Void)?
+    private var onSearchChanged: ((String) -> Void)?
+    private var onAgentFilterChanged: ((VaultAgentKind?) -> Void)?
+    private var onWorkspaceFilterChanged: ((WorkspaceShellViewController.VaultWorkspaceFilter) -> Void)?
+    private var onNeedsMore: (() -> Void)?
+    private var onResume: ((String) -> Void)?
+    private var currentTheme = WorkspaceShellTheme.defaultTheme
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.distribution = .fill
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        titleLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        refreshButton.isBordered = false
+        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Vault")
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshPressed)
+        refreshButton.translatesAutoresizingMaskIntoConstraints = false
+
+        collapseButton.isBordered = false
+        collapseButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Hide Vault")
+        collapseButton.target = self
+        collapseButton.action = #selector(collapsePressed)
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+
+        searchField.placeholderString = "Search"
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        agentPopup.isBordered = false
+        agentPopup.target = self
+        agentPopup.action = #selector(agentFilterChanged)
+        agentPopup.translatesAutoresizingMaskIntoConstraints = false
+        rebuildAgentMenu(availableAgents: [], selectedAgent: nil)
+
+        workspacePopup.isBordered = false
+        workspacePopup.target = self
+        workspacePopup.action = #selector(workspaceFilterChanged)
+        workspacePopup.translatesAutoresizingMaskIntoConstraints = false
+        rebuildWorkspaceMenu(items: [], selectedFilter: .current)
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.distribution = .fill
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.documentView = stack
+        scrollView.contentView.postsBoundsChangedNotifications = true
+
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.maximumNumberOfLines = 1
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        header.addArrangedSubview(titleLabel)
+        header.addArrangedSubview(NSView())
+        header.addArrangedSubview(refreshButton)
+        header.addArrangedSubview(collapseButton)
+        addSubview(header)
+        addSubview(searchField)
+        addSubview(workspacePopup)
+        addSubview(agentPopup)
+        addSubview(scrollView)
+        addSubview(statusLabel)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollBoundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            refreshButton.widthAnchor.constraint(equalToConstant: 22),
+            refreshButton.heightAnchor.constraint(equalToConstant: 22),
+            collapseButton.widthAnchor.constraint(equalToConstant: 22),
+            collapseButton.heightAnchor.constraint(equalToConstant: 22),
+            searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            searchField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            searchField.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            workspacePopup.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
+            workspacePopup.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            workspacePopup.trailingAnchor.constraint(lessThanOrEqualTo: header.trailingAnchor),
+            agentPopup.topAnchor.constraint(equalTo: workspacePopup.bottomAnchor, constant: 4),
+            agentPopup.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            agentPopup.trailingAnchor.constraint(lessThanOrEqualTo: header.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: agentPopup.bottomAnchor, constant: 8),
+            scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -6),
+            statusLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            statusLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            stack.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override var isFlipped: Bool { true }
+
+    func apply(theme: WorkspaceShellTheme) {
+        currentTheme = theme
+        layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
+        titleLabel.textColor = theme.shell.textMuted
+        refreshButton.contentTintColor = theme.shell.textMuted
+        collapseButton.contentTintColor = theme.shell.textMuted
+        workspacePopup.contentTintColor = theme.shell.textMuted
+        agentPopup.contentTintColor = theme.shell.textMuted
+        statusLabel.textColor = theme.shell.textMuted
+        for case let row as VaultSessionRowButton in stack.arrangedSubviews {
+            row.apply(theme: theme)
+        }
+    }
+
+    func render(
+        sessions: [VaultSessionSummary],
+        searchQuery: String,
+        selectedAgent: VaultAgentKind?,
+        availableAgents: Set<VaultAgentKind>,
+        workspaceFilter: WorkspaceShellViewController.VaultWorkspaceFilter,
+        workspaceFilterItems: [WorkspaceFilterItem],
+        isLoading: Bool,
+        hasMore: Bool,
+        theme: WorkspaceShellTheme,
+        onToggle: @escaping () -> Void,
+        onRefresh: @escaping () -> Void,
+        onSearchChanged: @escaping (String) -> Void,
+        onAgentFilterChanged: @escaping (VaultAgentKind?) -> Void,
+        onWorkspaceFilterChanged: @escaping (WorkspaceShellViewController.VaultWorkspaceFilter) -> Void,
+        onNeedsMore: @escaping () -> Void,
+        onResume: @escaping (String) -> Void
+    ) {
+        self.onToggle = onToggle
+        self.onRefresh = onRefresh
+        self.onSearchChanged = onSearchChanged
+        self.onAgentFilterChanged = onAgentFilterChanged
+        self.onWorkspaceFilterChanged = onWorkspaceFilterChanged
+        self.onNeedsMore = onNeedsMore
+        self.onResume = onResume
+        if searchField.stringValue != searchQuery {
+            searchField.stringValue = searchQuery
+        }
+        rebuildWorkspaceMenu(items: workspaceFilterItems, selectedFilter: workspaceFilter)
+        rebuildAgentMenu(availableAgents: availableAgents, selectedAgent: selectedAgent)
+        stack.arrangedSubviews.forEach { view in
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        if sessions.isEmpty {
+            let empty = NSTextField(labelWithString: isLoading ? "Loading sessions..." : "No sessions for this workspace")
+            empty.font = .systemFont(ofSize: 11)
+            empty.textColor = theme.shell.textMuted
+            empty.maximumNumberOfLines = 2
+            stack.addArrangedSubview(empty)
+        } else {
+            for session in Self.visibleSessions(sessions) {
+                let row = VaultSessionRowButton(session: session)
+                row.apply(theme: theme)
+                row.onPress = { [weak self] id in self?.onResume?(id) }
+                stack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            }
+        }
+        if isLoading {
+            statusLabel.stringValue = "Loading..."
+        } else if hasMore {
+            statusLabel.stringValue = "Scroll for more"
+        } else {
+            statusLabel.stringValue = sessions.isEmpty ? "" : "\(sessions.count) sessions"
+        }
+        apply(theme: theme)
+    }
+
+    private static func visibleSessions(_ sessions: [VaultSessionSummary]) -> [VaultSessionSummary] {
+        sessions
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+            .map { $0 }
+    }
+
+    private func rebuildAgentMenu(availableAgents: Set<VaultAgentKind>, selectedAgent: VaultAgentKind?) {
+        let previousAction = agentPopup.action
+        agentPopup.action = nil
+        agentPopup.removeAllItems()
+        agentPopup.addItem(withTitle: "All agents")
+        agentPopup.lastItem?.representedObject = Optional<VaultAgentKind>.none as Any
+        var agents = VaultAgentKind.allCases.filter { availableAgents.contains($0) }
+        if let selectedAgent, agents.contains(selectedAgent) == false {
+            agents.append(selectedAgent)
+        }
+        for agent in agents {
+            agentPopup.addItem(withTitle: agent.rawValue)
+            agentPopup.lastItem?.representedObject = agent
+        }
+        if let selectedAgent,
+           let item = agentPopup.itemArray.first(where: { ($0.representedObject as? VaultAgentKind) == selectedAgent }) {
+            agentPopup.select(item)
+        } else {
+            agentPopup.selectItem(at: 0)
+        }
+        agentPopup.action = previousAction
+    }
+
+    private func rebuildWorkspaceMenu(
+        items: [WorkspaceFilterItem],
+        selectedFilter: WorkspaceShellViewController.VaultWorkspaceFilter
+    ) {
+        let previousAction = workspacePopup.action
+        workspacePopup.action = nil
+        workspacePopup.removeAllItems()
+        for item in items {
+            workspacePopup.addItem(withTitle: item.title)
+            workspacePopup.lastItem?.representedObject = VaultWorkspaceFilterBox(item.filter)
+        }
+        if let item = workspacePopup.itemArray.first(where: {
+            ($0.representedObject as? VaultWorkspaceFilterBox)?.filter == selectedFilter
+        }) {
+            workspacePopup.select(item)
+        } else {
+            workspacePopup.selectItem(at: 0)
+        }
+        workspacePopup.action = previousAction
+    }
+
+    @objc private func refreshPressed() {
+        onRefresh?()
+    }
+
+    @objc private func collapsePressed() {
+        onToggle?()
+    }
+
+    @objc private func agentFilterChanged() {
+        onAgentFilterChanged?(agentPopup.selectedItem?.representedObject as? VaultAgentKind)
+    }
+
+    @objc private func workspaceFilterChanged() {
+        guard let filter = (workspacePopup.selectedItem?.representedObject as? VaultWorkspaceFilterBox)?.filter else {
+            return
+        }
+        onWorkspaceFilterChanged?(filter)
+    }
+
+    @objc private func scrollBoundsChanged(_ notification: Notification) {
+        _ = notification
+        let visibleMaxY = scrollView.contentView.bounds.maxY
+        let contentHeight = stack.frame.height
+        if contentHeight - visibleMaxY < 180 {
+            onNeedsMore?()
+        }
+    }
+}
+
+extension WorkspaceVaultSidebarView {
+    func controlTextDidChange(_ obj: Notification) {
+        _ = obj
+        onSearchChanged?(searchField.stringValue)
+    }
+}
+
+@MainActor
+private final class VaultSessionRowButton: NSView {
+    private let session: VaultSessionSummary
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    var onPress: ((String) -> Void)?
+
+    init(session: VaultSessionSummary) {
+        self.session = session
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
+
+        titleLabel.stringValue = session.title
+        titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let folderName = session.workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+        subtitleLabel.stringValue = "\(session.agent.rawValue) · \(folderName)"
+        subtitleLabel.font = .systemFont(ofSize: 10)
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.maximumNumberOfLines = 1
+        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(titleLabel)
+        addSubview(subtitleLabel)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 44),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+        titleLabel.textColor = theme.shell.textPrimary
+        subtitleLabel.textColor = theme.shell.textMuted
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        _ = event
+        onPress?(session.id)
     }
 }
 

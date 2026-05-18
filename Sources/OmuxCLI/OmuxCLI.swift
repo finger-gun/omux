@@ -3,6 +3,7 @@ import Darwin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxVault
 import OmuxMarkdownPreviewPlugin
 import OmuxTheme
 
@@ -111,6 +112,8 @@ public struct OmuxCLICommand {
                 return runHookRegistryCommand(arguments: Array(commandArguments.dropFirst()))
             case "plugin", "plugins":
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
+            case "vault":
+                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()))
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -375,6 +378,111 @@ public struct OmuxCLICommand {
             return 0
         default:
             writeLine("usage: omux plugins OR omux plugin list|path")
+            return 1
+        }
+    }
+
+    private func runVaultCommand(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux vault list|search|preview|resume|reindex|export|import|agents")
+            return 1
+        }
+        let rest = Array(arguments.dropFirst())
+        switch subcommand {
+        case "list":
+            let response = try client.request(method: .vaultList, params: nil)
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        case "search":
+            guard rest.isEmpty == false else {
+                writeLine("usage: omux vault search <query>")
+                return 1
+            }
+            let response = try client.request(
+                method: .vaultSearch,
+                params: .object(["query": .string(rest.joined(separator: " "))])
+            )
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        case "preview":
+            guard let id = rest.first else {
+                writeLine("usage: omux vault preview <session-id>")
+                return 1
+            }
+            let response = try client.request(method: .vaultPreview, params: .object(["sessionID": .string(id)]))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "resume":
+            guard let id = rest.first else {
+                writeLine("usage: omux vault resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                return 1
+            }
+            let destination: VaultResumeDestination
+            if rest.contains("--new-tab") {
+                destination = .newPaneTab
+            } else if rest.contains("--split") {
+                destination = .split
+            } else if rest.contains("--workspace") {
+                destination = .workspace
+            } else {
+                destination = .focused
+            }
+            let response = try client.request(
+                method: .vaultResume,
+                params: .object(["sessionID": .string(id), "destination": .string(destination.rawValue)])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "reindex":
+            var params: [String: RPCValue] = [:]
+            if let agentIndex = rest.firstIndex(of: "--agent"), rest.indices.contains(agentIndex + 1) {
+                params["agent"] = .string(rest[agentIndex + 1])
+            }
+            let response = try client.request(method: .vaultReindex, params: params.isEmpty ? nil : .object(params))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "export":
+            guard let outputIndex = rest.firstIndex(of: "--output"),
+                  rest.indices.contains(outputIndex + 1)
+            else {
+                writeLine("usage: omux vault export <session-id>... --output <path>")
+                return 1
+            }
+            let ids = Array(rest[..<outputIndex])
+            guard ids.isEmpty == false else {
+                writeLine("usage: omux vault export <session-id>... --output <path>")
+                return 1
+            }
+            let response = try client.request(
+                method: .vaultExport,
+                params: .object(["ids": .array(ids.map(RPCValue.string))])
+            )
+            guard let encoded = response.result?.objectValue?["data"]?.stringValue,
+                  let data = Data(base64Encoded: encoded)
+            else {
+                writeLine(response.result?.prettyPrinted ?? "")
+                return response.error == nil ? 0 : 1
+            }
+            try data.write(to: URL(fileURLWithPath: resolveCLIPath(rest[outputIndex + 1])))
+            return 0
+        case "import":
+            guard let path = rest.first else {
+                writeLine("usage: omux vault import <path>")
+                return 1
+            }
+            let data = try Data(contentsOf: URL(fileURLWithPath: resolveCLIPath(path)))
+            let response = try client.request(
+                method: .vaultImport,
+                params: .object(["data": .string(data.base64EncodedString())])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "agents":
+            let response = try client.request(method: .vaultAgents)
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        default:
+            writeLine("usage: omux vault list|search|preview|resume|reindex|export|import|agents")
             return 1
         }
     }

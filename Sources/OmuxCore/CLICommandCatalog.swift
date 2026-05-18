@@ -169,6 +169,32 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.vault.list",
+            usage: "omux vault list",
+            title: "omux: Vault List",
+            summary: "List indexed Vault sessions",
+            aliases: ["sessions history agents"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.vault.search",
+            usage: "omux vault search <query>",
+            title: "omux: Vault Search",
+            summary: "Search indexed Vault transcripts",
+            aliases: ["session search transcript search"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.vault.reindex",
+            usage: "omux vault reindex",
+            title: "omux: Vault Reindex",
+            summary: "Refresh the local Vault index",
+            aliases: ["index agent sessions"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.theme",
             usage: "omux theme",
             title: "omux: Pick Theme",

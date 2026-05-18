@@ -6,11 +6,13 @@ import OmuxCore
 import OmuxHooks
 import OmuxTerminalBridge
 import OmuxTheme
+import OmuxVault
 
 @MainActor
 public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
+    private let vaultStore: VaultStore
     private let extensionPaneActionService: ExtensionPaneActionService
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let workspacePersistenceStore: any WorkspacePersistenceStoring
@@ -47,6 +49,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self?.persistWorkspaceLayoutStateNow()
     }
     private let autoCheckUpdate: Bool
+    private let vaultConfiguration: VaultConfiguration
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
@@ -76,6 +79,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
         )
         self.workspaceController = workspaceController
+        let vaultStore = try! VaultStore(configuration: preparedConfiguration.vault)
+        self.vaultStore = vaultStore
         let extensionPaneActionService = ExtensionPaneActionService(controller: workspaceController)
         self.extensionPaneActionService = extensionPaneActionService
         self.configurationCoordinator = OpenMUXConfigurationCoordinator(
@@ -85,11 +90,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.controlPlaneService = OpenMUXControlPlaneService(
             controller: workspaceController,
             configurationCoordinator: configurationCoordinator,
-            extensionPaneActionService: extensionPaneActionService
+            extensionPaneActionService: extensionPaneActionService,
+            vaultStore: vaultStore
         )
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
         self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
+        self.vaultConfiguration = preparedConfiguration.vault
         self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
         OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
@@ -116,6 +123,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 initialTheme: initialTheme,
                 initialPanes: configurationCoordinator.paneConfiguration(),
                 initialIcons: configurationCoordinator.iconConfiguration(),
+                vaultStore: self.vaultStore,
+                vaultConfiguration: vaultConfiguration,
                 onExtensionPaneAction: { [weak self] request in
                     self?.dispatchExtensionPaneAction(request)
                 }
@@ -168,6 +177,19 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 object: nil
             )
             try controlPlaneService.start()
+            if vaultConfiguration.enabled && vaultConfiguration.indexOnLaunch {
+                let vaultStore = self.vaultStore
+                Task.detached {
+                    do {
+                        let warnings = try await vaultStore.reindex()
+                        for warning in warnings {
+                            fputs("vault warning: \(warning)\n", stderr)
+                        }
+                    } catch {
+                        fputs("vault indexing failed: \(error)\n", stderr)
+                    }
+                }
+            }
             if autoCheckUpdate {
                 let updateChecker = OpenMUXUpdateAvailabilityChecker(controller: workspaceController)
                 Task { @MainActor in
