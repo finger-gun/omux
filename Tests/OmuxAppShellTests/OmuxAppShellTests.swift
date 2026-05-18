@@ -3909,6 +3909,68 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
     }
 
+    func testBundledAIStatusSharedFallbacksDoNotReplaceNativeProgress() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            progressIdleClearDelay: 60,
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.progressReported(state: .active, progress: 42), on: runtimeSurfaceID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.value, 42)
+
+        runtime.emit(.titleChanged("GitHub Copilot"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.value, 42)
+
+        runtime.emit(.progressReported(state: .removed, progress: nil), on: runtimeSurfaceID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    func testBundledAIStatusSharedFallbacksCoverCopilotAndClaudeTitles() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            progressIdleClearDelay: 60,
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.titleChanged("GitHub Copilot waiting for approval"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+
+        runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+
+        runtime.emit(.titleChanged("Claude thinking"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+
+        runtime.emit(.titleChanged("Claude ready"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
     func testBundledAIStatusTitleSignalLossBecomesIdleUntilFocus() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)

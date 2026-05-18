@@ -31,7 +31,7 @@ public struct OmuxAIStatusPlugin {
         let rest = Array(arguments.dropFirst())
         switch subcommand {
         case "codex":
-            return try runCodex(arguments: rest, client: client, writeLine: writeLine)
+            return try runVendorCommand(vendor: .codex, arguments: rest, client: client, writeLine: writeLine)
         case "hook":
             return try runHook(arguments: rest, client: client, writeLine: writeLine)
         case "hooks":
@@ -129,37 +129,38 @@ public struct OmuxAIStatusPlugin {
         return 0
     }
 
-    private func runCodex(
+    private func runVendorCommand(
+        vendor: OmuxAIStatusCommandVendor,
         arguments: [String],
         client: OmuxControlClient,
         writeLine: (String) -> Void
     ) throws -> Int32 {
         guard let subcommand = arguments.first else {
-            writeLine(Self.codexUsage)
+            writeLine(vendor.usage)
             return 1
         }
 
         let rest = Array(arguments.dropFirst())
         switch subcommand {
         case "title":
-            guard let parsed = parseCodexTitle(rest) else {
-                writeLine(Self.codexTitleUsage)
+            guard let parsed = parseTitleCommand(rest) else {
+                writeLine(vendor.titleUsage)
                 return 1
             }
-            let state = codexState(forTitle: parsed.title)
+            let state = state(forTitle: parsed.title, vendor: vendor)
             try sendStatus(
                 state: state,
                 target: parsed.target,
-                label: "Codex",
-                message: codexMessage(forTitle: parsed.title),
-                source: "plugin.ai-status.codex",
+                label: vendor.label,
+                message: message(forTitle: parsed.title),
+                source: vendor.source,
                 client: client,
                 writeLine: writeLine
             )
             return 0
         case "clear":
             guard let target = parseTarget(rest) ?? inferredTarget() else {
-                writeLine(Self.codexClearUsage)
+                writeLine(vendor.clearUsage)
                 return 1
             }
             try sendStatus(
@@ -167,20 +168,21 @@ public struct OmuxAIStatusPlugin {
                 target: target,
                 label: nil,
                 message: nil,
-                source: "plugin.ai-status.codex",
+                source: vendor.source,
                 client: client,
                 writeLine: writeLine
             )
             return 0
         case "wrap":
-            return try runCodexWrapper(arguments: rest, client: client, writeLine: writeLine)
+            return try runVendorWrapper(vendor: vendor, arguments: rest, client: client, writeLine: writeLine)
         default:
-            writeLine(Self.codexUsage)
+            writeLine(vendor.usage)
             return 1
         }
     }
 
-    private func runCodexWrapper(
+    private func runVendorWrapper(
+        vendor: OmuxAIStatusCommandVendor,
         arguments: [String],
         client: OmuxControlClient,
         writeLine: (String) -> Void
@@ -191,16 +193,16 @@ public struct OmuxAIStatusPlugin {
         guard commandArguments.isEmpty == false,
               let target = parseTarget(targetArguments) ?? inferredTarget()
         else {
-            writeLine(Self.codexWrapUsage)
+            writeLine(vendor.wrapUsage)
             return 1
         }
 
         try sendStatus(
             state: .working,
             target: target,
-            label: "Codex",
+            label: vendor.label,
             message: commandArguments.joined(separator: " "),
-            source: "plugin.ai-status.codex",
+            source: vendor.source,
             client: client,
             writeLine: { _ in }
         )
@@ -216,9 +218,9 @@ public struct OmuxAIStatusPlugin {
             try sendStatus(
                 state: .error,
                 target: target,
-                label: "Codex",
+                label: vendor.label,
                 message: error.localizedDescription,
-                source: "plugin.ai-status.codex",
+                source: vendor.source,
                 client: client,
                 writeLine: { _ in }
             )
@@ -228,9 +230,9 @@ public struct OmuxAIStatusPlugin {
         try sendStatus(
             state: process.terminationStatus == 0 ? .idle : .error,
             target: target,
-            label: "Codex",
+            label: vendor.label,
             message: nil,
-            source: "plugin.ai-status.codex",
+            source: vendor.source,
             client: client,
             writeLine: { _ in }
         )
@@ -257,7 +259,7 @@ public struct OmuxAIStatusPlugin {
         writeLine(response.result?.prettyPrinted ?? "")
     }
 
-    private func parseCodexTitle(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget, title: String)? {
+    private func parseTitleCommand(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget, title: String)? {
         guard let titleIndex = arguments.firstIndex(of: "--title"),
               arguments.indices.contains(titleIndex + 1),
               let target = parseTarget(arguments) ?? inferredTarget()
@@ -323,11 +325,11 @@ public struct OmuxAIStatusPlugin {
         return nil
     }
 
-    private func codexState(forTitle title: String) -> ControlPlanePaneStatusState {
-        OmuxCodexTitleAdapter.observe(title: title, allowsStateOnlyMatch: true)?.state ?? .working
+    private func state(forTitle title: String, vendor: OmuxAIStatusCommandVendor) -> ControlPlanePaneStatusState {
+        OmuxAIStatusTitleObserver.observe(title: title, previousAdapterID: vendor.adapterID)?.state ?? .working
     }
 
-    private func codexMessage(forTitle title: String) -> String? {
+    private func message(forTitle title: String) -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -339,6 +341,56 @@ public struct OmuxAIStatusPlugin {
     public static let codexWrapUsage = "usage: omux ai-status codex wrap --pane <id>|--session <id>|--focused -- <command> [args...]"
     public static let hookUsage = "usage: omux ai-status hook --source codex|gemini|claude --event <event> [--pane <id>|--session <id>|--focused]"
     public static let hooksUsage = "usage: omux ai-status hooks setup|uninstall [codex|gemini|claude]"
+}
+
+private enum OmuxAIStatusCommandVendor {
+    case codex
+
+    var adapterID: String {
+        switch self {
+        case .codex:
+            return "codex"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        }
+    }
+
+    var source: String {
+        "plugin.ai-status.\(adapterID)"
+    }
+
+    var usage: String {
+        switch self {
+        case .codex:
+            return OmuxAIStatusPlugin.codexUsage
+        }
+    }
+
+    var titleUsage: String {
+        switch self {
+        case .codex:
+            return OmuxAIStatusPlugin.codexTitleUsage
+        }
+    }
+
+    var clearUsage: String {
+        switch self {
+        case .codex:
+            return OmuxAIStatusPlugin.codexClearUsage
+        }
+    }
+
+    var wrapUsage: String {
+        switch self {
+        case .codex:
+            return OmuxAIStatusPlugin.codexWrapUsage
+        }
+    }
 }
 
 public struct OmuxAIStatusHookInstaller {
@@ -868,62 +920,168 @@ public enum OmuxAIStatusTitleObserver {
         title: String,
         previousAdapterID: String? = nil
     ) -> OmuxAIStatusTitleObservation? {
-        if let gemini = OmuxGeminiTitleAdapter.observe(title: title) {
-            return gemini
+        for adapter in OmuxAIStatusTitleAdapter.allAdapters {
+            if let observation = adapter.observe(title: title, previousAdapterID: previousAdapterID) {
+                return observation
+            }
         }
-        return OmuxCodexTitleAdapter.observe(
-            title: title,
-            allowsStateOnlyMatch: previousAdapterID == OmuxCodexTitleAdapter.adapterID
-        )
+        return nil
     }
 }
 
-enum OmuxCodexTitleAdapter {
-    static let adapterID = "codex"
+private struct OmuxAIStatusTitleAdapter: Sendable {
+    struct Rule: Sendable {
+        let state: ControlPlanePaneStatusState
+        let keywords: [String]
+        let icons: [String]
+        let allowsColdStart: Bool
+        let requiresIdentityOrPrevious: Bool
 
-    static func observe(
-        title: String,
-        allowsStateOnlyMatch: Bool
-    ) -> OmuxAIStatusTitleObservation? {
-        let normalized = title.lowercased()
-        let hasCodexIdentity = isCodexTitle(normalized)
-        if isCodexActionRequiredTitle(normalized) {
-            return observation(title: title, state: .needsInput, confidence: hasCodexIdentity ? 0.75 : 0.6)
+        init(
+            state: ControlPlanePaneStatusState,
+            keywords: [String] = [],
+            icons: [String] = [],
+            allowsColdStart: Bool = false,
+            requiresIdentityOrPrevious: Bool = true
+        ) {
+            self.state = state
+            self.keywords = keywords
+            self.icons = icons
+            self.allowsColdStart = allowsColdStart
+            self.requiresIdentityOrPrevious = requiresIdentityOrPrevious
         }
-        if normalized.contains("approval")
-            || normalized.contains("permission")
-            || normalized.contains("confirm")
-            || normalized.contains("waiting")
-            || normalized.contains("needs input") {
-            guard hasCodexIdentity || allowsStateOnlyMatch else {
-                return nil
+    }
+
+    let adapterID: String
+    let label: String
+    let identityKeywords: [String]
+    let rules: [Rule]
+    let identityImpliesWorking: Bool
+    let customRule: (@Sendable (_ title: String, _ normalized: String) -> ControlPlanePaneStatusState?)?
+
+    func observe(title: String, previousAdapterID: String?) -> OmuxAIStatusTitleObservation? {
+        let normalized = title.localizedLowercase
+        let hasIdentity = identityKeywords.contains { normalized.contains($0) }
+        let hasPreviousIdentity = previousAdapterID == adapterID
+
+        if let state = customRule?(title, normalized) {
+            return observation(title: title, state: state, confidence: hasIdentity ? 0.75 : 0.6)
+        }
+
+        for rule in rules {
+            let didMatchKeyword = rule.keywords.contains { normalized.contains($0) }
+            let didMatchIcon = rule.icons.contains { title.contains($0) }
+            guard didMatchKeyword || didMatchIcon else {
+                continue
             }
-            return observation(title: title, state: .needsInput, confidence: hasCodexIdentity ? 0.75 : 0.55)
-        }
-        if normalized.contains("error") || normalized.contains("failed") {
-            guard hasCodexIdentity || allowsStateOnlyMatch else {
-                return nil
+            if rule.requiresIdentityOrPrevious,
+               hasIdentity == false,
+               hasPreviousIdentity == false,
+               rule.allowsColdStart == false {
+                continue
             }
-            return observation(title: title, state: .error, confidence: hasCodexIdentity ? 0.75 : 0.55)
+            return observation(title: title, state: rule.state, confidence: confidence(hasIdentity: hasIdentity, coldStart: rule.allowsColdStart))
         }
-        if normalized.contains("idle") || normalized.contains("done") || normalized.contains("finished") {
-            guard hasCodexIdentity || allowsStateOnlyMatch else {
-                return nil
-            }
-            return observation(title: title, state: .idle, confidence: hasCodexIdentity ? 0.75 : 0.55)
-        }
-        if isCodexWorkingTitle(normalized) {
-            return observation(title: title, state: .working, confidence: hasCodexIdentity ? 0.75 : 0.6)
-        }
-        guard hasCodexIdentity else {
+
+        guard hasIdentity, identityImpliesWorking else {
             return nil
         }
         return observation(title: title, state: .working, confidence: 0.65)
     }
 
-    private static func isCodexTitle(_ normalized: String) -> Bool {
-        normalized.contains("codex")
+    private func observation(
+        title: String,
+        state: ControlPlanePaneStatusState,
+        confidence: Double
+    ) -> OmuxAIStatusTitleObservation {
+        OmuxAIStatusTitleObservation(
+            adapterID: adapterID,
+            label: label,
+            state: state,
+            message: title.trimmingCharacters(in: .whitespacesAndNewlines).emptyAsNil,
+            source: "plugin.ai-status.\(adapterID).title",
+            confidence: confidence
+        )
     }
+
+    private func confidence(hasIdentity: Bool, coldStart: Bool) -> Double {
+        if hasIdentity { return 0.75 }
+        if coldStart { return 0.6 }
+        return 0.55
+    }
+}
+
+private extension OmuxAIStatusTitleAdapter {
+    static let allAdapters: [OmuxAIStatusTitleAdapter] = [
+        .gemini,
+        .codex,
+        .claude,
+        .copilot,
+    ]
+
+    static let codex = OmuxAIStatusTitleAdapter(
+        adapterID: "codex",
+        label: "Codex",
+        identityKeywords: ["codex"],
+        rules: [
+            Rule(state: .needsInput, keywords: ["approval", "permission", "confirm", "waiting", "needs input"]),
+            Rule(state: .error, keywords: ["error", "failed"]),
+            Rule(state: .idle, keywords: ["idle", "done", "finished"]),
+            Rule(state: .working, keywords: ["working", "thinking", "reading", "editing", "writing", "running", "searching", "reviewing"]),
+        ],
+        identityImpliesWorking: true,
+        customRule: { _, normalized in
+            if isCodexActionRequiredTitle(normalized) {
+                return .needsInput
+            }
+            if hasSpinnerPrefix(normalized) || normalized.contains("esc to interrupt") {
+                return .working
+            }
+            return nil
+        }
+    )
+
+    static let gemini = OmuxAIStatusTitleAdapter(
+        adapterID: "gemini",
+        label: "Gemini",
+        identityKeywords: ["gemini"],
+        rules: [
+            Rule(state: .needsInput, keywords: ["action required", "approval", "permission", "needs input"], icons: ["\u{270B}"], allowsColdStart: true, requiresIdentityOrPrevious: false),
+            Rule(state: .working, keywords: ["working", "thinking", "running"], icons: ["\u{2726}"], allowsColdStart: true, requiresIdentityOrPrevious: false),
+            Rule(state: .idle, keywords: ["idle", "done", "finished", "ready"], icons: ["\u{25C7}"], allowsColdStart: true, requiresIdentityOrPrevious: false),
+            Rule(state: .error, keywords: ["error", "failed"]),
+        ],
+        identityImpliesWorking: false,
+        customRule: nil
+    )
+
+    static let claude = OmuxAIStatusTitleAdapter(
+        adapterID: "claude",
+        label: "Claude",
+        identityKeywords: ["claude"],
+        rules: [
+            Rule(state: .needsInput, keywords: ["action required", "approval", "permission", "confirm", "waiting", "needs input"]),
+            Rule(state: .working, keywords: ["working", "thinking", "reading", "editing", "writing", "running"]),
+            Rule(state: .idle, keywords: ["idle", "done", "finished", "ready"]),
+            Rule(state: .error, keywords: ["error", "failed"]),
+        ],
+        identityImpliesWorking: false,
+        customRule: nil
+    )
+
+    static let copilot = OmuxAIStatusTitleAdapter(
+        adapterID: "copilot",
+        label: "Copilot",
+        identityKeywords: ["copilot", "github copilot"],
+        rules: [
+            Rule(state: .needsInput, keywords: ["action required", "approval", "permission", "confirm", "waiting", "needs input"]),
+            Rule(state: .working, keywords: ["working", "thinking", "running", "generating"]),
+            Rule(state: .idle, keywords: ["idle", "done", "finished", "ready"]),
+            Rule(state: .error, keywords: ["error", "failed"]),
+        ],
+        identityImpliesWorking: false,
+        customRule: nil
+    )
 
     private static func isCodexActionRequiredTitle(_ normalized: String) -> Bool {
         let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -939,59 +1097,12 @@ enum OmuxCodexTitleAdapter {
         return strippedPrefix == "action required" || strippedPrefix.hasPrefix("action required |")
     }
 
-    private static func isCodexWorkingTitle(_ normalized: String) -> Bool {
-        if hasSpinnerPrefix(normalized) {
-            return true
-        }
-
-        if normalized.contains("esc to interrupt") {
-            return true
-        }
-
-        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
-        let workingPrefixes = [
-            "working",
-            "thinking",
-            "reading",
-            "editing",
-            "writing",
-            "running",
-            "searching",
-            "reviewing",
-        ]
-        return workingPrefixes.contains { prefix in
-            trimmed == prefix
-                || trimmed.hasPrefix("\(prefix) ")
-                || trimmed.hasPrefix("\(prefix)(")
-        }
-    }
-
     private static func hasSpinnerPrefix(_ normalized: String) -> Bool {
         let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first else {
             return false
         }
         return first.isAIStatusSpinnerGlyph
-    }
-
-    private static func observation(
-        title: String,
-        state: ControlPlanePaneStatusState,
-        confidence: Double
-    ) -> OmuxAIStatusTitleObservation {
-        OmuxAIStatusTitleObservation(
-            adapterID: adapterID,
-            label: "Codex",
-            state: state,
-            message: message(forTitle: title),
-            source: "plugin.ai-status.codex.title",
-            confidence: confidence
-        )
-    }
-
-    private static func message(forTitle title: String) -> String? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -1018,40 +1129,8 @@ private extension Character {
     }
 }
 
-enum OmuxGeminiTitleAdapter {
-    private static let readyIcon = "\u{25C7}"
-    private static let actionRequiredIcon = "\u{270B}"
-    private static let workingIcon = "\u{2726}"
-
-    static func observe(title: String) -> OmuxAIStatusTitleObservation? {
-        if title.contains(actionRequiredIcon) {
-            return observation(title: title, state: .needsInput)
-        }
-        if title.contains(workingIcon) {
-            return observation(title: title, state: .working)
-        }
-        if title.contains(readyIcon) {
-            return observation(title: title, state: .idle)
-        }
-        return nil
-    }
-
-    private static func observation(
-        title: String,
-        state: ControlPlanePaneStatusState
-    ) -> OmuxAIStatusTitleObservation {
-        OmuxAIStatusTitleObservation(
-            adapterID: "gemini",
-            label: "Gemini",
-            state: state,
-            message: message(forTitle: title),
-            source: "plugin.ai-status.gemini.title",
-            confidence: 0.9
-        )
-    }
-
-    private static func message(forTitle title: String) -> String? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+private extension String {
+    var emptyAsNil: String? {
+        isEmpty ? nil : self
     }
 }
