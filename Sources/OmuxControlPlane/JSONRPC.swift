@@ -68,6 +68,7 @@ public enum ControlMethod: String, Sendable {
     case vaultExport = "vault.export"
     case vaultImport = "vault.import"
     case vaultAgents = "vault.agents"
+    case agentSessionsUI = "agentSessions.ui"
     case createExtensionPane = "extensionPane.create"
     case updateExtensionPane = "extensionPane.update"
     case extensionPaneAction = "extensionPane.action"

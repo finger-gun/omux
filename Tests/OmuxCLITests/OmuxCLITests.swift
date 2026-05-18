@@ -545,6 +545,10 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "session"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "panes"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "agent-sessions", "open"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "as", "toggle"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "agents", "palette"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "as"]), 0)
 
         XCTAssertEqual(output, [
             "\(ControlMethod.createTab.rawValue):none",
@@ -569,6 +573,10 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.listSessions.rawValue):none",
             "\(ControlMethod.listPanes.rawValue):none",
             "\(ControlMethod.listPanes.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
         ])
     }
 

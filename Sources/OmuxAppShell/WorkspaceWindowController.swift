@@ -121,6 +121,10 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.updateTheme(theme)
     }
 
+    func vaultIndexDidUpdate() {
+        rootViewController.vaultIndexDidUpdate()
+    }
+
     func updateIcons(_ icons: OmuxConfigUI.Icons) {
         rootViewController.updateIcons(icons)
     }
@@ -131,6 +135,18 @@ final class WorkspaceWindowController: NSWindowController {
 
     func toggleSidebarVisibility() {
         rootViewController.toggleSidebarVisibility()
+    }
+
+    func setAgentSessionsVisibility(_ isVisible: Bool) {
+        rootViewController.setVaultSidebarVisibility(isVisible)
+    }
+
+    func toggleAgentSessionsVisibility() {
+        rootViewController.toggleVaultSidebar()
+    }
+
+    func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
+        rootViewController.presentAgentSessionsPalette(keyBindings: keyBindings)
     }
 
     func presentRenameWorkspacePrompt(workspaceID: WorkspaceID? = nil) {
@@ -223,6 +239,8 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultPaletteSessions: [VaultSessionSummary] = []
     private var vaultPaletteEntries: [VaultPaletteEntry] = []
     private var vaultPaletteLoadGeneration = UUID()
+    private var vaultIndexRefreshCoordinator: VaultIndexRefreshCoordinator?
+    private var vaultSourceEventWatcher: VaultSourceEventWatcher?
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
@@ -253,6 +271,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.isSidebarVisible = sidebarVisibilityStore.isSidebarVisible
         self.onExtensionPaneAction = onExtensionPaneAction
         super.init(nibName: nil, bundle: nil)
+        configureVaultSourceIndexing()
     }
 
     deinit {
@@ -472,7 +491,7 @@ final class WorkspaceShellViewController: NSViewController {
                 self?.toggleVaultSidebar()
             },
             onRefresh: { [weak self] in
-                self?.reloadVaultSessions(reset: true)
+                self?.refreshVaultSessions()
             },
             onSearchChanged: { [weak self] query in
                 self?.updateVaultSearchQuery(query)
@@ -774,6 +793,38 @@ final class WorkspaceShellViewController: NSViewController {
         reloadVaultSessions(reset: false)
     }
 
+    private func refreshVaultSessions() {
+        guard let vaultStore else {
+            reloadVaultSessions(reset: true)
+            return
+        }
+        let generation = UUID()
+        vaultLoadGeneration = generation
+        vaultSessions = []
+        vaultResultOffset = 0
+        vaultHasMore = true
+        vaultIsLoading = true
+        availableVaultAgents.removeAll()
+        if let workspace = currentWorkspace {
+            update(workspace: workspace)
+        }
+
+        let agent = vaultAgentFilter
+        Task { [weak self] in
+            do {
+                let warnings = try await vaultStore.reindex(agent: agent)
+                for warning in warnings {
+                    fputs("vault refresh warning: \(warning)\n", stderr)
+                }
+            } catch {
+                fputs("vault refresh failed: \(error)\n", stderr)
+            }
+            guard let self, self.vaultLoadGeneration == generation else { return }
+            self.vaultIsLoading = false
+            self.reloadVaultSessions(reset: true)
+        }
+    }
+
     private func reloadAvailableVaultAgents() {
         guard let vaultStore else {
             return
@@ -901,8 +952,19 @@ final class WorkspaceShellViewController: NSViewController {
         toggleVaultSidebar()
     }
 
-    private func toggleVaultSidebar() {
+    func toggleVaultSidebar() {
         isVaultSidebarVisible.toggle()
+        applyVaultSidebarVisibility()
+        if isVaultSidebarVisible, vaultSessions.isEmpty, vaultIsLoading == false {
+            reloadVaultSessions(reset: true)
+        }
+    }
+
+    func setVaultSidebarVisibility(_ isVisible: Bool) {
+        guard isVaultSidebarVisible != isVisible else {
+            return
+        }
+        isVaultSidebarVisible = isVisible
         applyVaultSidebarVisibility()
         if isVaultSidebarVisible, vaultSessions.isEmpty, vaultIsLoading == false {
             reloadVaultSessions(reset: true)
@@ -917,6 +979,35 @@ final class WorkspaceShellViewController: NSViewController {
         vaultSidebarWidthConstraint?.constant = isVisible ? ShellLayoutMetrics.vaultSidebarWidth : 0
         mainColumnTrailingConstraint?.constant = isVisible ? -ShellLayoutMetrics.interRegionSpacing : 0
         view.layoutSubtreeIfNeeded()
+    }
+
+    private func configureVaultSourceIndexing() {
+        guard vaultConfiguration.enabled, let vaultStore else {
+            return
+        }
+
+        let coordinator = VaultIndexRefreshCoordinator(vaultStore: vaultStore) { [weak self] _ in
+            self?.vaultIndexDidUpdate()
+        }
+        let sources = VaultWatchSourceFactory.sources(configuration: vaultConfiguration)
+        guard sources.isEmpty == false else {
+            vaultIndexRefreshCoordinator = coordinator
+            return
+        }
+        let watcher = VaultSourceEventWatcher(sources: sources) { [weak coordinator] agent in
+            coordinator?.markDirty(agent)
+        }
+        watcher.start()
+        vaultIndexRefreshCoordinator = coordinator
+        vaultSourceEventWatcher = watcher
+    }
+
+    func vaultIndexDidUpdate() {
+        guard isVaultSidebarVisible else {
+            return
+        }
+        reloadAvailableVaultAgents()
+        reloadVaultSessions(reset: true)
     }
 
     private func vaultSessions(
@@ -1258,6 +1349,10 @@ final class WorkspaceShellViewController: NSViewController {
                 toggleSidebarVisibility()
                 return .invoked
             }
+            if result.invocationTarget == .action(.agentSessionsToggle) {
+                toggleVaultSidebar()
+                return .invoked
+            }
             if result.invocationTarget == .action(.paneFind) {
                 commandPaletteView?.dismissAndRestoreFocus()
                 presentPaneFind()
@@ -1312,6 +1407,13 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
         paletteView.present(initialQuery: initialQuery, restoring: previousResponder)
+    }
+
+    func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
+        presentCommandPalette(initialQuery: ">", keyBindings: keyBindings)
+        if let paletteView = commandPaletteView {
+            presentVaultSessionsSubPalette(in: paletteView)
+        }
     }
 
     override func cancelOperation(_ sender: Any?) {

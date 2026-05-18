@@ -124,7 +124,9 @@ public struct OmuxCLICommand {
             case "plugin", "plugins":
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
             case "vault":
-                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()))
+                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "vault")
+            case "agent-sessions", "agent-session", "agents", "as":
+                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "agent-sessions")
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -393,31 +395,42 @@ public struct OmuxCLICommand {
         }
     }
 
-    private func runVaultCommand(arguments: [String]) throws -> Int32 {
+    private func runVaultCommand(arguments: [String], commandName: String) throws -> Int32 {
+        let usage = "usage: omux \(commandName) list|search|preview|resume|reindex|export|import|agents|open|close|toggle|palette"
         guard let subcommand = arguments.first else {
-            writeLine("usage: omux vault list|search|preview|resume|reindex|export|import|agents")
+            if commandName != "vault" {
+                let response = try client.request(
+                    method: .agentSessionsUI,
+                    params: .object(["action": .string("open")])
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
+                return response.error == nil ? 0 : 1
+            }
+            writeLine(usage)
             return 1
         }
         let rest = Array(arguments.dropFirst())
         switch subcommand {
         case "list":
-            let response = try client.request(method: .vaultList, params: nil)
+            guard let params = parseVaultSearchOptions(rest, commandName: commandName, subcommand: "list", requiresQuery: false) else {
+                return 1
+            }
+            let response = try client.request(method: .vaultList, params: params.isEmpty ? nil : .object(params))
             writeLine(response.result?.prettyPrinted ?? "[]")
             return 0
         case "search":
-            guard rest.isEmpty == false else {
-                writeLine("usage: omux vault search <query>")
+            guard let params = parseVaultSearchOptions(rest, commandName: commandName, subcommand: "search", requiresQuery: true) else {
                 return 1
             }
             let response = try client.request(
                 method: .vaultSearch,
-                params: .object(["query": .string(rest.joined(separator: " "))])
+                params: .object(params)
             )
             writeLine(response.result?.prettyPrinted ?? "[]")
             return 0
         case "preview":
             guard let id = rest.first else {
-                writeLine("usage: omux vault preview <session-id>")
+                writeLine("usage: omux \(commandName) preview <session-id>")
                 return 1
             }
             let response = try client.request(method: .vaultPreview, params: .object(["sessionID": .string(id)]))
@@ -425,13 +438,13 @@ public struct OmuxCLICommand {
             return 0
         case "resume":
             guard let id = rest.first else {
-                writeLine("usage: omux vault resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
                 return 1
             }
             let destinationFlags = ["--new-tab", "--split", "--workspace"].filter(rest.contains)
             guard destinationFlags.count <= 1 else {
-                writeLine("error: vault resume destination flags are mutually exclusive")
-                writeLine("usage: omux vault resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                writeLine("error: agent session resume destination flags are mutually exclusive")
+                writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
                 return 1
             }
             let destination: VaultResumeDestination
@@ -457,7 +470,7 @@ public struct OmuxCLICommand {
             if let agentIndex = rest.firstIndex(of: "--agent") {
                 guard rest.indices.contains(agentIndex + 1), rest[agentIndex + 1].hasPrefix("-") == false else {
                     writeLine("error: --agent requires an agent name")
-                    writeLine("usage: omux vault reindex [--agent <agent>]")
+                    writeLine("usage: omux \(commandName) reindex [--agent <agent>]")
                     return 1
                 }
                 params["agent"] = .string(rest[agentIndex + 1])
@@ -469,12 +482,12 @@ public struct OmuxCLICommand {
             guard let outputIndex = rest.firstIndex(of: "--output"),
                   rest.indices.contains(outputIndex + 1)
             else {
-                writeLine("usage: omux vault export <session-id>... --output <path>")
+                writeLine("usage: omux \(commandName) export <session-id>... --output <path>")
                 return 1
             }
             let ids = Array(rest[..<outputIndex])
             guard ids.isEmpty == false else {
-                writeLine("usage: omux vault export <session-id>... --output <path>")
+                writeLine("usage: omux \(commandName) export <session-id>... --output <path>")
                 return 1
             }
             let response = try client.request(
@@ -491,7 +504,7 @@ public struct OmuxCLICommand {
             return 0
         case "import":
             guard let path = rest.first else {
-                writeLine("usage: omux vault import <path>")
+                writeLine("usage: omux \(commandName) import <path>")
                 return 1
             }
             let data = try Data(contentsOf: URL(fileURLWithPath: resolveCLIPath(path)))
@@ -505,10 +518,76 @@ public struct OmuxCLICommand {
             let response = try client.request(method: .vaultAgents)
             writeLine(response.result?.prettyPrinted ?? "[]")
             return 0
+        case "open", "show", "close", "hide", "toggle", "palette", "command-palette":
+            let response = try client.request(
+                method: .agentSessionsUI,
+                params: .object(["action": .string(subcommand)])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return response.error == nil ? 0 : 1
         default:
-            writeLine("usage: omux vault list|search|preview|resume|reindex|export|import|agents")
+            writeLine(usage)
             return 1
         }
+    }
+
+    private func parseVaultSearchOptions(
+        _ arguments: [String],
+        commandName: String,
+        subcommand: String,
+        requiresQuery: Bool
+    ) -> [String: RPCValue]? {
+        var params: [String: RPCValue] = [:]
+        var queryParts: [String] = []
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--agent":
+                guard arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("-") == false else {
+                    writeLine("error: --agent requires an agent name")
+                    writeLine("usage: omux \(commandName) \(subcommand) \(requiresQuery ? "<query> " : "")[--agent <agent>] [--limit <count>] [--offset <count>] [--cwd <path>]")
+                    return nil
+                }
+                params["agent"] = .string(arguments[index + 1])
+                index += 2
+            case "--limit":
+                guard arguments.indices.contains(index + 1), let limit = Int(arguments[index + 1]) else {
+                    writeLine("error: --limit requires a number")
+                    return nil
+                }
+                params["limit"] = .integer(limit)
+                index += 2
+            case "--offset":
+                guard arguments.indices.contains(index + 1), let offset = Int(arguments[index + 1]) else {
+                    writeLine("error: --offset requires a number")
+                    return nil
+                }
+                params["offset"] = .integer(offset)
+                index += 2
+            case "--cwd", "--working-directory":
+                guard arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("-") == false else {
+                    writeLine("error: \(argument) requires a path")
+                    return nil
+                }
+                params["workingDirectory"] = .string(resolveCLIPath(arguments[index + 1]))
+                index += 2
+            default:
+                if argument.hasPrefix("-") {
+                    writeLine("error: unknown option \(argument)")
+                    return nil
+                }
+                queryParts.append(argument)
+                index += 1
+            }
+        }
+        if queryParts.isEmpty == false {
+            params["query"] = .string(queryParts.joined(separator: " "))
+        } else if requiresQuery {
+            writeLine("usage: omux \(commandName) search <query> [--agent <agent>] [--limit <count>] [--offset <count>] [--cwd <path>]")
+            return nil
+        }
+        return params
     }
 
     private func runVaultResumeChoiceCommand(arguments: [String]) -> Int32 {

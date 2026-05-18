@@ -169,29 +169,37 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
-            id: "omux.vault.list",
-            usage: "omux vault list",
-            title: "omux: Vault List",
-            summary: "List indexed Vault sessions",
-            aliases: ["sessions history agents"],
+            id: "omux.agent-sessions.list",
+            usage: "omux agent-sessions list",
+            title: "omux: Agent Sessions List",
+            summary: "List indexed agent sessions",
+            aliases: ["omux as list", "omux vault list", "sessions history agents"],
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
-            id: "omux.vault.search",
-            usage: "omux vault search <query>",
-            title: "omux: Vault Search",
-            summary: "Search indexed Vault transcripts",
-            aliases: ["session search transcript search"],
+            id: "omux.agent-sessions.search",
+            usage: "omux agent-sessions search <query>",
+            title: "omux: Agent Sessions Search",
+            summary: "Search indexed agent session transcripts",
+            aliases: ["omux as search", "omux vault search", "session search transcript search"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
-            id: "omux.vault.reindex",
-            usage: "omux vault reindex",
-            title: "omux: Vault Reindex",
-            summary: "Refresh the local Vault index",
-            aliases: ["index agent sessions"],
+            id: "omux.agent-sessions.reindex",
+            usage: "omux agent-sessions reindex",
+            title: "omux: Agent Sessions Reindex",
+            summary: "Refresh the local agent session index",
+            aliases: ["omux as reindex", "omux vault reindex", "index agent sessions"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.agent-sessions.open",
+            usage: "omux agent-sessions open",
+            title: "omux: Open Agent Sessions",
+            summary: "Show the Agent Sessions sidebar",
+            aliases: ["omux as open", "omux agents open", "show agent sessions"],
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(

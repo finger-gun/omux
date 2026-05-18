@@ -296,6 +296,31 @@ struct OmuxVaultTests {
         #expect(try await store.preview(sessionID: "gemini:gemini-one")?.turns.count == 2)
     }
 
+    @Test("Vault watch sources use narrow agent homes")
+    func watchSourcesUseNarrowAgentHomes() throws {
+        let root = try temporaryDirectory()
+        let codexHome = root.appendingPathComponent("codex", isDirectory: true)
+        let geminiHome = root.appendingPathComponent("gemini", isDirectory: true)
+        let geminiTmp = geminiHome.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: geminiTmp, withIntermediateDirectories: true)
+
+        let configuration = VaultConfiguration(
+            enabled: true,
+            includedAgents: [.codex, .gemini, .custom],
+            agentHomes: [
+                .codex: codexHome.path,
+                .gemini: geminiHome.path,
+                .custom: root.appendingPathComponent("custom", isDirectory: true).path,
+            ]
+        )
+
+        let sources = VaultWatchSourceFactory.sources(configuration: configuration)
+        #expect(sources.contains(VaultWatchSource(agent: .codex, url: codexHome)))
+        #expect(sources.contains(VaultWatchSource(agent: .gemini, url: geminiTmp)))
+        #expect(sources.contains { $0.agent == .custom } == false)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

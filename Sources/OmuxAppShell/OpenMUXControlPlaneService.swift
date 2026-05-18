@@ -146,6 +146,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     private let server: LocalControlServer
     private let terminalEventBroadcaster = TerminalEventBroadcaster()
     private let vaultWaiter = VaultWaiter()
+    var agentSessionsUIHandler: (@MainActor @Sendable (String) -> RPCValue)?
 
     init(
         controller: WorkspaceController,
@@ -505,6 +506,13 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 id: request.id,
                 result: .array(VaultAgentKind.allCases.filter { $0 != .custom }.map { .string($0.rawValue) })
             )
+        case .agentSessionsUI:
+            let action = request.params?.objectValue?["action"]?.stringValue ?? "open"
+            guard let agentSessionsUIHandler else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "agent sessions UI unavailable"))
+            }
+            let result = agentSessionsUIHandler(action)
+            return JSONRPCResponse(id: request.id, result: result)
         case .createExtensionPane:
             guard let params = request.params?.objectValue,
                   let pluginID = params["pluginID"]?.stringValue,
