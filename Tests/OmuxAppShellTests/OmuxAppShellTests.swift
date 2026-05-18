@@ -3909,6 +3909,43 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
     }
 
+    func testBundledAIStatusTitleSignalLossBecomesIdleUntilFocus() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let agentPane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: agentPane.id)?.runtimeSurfaceID)
+        let otherTab = try XCTUnwrap(controller.createPaneTab())
+        let otherPane = try XCTUnwrap(otherTab.focusedPane)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, otherPane.id)
+
+        runtime.emit(.titleChanged("⠇ omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first { $0.id == agentPane.id }?.terminalState.progress?.state,
+            .active
+        )
+
+        runtime.emit(.titleChanged("omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first { $0.id == agentPane.id }?.terminalState.progress?.state,
+            .paused
+        )
+
+        controller.focus(paneID: agentPane.id)
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, agentPane.id)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+    }
+
     func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
         let titleUpdateMinimumInterval: TimeInterval = 0.5
         let runtime = ActionEmittingGhosttyRuntime()

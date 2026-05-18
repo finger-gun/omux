@@ -2984,6 +2984,7 @@ public final class WorkspaceController: @unchecked Sendable {
             }
         case .titleChanged(let title):
             var shouldUpdateWorkspace = false
+            var shouldHandleAIStatusIdle = false
             let displayTitle = Self.displayTitle(forReportedTerminalTitle: title)
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                 if pane.terminalState.reportedTitle != title {
@@ -2993,7 +2994,8 @@ public final class WorkspaceController: @unchecked Sendable {
                     title: title,
                     paneID: event.paneID,
                     workspaceIndex: workspaceIndex,
-                    pane: &pane
+                    pane: &pane,
+                    shouldHandleIdle: &shouldHandleAIStatusIdle
                 ) {
                     shouldUpdateWorkspace = true
                 }
@@ -3015,6 +3017,10 @@ public final class WorkspaceController: @unchecked Sendable {
                     pendingTerminalDisplayTitlePaneIDs.insert(event.paneID)
                     shouldScheduleTrailingTitleUpdate = true
                 }
+            }
+            if shouldHandleAIStatusIdle {
+                handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
+                shouldUpdateWorkspace = true
             }
             if shouldUpdateWorkspace {
                 updatedWorkspace = workspaces[workspaceIndex]
@@ -3262,6 +3268,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 return
             }
             pane.terminalState.progress = nil
+            aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
         }
     }
 
@@ -3293,6 +3300,7 @@ public final class WorkspaceController: @unchecked Sendable {
                     return
                 }
                 pane.terminalState.progress = nil
+                aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
             }
             progressIdleClearTokens.removeValue(forKey: paneID)
             updatedWorkspaceID = workspaces[workspaceIndex].id
@@ -3325,8 +3333,10 @@ public final class WorkspaceController: @unchecked Sendable {
         title: String,
         paneID: PaneID,
         workspaceIndex: Int,
-        pane: inout Pane
+        pane: inout Pane,
+        shouldHandleIdle: inout Bool
     ) -> Bool {
+        _ = workspaceIndex
         guard aiStatusConfiguration.enabled else {
             return false
         }
@@ -3343,7 +3353,7 @@ public final class WorkspaceController: @unchecked Sendable {
             pane.terminalState.progress = progress
             aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
             if observation.state == .idle {
-                handleIdleProgressSetLocked(for: paneID, workspaceIndex: workspaceIndex)
+                shouldHandleIdle = true
             } else {
                 progressIdleClearTokens.removeValue(forKey: paneID)
             }
@@ -3355,9 +3365,12 @@ public final class WorkspaceController: @unchecked Sendable {
         else {
             return false
         }
-        pane.terminalState.progress = nil
-        aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
-        progressIdleClearTokens.removeValue(forKey: paneID)
+        let idleProgress = PaneProgress(state: .paused)
+        guard pane.terminalState.progress != idleProgress else {
+            return false
+        }
+        pane.terminalState.progress = idleProgress
+        shouldHandleIdle = true
         return true
     }
 
