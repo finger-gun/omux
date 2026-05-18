@@ -196,7 +196,7 @@ public struct OmuxAIStatusPlugin {
     }
 
     private func codexState(forTitle title: String) -> ControlPlanePaneStatusState {
-        OmuxCodexTitleStatusMapper.state(forTitle: title) ?? .working
+        OmuxCodexTitleAdapter.observe(title: title, allowsStateOnlyMatch: true)?.state ?? .working
     }
 
     private func codexMessage(forTitle title: String) -> String? {
@@ -211,29 +211,143 @@ public struct OmuxAIStatusPlugin {
     public static let codexWrapUsage = "usage: omux ai-status codex wrap --pane <id>|--session <id>|--focused -- <command> [args...]"
 }
 
-public enum OmuxCodexTitleStatusMapper {
-    public static func state(forTitle title: String) -> ControlPlanePaneStatusState? {
+public struct OmuxAIStatusTitleObservation: Equatable, Sendable {
+    public let adapterID: String
+    public let label: String
+    public let state: ControlPlanePaneStatusState
+    public let message: String?
+    public let source: String
+    public let confidence: Double
+
+    public init(
+        adapterID: String,
+        label: String,
+        state: ControlPlanePaneStatusState,
+        message: String?,
+        source: String,
+        confidence: Double
+    ) {
+        self.adapterID = adapterID
+        self.label = label
+        self.state = state
+        self.message = message
+        self.source = source
+        self.confidence = confidence
+    }
+}
+
+public enum OmuxAIStatusTitleObserver {
+    public static func observe(
+        title: String,
+        previousAdapterID: String? = nil
+    ) -> OmuxAIStatusTitleObservation? {
+        if let gemini = OmuxGeminiTitleAdapter.observe(title: title) {
+            return gemini
+        }
+        return OmuxCodexTitleAdapter.observe(
+            title: title,
+            allowsStateOnlyMatch: previousAdapterID == OmuxCodexTitleAdapter.adapterID
+        )
+    }
+}
+
+enum OmuxCodexTitleAdapter {
+    static let adapterID = "codex"
+
+    static func observe(
+        title: String,
+        allowsStateOnlyMatch: Bool
+    ) -> OmuxAIStatusTitleObservation? {
         let normalized = title.lowercased()
+        let hasCodexIdentity = isCodexTitle(normalized)
         if normalized.contains("approval")
             || normalized.contains("permission")
             || normalized.contains("confirm")
             || normalized.contains("waiting")
-            || normalized.contains("needs input") {
-            return .needsInput
+            || normalized.contains("needs input")
+            || normalized.contains("action required") {
+            guard hasCodexIdentity || allowsStateOnlyMatch else {
+                return nil
+            }
+            return observation(title: title, state: .needsInput, confidence: hasCodexIdentity ? 0.75 : 0.55)
         }
         if normalized.contains("error") || normalized.contains("failed") {
-            return .error
+            guard hasCodexIdentity || allowsStateOnlyMatch else {
+                return nil
+            }
+            return observation(title: title, state: .error, confidence: hasCodexIdentity ? 0.75 : 0.55)
         }
         if normalized.contains("idle") || normalized.contains("done") || normalized.contains("finished") {
-            return .idle
+            guard hasCodexIdentity || allowsStateOnlyMatch else {
+                return nil
+            }
+            return observation(title: title, state: .idle, confidence: hasCodexIdentity ? 0.75 : 0.55)
         }
-        guard isCodexTitle(normalized) else {
+        guard hasCodexIdentity else {
             return nil
         }
-        return .working
+        return observation(title: title, state: .working, confidence: 0.65)
     }
 
     private static func isCodexTitle(_ normalized: String) -> Bool {
         normalized.contains("codex")
+    }
+
+    private static func observation(
+        title: String,
+        state: ControlPlanePaneStatusState,
+        confidence: Double
+    ) -> OmuxAIStatusTitleObservation {
+        OmuxAIStatusTitleObservation(
+            adapterID: adapterID,
+            label: "Codex",
+            state: state,
+            message: message(forTitle: title),
+            source: "plugin.ai-status.codex.title",
+            confidence: confidence
+        )
+    }
+
+    private static func message(forTitle title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+enum OmuxGeminiTitleAdapter {
+    private static let readyIcon = "\u{25C7}"
+    private static let actionRequiredIcon = "\u{270B}"
+    private static let workingIcon = "\u{2726}"
+
+    static func observe(title: String) -> OmuxAIStatusTitleObservation? {
+        if title.contains(actionRequiredIcon) {
+            return observation(title: title, state: .needsInput)
+        }
+        if title.contains(workingIcon) {
+            return observation(title: title, state: .working)
+        }
+        if title.contains(readyIcon) {
+            return observation(title: title, state: .idle)
+        }
+        return nil
+    }
+
+    private static func observation(
+        title: String,
+        state: ControlPlanePaneStatusState
+    ) -> OmuxAIStatusTitleObservation {
+        OmuxAIStatusTitleObservation(
+            adapterID: "gemini",
+            label: "Gemini",
+            state: state,
+            message: message(forTitle: title),
+            source: "plugin.ai-status.gemini.title",
+            confidence: 0.9
+        )
+    }
+
+    private static func message(forTitle title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

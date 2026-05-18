@@ -69,7 +69,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
-    private var aiStatusManagedPaneIDs: Set<PaneID> = []
+    private var aiStatusManagedAdapterByPaneID: [PaneID: String] = [:]
     private var pendingTerminalStateWorkspaceIDs: Set<WorkspaceID> = []
     private var terminalStateChangeUpdateScheduled = false
     private var deliveredTerminalDisplayTitleByPane: [PaneID: String] = [:]
@@ -695,7 +695,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         aiStatusConfiguration = configuration
         if configuration.enabled == false {
-            aiStatusManagedPaneIDs.removeAll()
+            aiStatusManagedAdapterByPaneID.removeAll()
         }
         lock.unlock()
     }
@@ -3331,15 +3331,18 @@ public final class WorkspaceController: @unchecked Sendable {
             return false
         }
 
-        if let state = OmuxCodexTitleStatusMapper.state(forTitle: title) {
-            let progress = paneProgress(forAIStatusState: state)
+        if let observation = OmuxAIStatusTitleObserver.observe(
+            title: title,
+            previousAdapterID: aiStatusManagedAdapterByPaneID[paneID]
+        ) {
+            let progress = paneProgress(forAIStatusState: observation.state)
             guard pane.terminalState.progress != progress else {
-                aiStatusManagedPaneIDs.insert(paneID)
+                aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
                 return false
             }
             pane.terminalState.progress = progress
-            aiStatusManagedPaneIDs.insert(paneID)
-            if state == .idle {
+            aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
+            if observation.state == .idle {
                 handleIdleProgressSetLocked(for: paneID, workspaceIndex: workspaceIndex)
             } else {
                 progressIdleClearTokens.removeValue(forKey: paneID)
@@ -3347,13 +3350,13 @@ public final class WorkspaceController: @unchecked Sendable {
             return true
         }
 
-        guard aiStatusManagedPaneIDs.contains(paneID),
+        guard aiStatusManagedAdapterByPaneID[paneID] != nil,
               pane.terminalState.progress != nil
         else {
             return false
         }
         pane.terminalState.progress = nil
-        aiStatusManagedPaneIDs.remove(paneID)
+        aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
         progressIdleClearTokens.removeValue(forKey: paneID)
         return true
     }

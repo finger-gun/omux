@@ -3870,7 +3870,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "• Codex")
     }
 
-    func testBundledAIStatusMapsCodexTitlesToPaneProgress() throws {
+    func testBundledAIStatusMapsVendorTitlesToPaneProgress() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let controller = WorkspaceController(
@@ -3884,17 +3884,29 @@ final class OmuxAppShellTests: XCTestCase {
         let pane = try XCTUnwrap(workspace.focusedPane)
         let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
+        runtime.emit(.titleChanged("Action Required"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+
         runtime.emit(.titleChanged("⠋ Codex"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
 
-        runtime.emit(.titleChanged("Codex waiting for approval"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("Action Required"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
 
         runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+
+        runtime.emit(.titleChanged("\u{2726} Gemini"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+
+        runtime.emit(.titleChanged("\u{270B} Gemini"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
     }
 
     func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
