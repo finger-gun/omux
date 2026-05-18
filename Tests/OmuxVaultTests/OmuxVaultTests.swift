@@ -204,6 +204,49 @@ struct OmuxVaultTests {
         #expect(list.sessions.first?.modifiedAt == Date(timeIntervalSince1970: 1_778_954_251))
     }
 
+    @Test("Gemini adapter indexes tmp logs array")
+    func geminiAdapterIndexesTmpLogsArray() async throws {
+        let root = try temporaryDirectory()
+        let tmp = root.appendingPathComponent("tmp", isDirectory: true)
+            .appendingPathComponent("omux", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let logs = tmp.appendingPathComponent("logs.json")
+        try """
+        [
+          {
+            "sessionId": "gemini-one",
+            "messageId": 0,
+            "type": "user",
+            "message": "hello gemini",
+            "timestamp": "2026-05-18T12:04:15.729Z"
+          },
+          {
+            "sessionId": "gemini-one",
+            "messageId": 1,
+            "type": "assistant",
+            "message": "hello user",
+            "timestamp": "2026-05-18T12:04:16.729Z"
+          }
+        ]
+        """.write(to: logs, atomically: true, encoding: .utf8)
+
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("vault.sqlite"),
+            configuration: VaultConfiguration(enabled: true, includedAgents: [.gemini]),
+            adapters: [GeminiVaultAdapter(root: root, configuration: VaultConfiguration(enabled: true, includedAgents: [.gemini]))]
+        )
+
+        _ = try await store.reindex()
+        let list = try await store.list()
+        #expect(list.sessions.map(\.id) == ["gemini:gemini-one"])
+        #expect(list.sessions.first?.agent == .gemini)
+        #expect(list.sessions.first?.title == "hello gemini")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(list.sessions.first?.modifiedAt == formatter.date(from: "2026-05-18T12:04:16.729Z"))
+        #expect(try await store.preview(sessionID: "gemini:gemini-one")?.turns.count == 2)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

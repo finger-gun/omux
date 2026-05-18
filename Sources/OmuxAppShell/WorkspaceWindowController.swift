@@ -457,11 +457,12 @@ final class WorkspaceShellViewController: NSViewController {
                 _ = self?.controller.focus(paneID: paneID)
             }
         )
+        let availableAgents = availableVaultAgents.union(vaultSessions.map(\.agent))
         vaultSidebarView.render(
             sessions: scopedVaultSessions,
             searchQuery: vaultSearchQuery,
             selectedAgent: vaultAgentFilter,
-            availableAgents: availableVaultAgents,
+            availableAgents: availableAgents,
             workspaceFilter: vaultWorkspaceFilter,
             workspaceFilterItems: workspaceFilterItems,
             isLoading: vaultIsLoading,
@@ -489,6 +490,9 @@ final class WorkspaceShellViewController: NSViewController {
                 self?.resumeVaultSession(sessionID)
             }
         )
+        if vaultConfiguration.enabled && isVaultSidebarVisible && availableVaultAgents.isEmpty && vaultIsLoading == false {
+            reloadAvailableVaultAgents()
+        }
         if vaultConfiguration.enabled && isVaultSidebarVisible && vaultSessions.isEmpty && vaultIsLoading == false {
             reloadVaultSessions(reset: true)
         } else if vaultConfiguration.enabled && isVaultSidebarVisible && scopedVaultSessions.isEmpty && vaultHasMore && vaultIsLoading == false {
@@ -709,6 +713,7 @@ final class WorkspaceShellViewController: NSViewController {
             vaultResultOffset = 0
             vaultHasMore = true
             vaultIsLoading = true
+            availableVaultAgents.removeAll()
             reloadAvailableVaultAgents()
             if let workspace = currentWorkspace {
                 update(workspace: workspace)
@@ -3160,6 +3165,19 @@ private final class VaultWorkspaceFilterBox {
 }
 
 @MainActor
+private final class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
+private extension NSColor {
+    var omuxIsDark: Bool {
+        let color = usingColorSpace(.sRGB) ?? usingColorSpace(.deviceRGB) ?? self
+        let luminance = 0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+        return luminance < 0.5
+    }
+}
+
+@MainActor
 private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     struct WorkspaceFilterItem {
         let title: String
@@ -3174,7 +3192,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private let agentPopup = NSPopUpButton()
     private let workspacePopup = NSPopUpButton()
     private let scrollView = NSScrollView()
-    private let stack = NSStackView()
+    private let stack = FlippedStackView()
     private let statusLabel = NSTextField(labelWithString: "")
     private var onToggle: (() -> Void)?
     private var onRefresh: (() -> Void)?
@@ -3184,6 +3202,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private var onNeedsMore: (() -> Void)?
     private var onResume: ((String) -> Void)?
     private var currentTheme = WorkspaceShellTheme.defaultTheme
+    private var isSearchFocused = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3213,6 +3232,14 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
 
         searchField.placeholderString = "Search"
+        searchField.font = .systemFont(ofSize: 14, weight: .regular)
+        searchField.isBordered = false
+        searchField.isBezeled = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
+        searchField.wantsLayer = true
+        searchField.layer?.cornerRadius = 14
+        searchField.layer?.borderWidth = 1
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
@@ -3323,8 +3350,48 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         workspacePopup.contentTintColor = theme.shell.textMuted
         agentPopup.contentTintColor = theme.shell.textMuted
         statusLabel.textColor = theme.shell.textMuted
+        applySearchFieldTheme()
+        applyFilterMenuTheme()
         for case let row as VaultSessionRowButton in stack.arrangedSubviews {
             row.apply(theme: theme)
+        }
+    }
+
+    private func applySearchFieldTheme() {
+        let colors = currentTheme.shell
+        searchField.textColor = colors.textPrimary
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "Search",
+            attributes: [
+                .foregroundColor: colors.textMuted,
+                .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+            ]
+        )
+        searchField.layer?.backgroundColor = colors.paneCardBackground.cgColor
+        searchField.layer?.borderColor = (isSearchFocused ? colors.accent : colors.subduedBorder).cgColor
+    }
+
+    private func applyFilterMenuTheme() {
+        let colors = currentTheme.shell
+        let appearance = NSAppearance(named: colors.sidebarBackground.omuxIsDark ? .darkAqua : .aqua)
+        let itemAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: colors.textPrimary,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
+        let selectedAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: colors.textMuted,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
+        for popup in [workspacePopup, agentPopup] {
+            popup.appearance = appearance
+            popup.menu?.appearance = appearance
+            popup.contentTintColor = colors.textMuted
+            if let title = popup.titleOfSelectedItem {
+                popup.attributedTitle = NSAttributedString(string: title, attributes: selectedAttributes)
+            }
+            popup.itemArray.forEach { item in
+                item.attributedTitle = NSAttributedString(string: item.title, attributes: itemAttributes)
+            }
         }
     }
 
@@ -3480,6 +3547,18 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
 }
 
 extension WorkspaceVaultSidebarView {
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        _ = obj
+        isSearchFocused = true
+        applySearchFieldTheme()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        _ = obj
+        isSearchFocused = false
+        applySearchFieldTheme()
+    }
+
     func controlTextDidChange(_ obj: Notification) {
         _ = obj
         onSearchChanged?(searchField.stringValue)

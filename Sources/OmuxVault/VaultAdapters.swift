@@ -15,6 +15,7 @@ public enum VaultAdapterFactory {
             JSONLDirectoryVaultAdapter(kind: .pi, root: configuration.home(for: .pi), sourceKind: "pi_jsonl", globHint: nil, configuration: configuration),
             JSONLDirectoryVaultAdapter(kind: .rovodev, root: configuration.home(for: .rovodev), sourceKind: "rovodev_jsonl", globHint: nil, configuration: configuration),
             CopilotVaultAdapter(root: configuration.home(for: .copilot), configuration: configuration),
+            GeminiVaultAdapter(root: configuration.home(for: .gemini), configuration: configuration),
         ]
     }
 }
@@ -167,6 +168,102 @@ public struct CopilotVaultAdapter: VaultAgentAdapter {
     }
 }
 
+public struct GeminiVaultAdapter: VaultAgentAdapter {
+    public let kind: VaultAgentKind = .gemini
+    public let root: URL
+    private let configuration: VaultConfiguration
+
+    public init(root: URL, configuration: VaultConfiguration) {
+        self.root = root
+        self.configuration = configuration
+    }
+
+    public func discoverSessions() async throws -> [VaultIndexedSession] {
+        let tmpRoot = root.appendingPathComponent("tmp", isDirectory: true)
+        let files = SessionFileScanner.files(under: tmpRoot, extensions: ["json"])
+            .filter { $0.lastPathComponent == "logs.json" }
+        return mergePreferNewest(files.flatMap { parseLogsFile($0) })
+    }
+
+    private func parseLogsFile(_ file: URL) -> [VaultIndexedSession] {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let data = try? Data(contentsOf: file),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else {
+            return []
+        }
+
+        let fallbackModified = attributes[.modificationDate] as? Date ?? Date()
+        let projectName = file.deletingLastPathComponent().lastPathComponent
+        let workingDirectory = inferredProjectPath(named: projectName)
+
+        let grouped = Dictionary(grouping: rows) { row in
+            firstString(row, keys: ["sessionId", "session_id", "id"]) ?? UUID().uuidString
+        }
+
+        return grouped.compactMap { sessionID, sessionRows in
+            let sortedRows = sessionRows.sorted { lhs, rhs in
+                let left = firstInt(lhs, keys: ["messageId", "message_id", "ordinal"]) ?? 0
+                let right = firstInt(rhs, keys: ["messageId", "message_id", "ordinal"]) ?? 0
+                return left < right
+            }
+
+            var latest: Date?
+            let normalizedSessionID = "\(kind.rawValue):\(sessionID)"
+            let turns = sortedRows.enumerated().compactMap { index, row -> VaultTranscriptTurn? in
+                guard let text = text(from: row) else {
+                    return nil
+                }
+                let modified = firstDate(row, keys: ["timestamp", "createdAt", "updatedAt"]) ?? fallbackModified
+                latest = latest.map { max($0, modified) } ?? modified
+                return VaultTranscriptTurn(
+                    sessionID: normalizedSessionID,
+                    turnID: firstString(row, keys: ["messageId", "message_id", "id"]) ?? "\(index)",
+                    role: firstString(row, keys: ["type", "role", "author"]) ?? "message",
+                    text: text,
+                    ordinal: index,
+                    modifiedAt: modified
+                )
+            }
+
+            guard turns.isEmpty == false else {
+                return nil
+            }
+
+            let title = turns.first(where: { $0.role.lowercased().contains("user") })?.text.firstLine(maxLength: 80)
+                ?? turns.first?.text.firstLine(maxLength: 80)
+                ?? sessionID
+            let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
+            let summary = VaultSessionSummary(
+                id: normalizedSessionID,
+                agent: kind,
+                sourceKind: "gemini_logs",
+                sourcePath: file.path,
+                title: title,
+                workingDirectory: workingDirectory,
+                modifiedAt: latest ?? fallbackModified,
+                previewAvailable: true,
+                resumeAvailable: resume != nil
+            )
+            return VaultIndexedSession(
+                summary: summary,
+                resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: workingDirectory, resumeCommand: resume),
+                turns: turns
+            )
+        }
+    }
+
+    private func inferredProjectPath(named projectName: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent("projects", isDirectory: true).appendingPathComponent(projectName, isDirectory: true),
+            home.appendingPathComponent("Developer", isDirectory: true).appendingPathComponent(projectName, isDirectory: true),
+            home.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent(projectName, isDirectory: true),
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }?.path
+    }
+}
+
 public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
     public let kind: VaultAgentKind
     public let root: URL
@@ -314,6 +411,44 @@ private func firstString(_ object: [String: Any], keys: [String]) -> String? {
         }
     }
     return nil
+}
+
+private func firstInt(_ object: [String: Any], keys: [String]) -> Int? {
+    for key in keys {
+        if let value = object[key] as? Int {
+            return value
+        }
+        if let value = object[key] as? NSNumber {
+            return value.intValue
+        }
+        if let value = object[key] as? String, let intValue = Int(value) {
+            return intValue
+        }
+    }
+    return nil
+}
+
+private func firstDate(_ object: [String: Any], keys: [String]) -> Date? {
+    for key in keys {
+        guard let value = object[key] as? String else {
+            continue
+        }
+        if let date = parseISO8601Date(value) {
+            return date
+        }
+    }
+    return nil
+}
+
+private func parseISO8601Date(_ value: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = fractional.date(from: value) {
+        return date
+    }
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    return plain.date(from: value)
 }
 
 private func text(from object: [String: Any]) -> String? {

@@ -357,7 +357,7 @@ public struct OmuxConfigVault: Equatable, Sendable {
         }
     }
 
-    public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+    public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
 
     public let enabled: Bool
     public let previewEnabled: Bool
@@ -563,7 +563,7 @@ public enum OmuxConfigTemplate {
         enabled = true
         preview_enabled = true
         index_on_launch = true
-        included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+        included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
         excluded_paths = []
         max_preview_bytes = 1048576
 
@@ -1579,7 +1579,7 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let supportedVaultAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot"]
+        let supportedVaultAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
         let vaultAllowedKeys: Set<String> = [
             "enabled",
             "preview_enabled",

@@ -8,6 +8,7 @@ public enum VaultAgentKind: String, Codable, CaseIterable, Sendable {
     case pi
     case rovodev
     case copilot
+    case gemini
     case custom
 }
 
@@ -273,6 +274,8 @@ public struct VaultConfiguration: Equatable, Sendable {
                 return resolveHome(override ?? env)
             }
             return resolveHome(override ?? "~/.copilot")
+        case .gemini:
+            return resolveHome(override ?? "~/.gemini")
         case .custom:
             return resolveHome(override ?? "~")
         }
@@ -297,6 +300,8 @@ public struct VaultConfiguration: Equatable, Sendable {
             return "rovodev --resume {session_id}"
         case .copilot:
             return "copilot --resume {session_id}"
+        case .gemini:
+            return "gemini --resume {session_id}"
         case .custom:
             return nil
         }
