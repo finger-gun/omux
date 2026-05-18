@@ -75,6 +75,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             persistedScrollback: preparedConfiguration.persistedScrollback,
             paneConfiguration: preparedConfiguration.panes,
             markdownPreviewConfiguration: preparedConfiguration.markdownPreview,
+            aiStatusConfiguration: preparedConfiguration.aiStatus,
             scrollbackReplayStore: ScrollbackReplayStore(directoryURL: Self.appReplayDirectory()),
             scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
         )
@@ -158,6 +159,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onMarkdownPreviewConfigurationChange = { [weak self] configuration in
                 self?.workspaceController.updateMarkdownPreviewConfiguration(configuration)
+            }
+            configurationCoordinator.onAIStatusConfigurationChange = { [weak self] configuration in
+                self?.workspaceController.updateAIStatusConfiguration(configuration)
             }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
                 self?.applyKeyBindings(registry)

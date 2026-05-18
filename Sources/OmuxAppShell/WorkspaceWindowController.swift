@@ -3157,6 +3157,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private let refreshButton = NSButton()
     private let collapseButton = NSButton()
     private let searchField = NSSearchField()
+    private let filterRow = NSStackView()
     private let agentPopup = NSPopUpButton()
     private let workspacePopup = NSPopUpButton()
     private let scrollView = NSScrollView()
@@ -3202,6 +3203,12 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        filterRow.orientation = .horizontal
+        filterRow.alignment = .centerY
+        filterRow.distribution = .fillEqually
+        filterRow.spacing = 6
+        filterRow.translatesAutoresizingMaskIntoConstraints = false
+
         agentPopup.isBordered = false
         agentPopup.target = self
         agentPopup.action = #selector(agentFilterChanged)
@@ -3238,10 +3245,11 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         header.addArrangedSubview(NSView())
         header.addArrangedSubview(refreshButton)
         header.addArrangedSubview(collapseButton)
+        filterRow.addArrangedSubview(workspacePopup)
+        filterRow.addArrangedSubview(agentPopup)
         addSubview(header)
         addSubview(searchField)
-        addSubview(workspacePopup)
-        addSubview(agentPopup)
+        addSubview(filterRow)
         addSubview(scrollView)
         addSubview(statusLabel)
 
@@ -3263,13 +3271,10 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             searchField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             searchField.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            workspacePopup.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
-            workspacePopup.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            workspacePopup.trailingAnchor.constraint(lessThanOrEqualTo: header.trailingAnchor),
-            agentPopup.topAnchor.constraint(equalTo: workspacePopup.bottomAnchor, constant: 4),
-            agentPopup.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            agentPopup.trailingAnchor.constraint(lessThanOrEqualTo: header.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: agentPopup.bottomAnchor, constant: 8),
+            filterRow.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
+            filterRow.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            filterRow.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -6),
@@ -3366,6 +3371,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             statusLabel.stringValue = sessions.isEmpty ? "" : "\(sessions.count) sessions"
         }
         apply(theme: theme)
+        pinScrollToTopIfContentFits()
     }
 
     private static func visibleSessions(_ sessions: [VaultSessionSummary]) -> [VaultSessionSummary] {
@@ -3443,6 +3449,18 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         let contentHeight = stack.frame.height
         if contentHeight - visibleMaxY < 180 {
             onNeedsMore?()
+        }
+    }
+
+    private func pinScrollToTopIfContentFits() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.stack.layoutSubtreeIfNeeded()
+            let contentHeight = self.stack.frame.height
+            let visibleHeight = self.scrollView.contentView.bounds.height
+            guard contentHeight <= visibleHeight + 1 else { return }
+            self.scrollView.contentView.scroll(to: .zero)
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
         }
     }
 }

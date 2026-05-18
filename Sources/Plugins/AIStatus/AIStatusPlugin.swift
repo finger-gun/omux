@@ -196,6 +196,23 @@ public struct OmuxAIStatusPlugin {
     }
 
     private func codexState(forTitle title: String) -> ControlPlanePaneStatusState {
+        OmuxCodexTitleStatusMapper.state(forTitle: title) ?? .working
+    }
+
+    private func codexMessage(forTitle title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public static let usage = "usage: omux ai-status codex|clear-stale ..."
+    public static let codexUsage = "usage: omux ai-status codex title|clear|wrap ..."
+    public static let codexTitleUsage = "usage: omux ai-status codex title --pane <id>|--session <id>|--focused --title <raw title>"
+    public static let codexClearUsage = "usage: omux ai-status codex clear --pane <id>|--session <id>|--focused"
+    public static let codexWrapUsage = "usage: omux ai-status codex wrap --pane <id>|--session <id>|--focused -- <command> [args...]"
+}
+
+public enum OmuxCodexTitleStatusMapper {
+    public static func state(forTitle title: String) -> ControlPlanePaneStatusState? {
         let normalized = title.lowercased()
         if normalized.contains("approval")
             || normalized.contains("permission")
@@ -210,17 +227,13 @@ public struct OmuxAIStatusPlugin {
         if normalized.contains("idle") || normalized.contains("done") || normalized.contains("finished") {
             return .idle
         }
+        guard isCodexTitle(normalized) else {
+            return nil
+        }
         return .working
     }
 
-    private func codexMessage(forTitle title: String) -> String? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    private static func isCodexTitle(_ normalized: String) -> Bool {
+        normalized.contains("codex")
     }
-
-    public static let usage = "usage: omux ai-status codex|clear-stale ..."
-    public static let codexUsage = "usage: omux ai-status codex title|clear|wrap ..."
-    public static let codexTitleUsage = "usage: omux ai-status codex title --pane <id>|--session <id>|--focused --title <raw title>"
-    public static let codexClearUsage = "usage: omux ai-status codex clear --pane <id>|--session <id>|--focused"
-    public static let codexWrapUsage = "usage: omux ai-status codex wrap --pane <id>|--session <id>|--focused -- <command> [args...]"
 }

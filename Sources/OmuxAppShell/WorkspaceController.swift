@@ -4,6 +4,7 @@ import OmuxConfig
 import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
+import OmuxAIStatusPlugin
 import OmuxMarkdownPreviewPlugin
 import OmuxTerminalBridge
 
@@ -53,6 +54,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let hookRunner: ExternalHookRunner
     private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
+    private var aiStatusConfiguration: OmuxConfigPlugins.AIStatus
     private var paneConfiguration: OmuxConfigUI.Panes
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
@@ -67,6 +69,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
+    private var aiStatusManagedPaneIDs: Set<PaneID> = []
     private var pendingTerminalStateWorkspaceIDs: Set<WorkspaceID> = []
     private var terminalStateChangeUpdateScheduled = false
     private var deliveredTerminalDisplayTitleByPane: [PaneID: String] = [:]
@@ -106,6 +109,7 @@ public final class WorkspaceController: @unchecked Sendable {
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
         paneConfiguration: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
+        aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
         progressIdleClearDelay: TimeInterval = 3,
@@ -117,6 +121,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.persistedScrollback = persistedScrollback
         self.paneConfiguration = paneConfiguration
         self.markdownPreviewConfiguration = markdownPreviewConfiguration
+        self.aiStatusConfiguration = aiStatusConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
@@ -683,6 +688,15 @@ public final class WorkspaceController: @unchecked Sendable {
     public func updateMarkdownPreviewConfiguration(_ configuration: OmuxConfigPlugins.MarkdownPreview) {
         lock.lock()
         markdownPreviewConfiguration = configuration
+        lock.unlock()
+    }
+
+    public func updateAIStatusConfiguration(_ configuration: OmuxConfigPlugins.AIStatus) {
+        lock.lock()
+        aiStatusConfiguration = configuration
+        if configuration.enabled == false {
+            aiStatusManagedPaneIDs.removeAll()
+        }
         lock.unlock()
     }
 
@@ -2975,6 +2989,14 @@ public final class WorkspaceController: @unchecked Sendable {
                 if pane.terminalState.reportedTitle != title {
                     pane.terminalState.reportedTitle = title
                 }
+                if applyAIStatusTitleObservationLocked(
+                    title: title,
+                    paneID: event.paneID,
+                    workspaceIndex: workspaceIndex,
+                    pane: &pane
+                ) {
+                    shouldUpdateWorkspace = true
+                }
                 guard let displayTitle,
                       deliveredTerminalDisplayTitleByPane[event.paneID] != displayTitle
                 else {
@@ -3297,6 +3319,60 @@ public final class WorkspaceController: @unchecked Sendable {
             "message": message.map(OmuxValue.string) ?? .null,
             "source": .string(source),
         ])
+    }
+
+    private func applyAIStatusTitleObservationLocked(
+        title: String,
+        paneID: PaneID,
+        workspaceIndex: Int,
+        pane: inout Pane
+    ) -> Bool {
+        guard aiStatusConfiguration.enabled else {
+            return false
+        }
+
+        if let state = OmuxCodexTitleStatusMapper.state(forTitle: title) {
+            let progress = paneProgress(forAIStatusState: state)
+            guard pane.terminalState.progress != progress else {
+                aiStatusManagedPaneIDs.insert(paneID)
+                return false
+            }
+            pane.terminalState.progress = progress
+            aiStatusManagedPaneIDs.insert(paneID)
+            if state == .idle {
+                handleIdleProgressSetLocked(for: paneID, workspaceIndex: workspaceIndex)
+            } else {
+                progressIdleClearTokens.removeValue(forKey: paneID)
+            }
+            return true
+        }
+
+        guard aiStatusManagedPaneIDs.contains(paneID),
+              pane.terminalState.progress != nil
+        else {
+            return false
+        }
+        pane.terminalState.progress = nil
+        aiStatusManagedPaneIDs.remove(paneID)
+        progressIdleClearTokens.removeValue(forKey: paneID)
+        return true
+    }
+
+    private func paneProgress(forAIStatusState state: ControlPlanePaneStatusState) -> PaneProgress? {
+        switch state {
+        case .working:
+            return PaneProgress(state: .active)
+        case .indeterminate:
+            return PaneProgress(state: .indeterminate)
+        case .error:
+            return PaneProgress(state: .error)
+        case .needsInput:
+            return PaneProgress(state: .needsInput)
+        case .idle:
+            return PaneProgress(state: .paused)
+        case .clear:
+            return nil
+        }
     }
 
     private func uniqueWorkspaceDisplayName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {

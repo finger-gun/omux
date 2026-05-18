@@ -3870,6 +3870,33 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "• Codex")
     }
 
+    func testBundledAIStatusMapsCodexTitlesToPaneProgress() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.titleChanged("⠋ Codex"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+
+        runtime.emit(.titleChanged("Codex waiting for approval"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+
+        runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+    }
+
     func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
