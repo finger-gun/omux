@@ -742,7 +742,9 @@ struct OmuxConfigTests {
         #expect(result.config.vault.includedAgents == ["codex", "copilot"])
         #expect(result.config.vault.excludedPaths == ["~/secret"])
         #expect(result.config.vault.maxPreviewBytes == 2048)
+        #expect(result.config.vault.agents["copilot"]?.enabled == true)
         #expect(result.config.vault.agents["copilot"]?.home == "~/.copilot-test")
+        #expect(result.config.vault.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
     }
 }
 

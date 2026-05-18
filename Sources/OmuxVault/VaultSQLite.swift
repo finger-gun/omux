@@ -60,6 +60,17 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
         }
     }
 
+    func inTransaction(_ body: () throws -> Void) throws {
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try body()
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     func query<T>(_ sql: String, bindings: [SQLiteBinding] = [], row: (OpaquePointer) throws -> T) throws -> [T] {
         let statement = try prepare(sql, bindings: bindings)
         defer { sqlite3_finalize(statement) }
@@ -83,6 +94,12 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
         else {
             throw VaultSQLiteError.prepare(String(cString: sqlite3_errmsg(db)))
         }
+        var shouldFinalizeOnError = true
+        defer {
+            if shouldFinalizeOnError {
+                sqlite3_finalize(statement)
+            }
+        }
         for (index, binding) in bindings.enumerated() {
             let result: Int32
             let position = Int32(index + 1)
@@ -100,6 +117,7 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
                 throw VaultSQLiteError.bind(String(cString: sqlite3_errmsg(db)))
             }
         }
+        shouldFinalizeOnError = false
         return statement
     }
 

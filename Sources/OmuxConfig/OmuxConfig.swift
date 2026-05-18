@@ -1692,10 +1692,18 @@ public struct OmuxConfigLoader {
                         diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).home must be a string.", filePath: sourceURL.path, line: entry.line))
                         continue
                     }
+                    guard value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).home must be a non-empty string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
                     home = value
                 case "resume_command":
                     guard let value = entry.value.stringValue else {
                         diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    guard value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a non-empty string.", filePath: sourceURL.path, line: entry.line))
                         continue
                     }
                     resumeCommand = value

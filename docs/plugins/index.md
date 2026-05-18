@@ -4,9 +4,10 @@ This index lists bundled plugins, highlights useful registry-hosted plugins, and
 
 ## Bundled plugins
 
-| Plugin | Command | Default | What it does |
-| --- | --- | --- | --- |
-| [Markdown Preview](./markdown-preview.md) | `omux markdown-preview` | Enabled | Opens GitHub-flavored Markdown previews in extension panes, with watch mode and Command-click activation for local Markdown paths. |
+| Plugin | Command | What it does |
+| --- | --- | --- |
+| [Markdown Preview](./markdown-preview.md) | `omux markdown-preview` | Opens GitHub-flavored Markdown previews in extension panes, with watch mode and Command-click activation for local Markdown paths. |
+| AI Status | `omux ai-status` | Bundled multi-vendor AI/tool status host. Starts with a Codex adapter and leaves future adapters behind the same command. |
 
 ## Managing plugins
 
@@ -28,12 +29,6 @@ omux plugins uninstall <plugin-id>
 ```
 
 OpenMUX uses `https://github.com/finger-gun/omux-plugins` by default and accepts `--registry <url>` for custom registries.
-
-## Bundled plugins
-
-| Plugin | Command | What it does |
-| --- | --- | --- |
-| AI Status | `omux ai-status` | Bundled multi-vendor AI/tool status host. Starts with a Codex adapter and leaves future adapters behind the same command. |
 
 ## Registry-hosted plugins
 

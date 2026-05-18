@@ -66,6 +66,7 @@ final class OpenMUXConfigurationCoordinator {
     var onIconConfigurationChange: ((OmuxConfigUI.Icons) -> Void)?
     var onMarkdownPreviewConfigurationChange: ((OmuxConfigPlugins.MarkdownPreview) -> Void)?
     var onAIStatusConfigurationChange: ((OmuxConfigPlugins.AIStatus) -> Void)?
+    var onVaultConfigurationChange: ((VaultConfiguration) -> Void)?
     var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
 
@@ -80,6 +81,7 @@ final class OpenMUXConfigurationCoordinator {
     private var currentIcons: OmuxConfigUI.Icons
     private var currentMarkdownPreview: OmuxConfigPlugins.MarkdownPreview
     private var currentAIStatus: OmuxConfigPlugins.AIStatus
+    private var currentVault: VaultConfiguration
     private var currentKeyBindingRegistry: OpenMUXKeyBindingRegistry
     private var currentCompiledConfigURL: URL?
     private var currentCompiledHash: String?
@@ -99,6 +101,7 @@ final class OpenMUXConfigurationCoordinator {
         self.currentIcons = initialState.icons
         self.currentMarkdownPreview = initialState.markdownPreview
         self.currentAIStatus = initialState.aiStatus
+        self.currentVault = initialState.vault
         self.currentKeyBindingRegistry = initialState.keyBindingRegistry
         self.currentCompiledConfigURL = initialState.compiledConfigURL
         self.currentCompiledHash = initialState.compiledHash
@@ -326,6 +329,7 @@ final class OpenMUXConfigurationCoordinator {
                     icons: currentIcons,
                     markdownPreview: currentMarkdownPreview,
                     aiStatus: currentAIStatus,
+                    vault: currentVault,
                     keyBindingRegistry: currentKeyBindingRegistry
                 )
             }
@@ -336,6 +340,7 @@ final class OpenMUXConfigurationCoordinator {
             let icons = evaluation.config.ui.icons
             let markdownPreview = evaluation.config.plugins.markdownPreview
             let aiStatus = evaluation.config.plugins.aiStatus
+            let vault = VaultConfiguration(config: evaluation.config.vault)
             let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
             let shouldApply = shouldRefresh
                 || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
@@ -344,6 +349,7 @@ final class OpenMUXConfigurationCoordinator {
                 || previousState.icons != icons
                 || previousState.markdownPreview != markdownPreview
                 || previousState.aiStatus != aiStatus
+                || previousState.vault != vault
                 || previousState.keyBindingRegistry != keyBindingRegistry
             let fileURL: URL
             var diagnostics = evaluation.diagnostics
@@ -365,6 +371,7 @@ final class OpenMUXConfigurationCoordinator {
                 currentIcons = icons
                 currentMarkdownPreview = markdownPreview
                 currentAIStatus = aiStatus
+                currentVault = vault
                 currentKeyBindingRegistry = keyBindingRegistry
                 currentCompiledConfigURL = fileURL
                 currentCompiledHash = output.hash
@@ -378,6 +385,7 @@ final class OpenMUXConfigurationCoordinator {
                 icons: icons,
                 markdownPreview: markdownPreview,
                 aiStatus: aiStatus,
+                vault: vault,
                 keyBindingRegistry: keyBindingRegistry,
                 diagnostics: diagnostics
             )
@@ -406,6 +414,7 @@ final class OpenMUXConfigurationCoordinator {
             icons: nil,
             markdownPreview: nil,
             aiStatus: nil,
+            vault: nil,
             keyBindingRegistry: nil,
             diagnostics: diagnostics
         )
@@ -419,6 +428,7 @@ final class OpenMUXConfigurationCoordinator {
         icons: OmuxConfigUI.Icons?,
         markdownPreview: OmuxConfigPlugins.MarkdownPreview?,
         aiStatus: OmuxConfigPlugins.AIStatus?,
+        vault: VaultConfiguration?,
         keyBindingRegistry: OpenMUXKeyBindingRegistry?,
         diagnostics: [OmuxConfigDiagnostic]
     ) {
@@ -442,6 +452,9 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let aiStatus {
             onAIStatusConfigurationChange?(aiStatus)
+        }
+        if let vault {
+            onVaultConfigurationChange?(vault)
         }
         if let keyBindingRegistry {
             OpenMUXShortcutClassifier.updateKeyBindings(keyBindingRegistry)

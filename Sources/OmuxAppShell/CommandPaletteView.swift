@@ -294,6 +294,9 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     }
 
     private func resetSubPaletteStateForPresentation() {
+        if let topLevelResultProvider {
+            resultProvider = topLevelResultProvider
+        }
         topLevelResultProvider = nil
         subPaletteMode = .none
         subPaletteQueryChangeHandler = nil
@@ -439,6 +442,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
 
         if subPaletteMode.isActive {
             subPaletteCommitHandler?(result.id)
+            resetSubPaletteStateForPresentation()
             dismissAndRestoreFocus()
             return
         }

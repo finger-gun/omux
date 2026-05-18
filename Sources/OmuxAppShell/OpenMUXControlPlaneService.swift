@@ -4,6 +4,14 @@ import OmuxConfig
 import OmuxCore
 import OmuxVault
 
+private enum VaultControlPlaneError: Error, CustomStringConvertible {
+    case unavailable
+
+    var description: String {
+        "vault store unavailable"
+    }
+}
+
 final class OpenMUXControlPlaneService: @unchecked Sendable {
     private final class VaultAwaitBox<T>: @unchecked Sendable {
         var result: Result<T, Error>?
@@ -134,7 +142,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     private let controller: WorkspaceController
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let extensionPaneActionService: ExtensionPaneActionService
-    private let vaultStore: VaultStore
+    private let vaultStore: VaultStore?
     private let server: LocalControlServer
     private let terminalEventBroadcaster = TerminalEventBroadcaster()
     private let vaultWaiter = VaultWaiter()
@@ -149,10 +157,19 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
         self.controller = controller
         self.configurationCoordinator = configurationCoordinator
         self.extensionPaneActionService = extensionPaneActionService ?? ExtensionPaneActionService(controller: controller)
-        self.vaultStore = vaultStore ?? (try! VaultStore(
-            databaseURL: FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-control-\(UUID().uuidString).sqlite"),
-            configuration: VaultConfiguration(enabled: false)
-        ))
+        if let vaultStore {
+            self.vaultStore = vaultStore
+        } else {
+            do {
+                self.vaultStore = try VaultStore(
+                    databaseURL: FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-control-\(UUID().uuidString).sqlite"),
+                    configuration: VaultConfiguration(enabled: false)
+                )
+            } catch {
+                fputs("error: failed to initialize disabled Vault control-plane store: \(error)\n", stderr)
+                self.vaultStore = nil
+            }
+        }
         self.server = LocalControlServer(socketPath: socketPath)
     }
 
@@ -617,7 +634,10 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     }
 
     private func awaitVault<T>(_ operation: @escaping @Sendable (VaultStore) async throws -> T) throws -> T {
-        try vaultWaiter.wait(store: vaultStore, operation: operation)
+        guard let vaultStore else {
+            throw VaultControlPlaneError.unavailable
+        }
+        return try vaultWaiter.wait(store: vaultStore, operation: operation)
     }
 
     @MainActor

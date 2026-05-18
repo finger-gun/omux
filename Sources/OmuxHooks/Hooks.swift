@@ -447,6 +447,8 @@ public final class ExternalHookRunner {
     private let executionMode: HookExecutionMode
     private let executionQueue = DispatchQueue(label: "dev.fingergun.omux.hooks")
     private let encoder = JSONEncoder()
+    private let pluginDescriptorLock = NSLock()
+    private var cachedPluginDescriptors: [HookDescriptor]?
 
     public init(
         registry: HookRegistry = HookRegistry(),
@@ -469,11 +471,23 @@ public final class ExternalHookRunner {
         registry
     }
 
+    public func refreshPluginDescriptors() {
+        let descriptors = PluginHookSubscriptionDiscovery.descriptors(in: pluginsDirectoryURL)
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = descriptors
+        pluginDescriptorLock.unlock()
+    }
+
+    public func invalidatePluginDescriptors() {
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = nil
+        pluginDescriptorLock.unlock()
+    }
+
     public func emit(_ invocation: HookInvocation) throws {
+        let pluginDescriptors = cachedPluginHookDescriptors()
         let descriptors = registry.matchingDescriptors(for: invocation)
-            + PluginHookSubscriptionDiscovery
-                .descriptors(in: pluginsDirectoryURL)
-                .filter { $0.matches(invocation) }
+            + pluginDescriptors.filter { $0.matches(invocation) }
         guard descriptors.isEmpty == false else {
             return
         }
@@ -492,6 +506,21 @@ public final class ExternalHookRunner {
                 )
             }
         }
+    }
+
+    private func cachedPluginHookDescriptors() -> [HookDescriptor] {
+        pluginDescriptorLock.lock()
+        if let cachedPluginDescriptors {
+            pluginDescriptorLock.unlock()
+            return cachedPluginDescriptors
+        }
+        pluginDescriptorLock.unlock()
+
+        let descriptors = PluginHookSubscriptionDiscovery.descriptors(in: pluginsDirectoryURL)
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = descriptors
+        pluginDescriptorLock.unlock()
+        return descriptors
     }
 
     private func run(descriptors: [HookDescriptor], payload: Data) {

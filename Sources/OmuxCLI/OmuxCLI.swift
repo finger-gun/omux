@@ -418,6 +418,12 @@ public struct OmuxCLICommand {
                 writeLine("usage: omux vault resume <session-id> [--focused|--new-tab|--split|--workspace]")
                 return 1
             }
+            let destinationFlags = ["--new-tab", "--split", "--workspace"].filter(rest.contains)
+            guard destinationFlags.count <= 1 else {
+                writeLine("error: vault resume destination flags are mutually exclusive")
+                writeLine("usage: omux vault resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                return 1
+            }
             let destination: VaultResumeDestination
             if rest.contains("--new-tab") {
                 destination = .newPaneTab
@@ -436,7 +442,12 @@ public struct OmuxCLICommand {
             return 0
         case "reindex":
             var params: [String: RPCValue] = [:]
-            if let agentIndex = rest.firstIndex(of: "--agent"), rest.indices.contains(agentIndex + 1) {
+            if let agentIndex = rest.firstIndex(of: "--agent") {
+                guard rest.indices.contains(agentIndex + 1), rest[agentIndex + 1].hasPrefix("-") == false else {
+                    writeLine("error: --agent requires an agent name")
+                    writeLine("usage: omux vault reindex [--agent <agent>]")
+                    return 1
+                }
                 params["agent"] = .string(rest[agentIndex + 1])
             }
             let response = try client.request(method: .vaultReindex, params: params.isEmpty ? nil : .object(params))

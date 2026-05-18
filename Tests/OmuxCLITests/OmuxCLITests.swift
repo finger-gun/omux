@@ -1718,7 +1718,7 @@ final class OmuxCLITests: XCTestCase {
             .split(separator: "\n")
             .map(String.init)
         XCTAssertEqual(marker.count, 2)
-        XCTAssertFalse(marker[0].isEmpty)
+        XCTAssertTrue(marker[0] == "omux" || marker[0].hasSuffix("/omux"))
         XCTAssertEqual(marker[1], "echo-cli")
     }
 

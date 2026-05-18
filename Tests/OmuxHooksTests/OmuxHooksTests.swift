@@ -240,7 +240,7 @@ final class OmuxHooksTests: XCTestCase {
         let executablePath = normalizedPath(executableURL)
         let pluginsPath = normalizedPath(pluginsDirectory)
 
-        XCTAssertEqual(descriptors.count, HookCategory.allCases.count)
+        XCTAssertNotNil(descriptors.first { $0.name == "terminal-title-changed" })
         XCTAssertEqual(matches.count, 1)
         XCTAssertEqual(matches.first?.arguments, ["__omux_hook", "codex", "title"])
         XCTAssertEqual(matches.first?.environment["OMUX_PLUGIN_COMMAND"], "ai-status")

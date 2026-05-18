@@ -49,6 +49,10 @@ The `omux` CLI SHALL expose `omux ai-status hooks setup|uninstall [codex|claude|
 - **WHEN** the user runs `omux ai-status hooks setup codex`
 - **THEN** OpenMUX updates only the Codex hook configuration needed to invoke the OpenMUX `ai-status` relay
 
+#### Scenario: Claude setup follows conservative wrapper path
+- **WHEN** the user runs `omux ai-status hooks setup claude`
+- **THEN** OpenMUX configures Claude integration through wrapper-injected or guided hook setup rather than silently editing Claude-owned settings
+
 #### Scenario: User uninstalls one vendor hook
 - **WHEN** the user runs `omux ai-status hooks uninstall gemini`
 - **THEN** OpenMUX removes only OpenMUX-owned Gemini hook entries and preserves user-authored Gemini settings

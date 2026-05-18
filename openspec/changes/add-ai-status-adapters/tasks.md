@@ -14,10 +14,10 @@
 ## 3. Hook Relay And Vendor Config
 
 - [ ] 3.1 Add `omux ai-status hook --source <vendor> --event <event>` that reads vendor hook JSON from stdin, normalizes it, and reports pane status through the public control plane.
-- [ ] 3.2 Add `omux ai-status hooks setup|uninstall [codex|claude|gemini]` command parsing, diagnostics, dry-run or preview behavior if it fits existing CLI patterns, and explicit target-vendor validation.
+- [ ] 3.2 Add `omux ai-status hooks setup|uninstall [codex|claude|gemini]` command parsing, diagnostics, command-driven setup behavior matching cmux, and explicit target-vendor validation.
 - [ ] 3.3 Implement Codex hook config support for `~/.codex/hooks.json` and any required `~/.codex/config.toml` hooks enablement, with OpenMUX ownership markers and uninstall that removes only OpenMUX-owned entries.
 - [ ] 3.4 Implement Gemini hook config support for `~/.gemini/settings.json`, with OpenMUX ownership markers and uninstall that removes only OpenMUX-owned entries.
-- [ ] 3.5 Decide and implement the Claude hook strategy, likely wrapper-injected settings or guided config depending on the safest fit for the current repo, without silently editing Claude config outside explicit setup.
+- [ ] 3.5 Implement the Claude hook strategy as wrapper-injected or guided configuration, matching cmux's conservative setup shape and avoiding silent edits to Claude-owned settings.
 - [ ] 3.6 Ensure hook relay failures are isolated, produce useful local diagnostics, and do not block terminal sessions, later hooks, or keyboard input delivery.
 
 ## 4. JSONL Wrapper Support

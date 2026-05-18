@@ -93,9 +93,10 @@ public struct OmuxAIStatusPlugin {
         writeLine: (String) -> Void
     ) throws -> Int32 {
         let separatorIndex = arguments.firstIndex(of: "--")
+        let targetArguments = separatorIndex.map { Array(arguments[..<$0]) } ?? arguments
         let commandArguments = separatorIndex.map { Array(arguments[arguments.index(after: $0)...]) } ?? arguments
         guard commandArguments.isEmpty == false,
-              let target = parseTarget(arguments) ?? inferredTarget()
+              let target = parseTarget(targetArguments) ?? inferredTarget()
         else {
             writeLine(Self.codexWrapUsage)
             return 1
@@ -112,11 +113,24 @@ public struct OmuxAIStatusPlugin {
         )
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: commandArguments[0])
-        process.arguments = Array(commandArguments.dropFirst())
-        process.environment = environment
-        try process.run()
-        process.waitUntilExit()
+        do {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = commandArguments
+            process.environment = environment
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            try sendStatus(
+                state: .error,
+                target: target,
+                label: "Codex",
+                message: error.localizedDescription,
+                source: "plugin.ai-status.codex",
+                client: client,
+                writeLine: { _ in }
+            )
+            return 1
+        }
 
         try sendStatus(
             state: process.terminationStatus == 0 ? .idle : .error,

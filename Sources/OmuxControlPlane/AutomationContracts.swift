@@ -159,8 +159,8 @@ public extension VaultSearchRequest {
             query: object["query"]?.stringValue ?? "",
             agents: agents,
             workingDirectory: object["workingDirectory"]?.stringValue ?? object["cwd"]?.stringValue,
-            offset: object["offset"]?.integerValue ?? 0,
-            limit: object["limit"]?.integerValue ?? 50
+            offset: max(0, object["offset"]?.integerValue ?? 0),
+            limit: max(0, object["limit"]?.integerValue ?? 50)
         )
     }
 }

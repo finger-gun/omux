@@ -12,7 +12,7 @@ import OmuxVault
 public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let workspaceController: WorkspaceController
     private let controlPlaneService: OpenMUXControlPlaneService
-    private let vaultStore: VaultStore
+    private let vaultStore: VaultStore?
     private let extensionPaneActionService: ExtensionPaneActionService
     private let configurationCoordinator: OpenMUXConfigurationCoordinator
     private let workspacePersistenceStore: any WorkspacePersistenceStoring
@@ -49,7 +49,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self?.persistWorkspaceLayoutStateNow()
     }
     private let autoCheckUpdate: Bool
-    private let vaultConfiguration: VaultConfiguration
+    private var vaultConfiguration: VaultConfiguration
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
@@ -80,7 +80,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
         )
         self.workspaceController = workspaceController
-        let vaultStore = try! VaultStore(configuration: preparedConfiguration.vault)
+        let vaultStore: VaultStore?
+        do {
+            vaultStore = try VaultStore(configuration: preparedConfiguration.vault)
+        } catch {
+            fputs("error: failed to initialize Vault store; vault disabled for this session. configuration=\(preparedConfiguration.vault), error=\(error)\n", stderr)
+            vaultStore = nil
+        }
         self.vaultStore = vaultStore
         let extensionPaneActionService = ExtensionPaneActionService(controller: workspaceController)
         self.extensionPaneActionService = extensionPaneActionService
@@ -163,6 +169,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             configurationCoordinator.onAIStatusConfigurationChange = { [weak self] configuration in
                 self?.workspaceController.updateAIStatusConfiguration(configuration)
             }
+            configurationCoordinator.onVaultConfigurationChange = { [weak self] configuration in
+                self?.vaultConfiguration = configuration
+            }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
                 self?.applyKeyBindings(registry)
             }
@@ -181,8 +190,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 object: nil
             )
             try controlPlaneService.start()
-            if vaultConfiguration.enabled && vaultConfiguration.indexOnLaunch {
-                let vaultStore = self.vaultStore
+            if vaultConfiguration.enabled && vaultConfiguration.indexOnLaunch, let vaultStore = self.vaultStore {
                 Task.detached {
                     do {
                         let warnings = try await vaultStore.reindex()

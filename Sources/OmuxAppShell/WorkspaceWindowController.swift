@@ -217,6 +217,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultResultOffset = 0
     private var vaultHasMore = true
     private var vaultIsLoading = false
+    private var pendingVaultReset = false
     private var isVaultSidebarVisible = false
     private var vaultWorkspaceFilter: VaultWorkspaceFilter = .current
     private var vaultPaletteSessions: [VaultSessionSummary] = []
@@ -691,6 +692,16 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         if vaultIsLoading {
+            if reset {
+                pendingVaultReset = true
+                vaultSessions = []
+                vaultResultOffset = 0
+                vaultHasMore = true
+                reloadAvailableVaultAgents()
+                if let workspace = currentWorkspace {
+                    update(workspace: workspace)
+                }
+            }
             return
         }
         if reset {
@@ -716,26 +727,34 @@ final class WorkspaceShellViewController: NSViewController {
             offset: offset,
             limit: vaultPageSize
         )
-        Task.detached { [weak self] in
+        Task { [weak self] in
             do {
                 let response = try await vaultStore.search(request)
-                await MainActor.run {
-                    guard let self, self.vaultLoadGeneration == generation else { return }
-                    if offset == 0 {
-                        self.vaultSessions = response.sessions
-                    } else {
-                        let knownIDs = Set(self.vaultSessions.map(\.id))
-                        self.vaultSessions += response.sessions.filter { knownIDs.contains($0.id) == false }
-                    }
-                    self.vaultResultOffset = offset + response.sessions.count
-                    self.vaultHasMore = self.vaultResultOffset < response.totalCount && response.sessions.isEmpty == false
+                guard let self, self.vaultLoadGeneration == generation else { return }
+                if self.pendingVaultReset {
+                    self.pendingVaultReset = false
                     self.vaultIsLoading = false
-                    if let workspace = self.currentWorkspace {
-                        self.update(workspace: workspace)
-                    }
+                    self.reloadVaultSessions(reset: true)
+                    return
+                }
+                if offset == 0 {
+                    self.vaultSessions = response.sessions
+                } else {
+                    let knownIDs = Set(self.vaultSessions.map(\.id))
+                    self.vaultSessions += response.sessions.filter { knownIDs.contains($0.id) == false }
+                }
+                self.vaultResultOffset = offset + response.sessions.count
+                self.vaultHasMore = self.vaultResultOffset < response.totalCount && response.sessions.isEmpty == false
+                self.vaultIsLoading = false
+                if let workspace = self.currentWorkspace {
+                    self.update(workspace: workspace)
                 }
             } catch {
-                Task { @MainActor [weak self] in
+                if let self, self.pendingVaultReset {
+                    self.pendingVaultReset = false
+                    self.vaultIsLoading = false
+                    self.reloadVaultSessions(reset: true)
+                } else {
                     self?.vaultIsLoading = false
                     if let workspace = self?.currentWorkspace {
                         self?.update(workspace: workspace)
@@ -756,7 +775,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
         let generation = UUID()
         vaultAgentLoadGeneration = generation
-        Task.detached { [weak self] in
+        Task { [weak self] in
             var agents = Set<VaultAgentKind>()
             for agent in VaultAgentKind.allCases {
                 do {
@@ -768,12 +787,10 @@ final class WorkspaceShellViewController: NSViewController {
                     fputs("vault agent availability failed for \(agent.rawValue): \(error)\n", stderr)
                 }
             }
-            await MainActor.run {
-                guard let self, self.vaultAgentLoadGeneration == generation else { return }
-                self.availableVaultAgents = agents
-                if let workspace = self.currentWorkspace {
-                    self.update(workspace: workspace)
-                }
+            guard let self, self.vaultAgentLoadGeneration == generation else { return }
+            self.availableVaultAgents = agents
+            if let workspace = self.currentWorkspace {
+                self.update(workspace: workspace)
             }
         }
     }
@@ -808,33 +825,31 @@ final class WorkspaceShellViewController: NSViewController {
         guard let vaultStore else {
             return
         }
-        Task.detached { [weak self] in
+        Task { [weak self] in
             do {
                 guard let snapshot = try await vaultStore.resumeSnapshot(sessionID: sessionID),
                       let command = snapshot.resumeCommand
                 else {
                     return
                 }
-                await MainActor.run {
-                    guard let self else { return }
-                    let connectedPaths = self.currentWorkspace.map { self.vaultConnectedPaths(for: $0) } ?? []
-                    let pathMatches = Self.vaultPathMatches(snapshot.workingDirectory, connectedPaths: connectedPaths)
-                    if pathMatches {
-                        _ = try? self.controller.runCommand(target: .focused, command: command)
-                        return
-                    }
+                guard let self else { return }
+                let connectedPaths = self.currentWorkspace.map { self.vaultConnectedPaths(for: $0) } ?? []
+                let pathMatches = Self.vaultPathMatches(snapshot.workingDirectory, connectedPaths: connectedPaths)
+                if pathMatches {
+                    _ = try? self.controller.runCommand(target: .focused, command: command)
+                    return
+                }
 
-                    switch self.confirmMismatchedVaultResume(workingDirectory: snapshot.workingDirectory) {
-                    case .resumeHere:
+                switch self.confirmMismatchedVaultResume(workingDirectory: snapshot.workingDirectory) {
+                case .resumeHere:
+                    _ = try? self.controller.runCommand(target: .focused, command: command)
+                case .openWorkspace:
+                    if let workingDirectory = snapshot.workingDirectory {
+                        _ = try? self.controller.openWorkspace(at: workingDirectory)
                         _ = try? self.controller.runCommand(target: .focused, command: command)
-                    case .openWorkspace:
-                        if let workingDirectory = snapshot.workingDirectory {
-                            _ = try? self.controller.openWorkspace(at: workingDirectory)
-                            _ = try? self.controller.runCommand(target: .focused, command: command)
-                        }
-                    case .cancel:
-                        return
                     }
+                case .cancel:
+                    return
                 }
             } catch {
                 fputs("vault resume failed: \(error)\n", stderr)
@@ -1453,7 +1468,7 @@ final class WorkspaceShellViewController: NSViewController {
 
         let generation = UUID()
         vaultPaletteLoadGeneration = generation
-        Task.detached { [weak self, weak paletteView] in
+        Task { [weak self, weak paletteView] in
             var sessions: [VaultSessionSummary] = []
             var offset = 0
             var totalCount = Int.max
@@ -1465,19 +1480,17 @@ final class WorkspaceShellViewController: NSViewController {
                     offset += response.sessions.count
                     totalCount = response.totalCount
 
-                    await MainActor.run {
-                        guard let self,
-                              let paletteView,
-                              self.vaultPaletteLoadGeneration == generation
-                        else {
-                            return
-                        }
-                        self.vaultPaletteSessions = sessions
-                        self.vaultPaletteEntries = sessions.enumerated().map { index, session in
-                            VaultPaletteEntry(session: session, searchTexts: self.vaultPaletteSearchTexts(for: session), index: index)
-                        }
-                        paletteView.refreshPresentedResults()
+                    guard let self,
+                          let paletteView,
+                          self.vaultPaletteLoadGeneration == generation
+                    else {
+                        return
                     }
+                    self.vaultPaletteSessions = sessions
+                    self.vaultPaletteEntries = sessions.enumerated().map { index, session in
+                        VaultPaletteEntry(session: session, searchTexts: self.vaultPaletteSearchTexts(for: session), index: index)
+                    }
+                    paletteView.refreshPresentedResults()
 
                     if response.sessions.isEmpty {
                         break
@@ -3473,7 +3486,7 @@ extension WorkspaceVaultSidebarView {
 }
 
 @MainActor
-private final class VaultSessionRowButton: NSView {
+private final class VaultSessionRowButton: NSControl {
     private let session: VaultSessionSummary
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -3485,8 +3498,12 @@ private final class VaultSessionRowButton: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 6
+        focusRingType = .exterior
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(session.title.isEmpty ? session.id : session.title)
 
-        titleLabel.stringValue = session.title
+        let displayTitle = session.title.isEmpty ? session.id : session.title
+        titleLabel.stringValue = displayTitle
         titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
@@ -3521,10 +3538,41 @@ private final class VaultSessionRowButton: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         titleLabel.textColor = theme.shell.textPrimary
         subtitleLabel.textColor = theme.shell.textMuted
+        needsDisplay = true
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        needsDisplay = true
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        needsDisplay = true
+        return true
     }
 
     override func mouseDown(with event: NSEvent) {
         _ = event
+        window?.makeFirstResponder(self)
+        performPress()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 49 {
+            performPress()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        performPress()
+        return true
+    }
+
+    private func performPress() {
         onPress?(session.id)
     }
 }

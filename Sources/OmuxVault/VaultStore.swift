@@ -181,12 +181,14 @@ public actor VaultStore {
     }
 
     public func export(ids: [String]) throws -> Data {
-        let sessions = try ids.compactMap { try session(id: $0) }
-        let snapshots = try Dictionary(uniqueKeysWithValues: ids.compactMap { id -> (String, VaultResumeSnapshot)? in
+        var seenIDs = Set<String>()
+        let uniqueIds = ids.filter { seenIDs.insert($0).inserted }
+        let sessions = try uniqueIds.compactMap { try session(id: $0) }
+        let snapshots = try Dictionary(uniqueKeysWithValues: uniqueIds.compactMap { id -> (String, VaultResumeSnapshot)? in
             guard let snapshot = try resumeSnapshot(sessionID: id) else { return nil }
             return (id, snapshot)
         })
-        let turns = try Dictionary(uniqueKeysWithValues: ids.map { id in
+        let turns = try Dictionary(uniqueKeysWithValues: uniqueIds.map { id in
             let preview = try preview(sessionID: id, maxBytes: Int.max)
             return (id, preview?.turns ?? [])
         })
@@ -196,6 +198,35 @@ public actor VaultStore {
     public func `import`(data: Data) throws {
         let bundle = try JSONDecoder.vault.decode(VaultExportBundle.self, from: data)
         for session in bundle.sessions {
+            try database.inTransaction {
+                try database.write(
+                    """
+                    INSERT OR REPLACE INTO vault_sessions
+                    (id, agent, source_kind, source_path, working_directory, title, model, git_branch, pr_url,
+                     modified_at_ms, preview_available, resume_available)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    bindings: summaryBindings(session)
+                )
+                if let snapshot = bundle.resumeSnapshots[session.id] {
+                    try write(snapshot: snapshot)
+                } else {
+                    try deleteResumeSnapshot(sessionID: session.id)
+                }
+                try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(session.id)])
+                for turn in bundle.turns[session.id] ?? [] {
+                    try write(turn: turn)
+                }
+                try database.write(
+                    "INSERT OR REPLACE INTO vault_imported_sessions(session_id, imported_at_ms) VALUES (?, ?)",
+                    bindings: [.string(session.id), .int(Int64(Date().timeIntervalSince1970 * 1000))]
+                )
+            }
+        }
+    }
+
+    private func upsert(_ indexed: VaultIndexedSession) throws {
+        try database.inTransaction {
             try database.write(
                 """
                 INSERT OR REPLACE INTO vault_sessions
@@ -203,53 +234,32 @@ public actor VaultStore {
                  modified_at_ms, preview_available, resume_available)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                bindings: summaryBindings(session)
+                bindings: summaryBindings(indexed.summary)
             )
-            if let snapshot = bundle.resumeSnapshots[session.id] {
+            if let snapshot = indexed.resumeSnapshot {
                 try write(snapshot: snapshot)
+            } else {
+                try deleteResumeSnapshot(sessionID: indexed.summary.id)
             }
-            try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(session.id)])
-            for turn in bundle.turns[session.id] ?? [] {
+            try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(indexed.summary.id)])
+            for turn in indexed.turns {
                 try write(turn: turn)
             }
-            try database.write(
-                "INSERT OR REPLACE INTO vault_imported_sessions(session_id, imported_at_ms) VALUES (?, ?)",
-                bindings: [.string(session.id), .int(Int64(Date().timeIntervalSince1970 * 1000))]
-            )
-        }
-    }
-
-    private func upsert(_ indexed: VaultIndexedSession) throws {
-        try database.write(
-            """
-            INSERT OR REPLACE INTO vault_sessions
-            (id, agent, source_kind, source_path, working_directory, title, model, git_branch, pr_url,
-             modified_at_ms, preview_available, resume_available)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            bindings: summaryBindings(indexed.summary)
-        )
-        if let snapshot = indexed.resumeSnapshot {
-            try write(snapshot: snapshot)
-        }
-        try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(indexed.summary.id)])
-        for turn in indexed.turns {
-            try write(turn: turn)
-        }
-        if let sourcePath = indexed.summary.sourcePath {
-            try database.write(
-                """
-                INSERT OR REPLACE INTO vault_source_state(source_key, agent, source_path, modified_at_ms, adapter_version)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                bindings: [
-                    .string(indexed.summary.id),
-                    .string(indexed.summary.agent.rawValue),
-                    .string(sourcePath),
-                    .int(Int64(indexed.summary.modifiedAt.timeIntervalSince1970 * 1000)),
-                    .int(1),
-                ]
-            )
+            if let sourcePath = indexed.summary.sourcePath {
+                try database.write(
+                    """
+                    INSERT OR REPLACE INTO vault_source_state(source_key, agent, source_path, modified_at_ms, adapter_version)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    bindings: [
+                        .string(indexed.summary.id),
+                        .string(indexed.summary.agent.rawValue),
+                        .string(sourcePath),
+                        .int(Int64(indexed.summary.modifiedAt.timeIntervalSince1970 * 1000)),
+                        .int(1),
+                    ]
+                )
+            }
         }
     }
 
@@ -270,6 +280,10 @@ public actor VaultStore {
                 .string(encodeJSON(snapshot.metadata) ?? "{}"),
             ]
         )
+    }
+
+    private func deleteResumeSnapshot(sessionID: String) throws {
+        try database.write("DELETE FROM vault_resume_snapshots WHERE session_id = ?", bindings: [.string(sessionID)])
     }
 
     private func write(turn: VaultTranscriptTurn) throws {
@@ -355,8 +369,10 @@ public actor VaultStore {
         guard let path = summary.sourcePath ?? summary.workingDirectory else {
             return false
         }
+        let normalizedPath = URL(fileURLWithPath: expandHome(path)).standardized.path
         return configuration.excludedPaths.contains { excluded in
-            path.hasPrefix(expandHome(excluded))
+            let excludedPath = URL(fileURLWithPath: expandHome(excluded)).standardized.path
+            return normalizedPath == excludedPath || normalizedPath.hasPrefix(excludedPath + "/")
         }
     }
 }

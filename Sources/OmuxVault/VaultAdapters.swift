@@ -1,3 +1,4 @@
+import CSQLite
 import Foundation
 
 public protocol VaultAgentAdapter: Sendable {
@@ -67,9 +68,9 @@ public struct JSONLDirectoryVaultAdapter: VaultAgentAdapter {
     public func discoverSessions() async throws -> [VaultIndexedSession] {
         let searchRoot = globHint.map { root.appendingPathComponent($0, isDirectory: true) } ?? root
         let files = SessionFileScanner.files(under: searchRoot, extensions: ["jsonl", "json"])
-        return files.compactMap { file in
+        return mergePreferNewest(files.compactMap { file in
             parse(file: file)
-        }
+        })
     }
 
     func parse(file: URL) -> VaultIndexedSession? {
@@ -188,8 +189,7 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
         }
         let copyURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("omux-vault-\(kind.rawValue)-\(UUID().uuidString).sqlite")
-        try? FileManager.default.removeItem(at: copyURL)
-        try FileManager.default.copyItem(at: dbURL, to: copyURL)
+        try backupSQLiteDatabase(from: dbURL, to: copyURL)
         defer { try? FileManager.default.removeItem(at: copyURL) }
         let db = try VaultSQLiteDatabase(url: copyURL)
         let tables = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'") { sqliteText($0, 0) ?? "" }
@@ -352,6 +352,43 @@ private func mergePreferNewest(_ sessions: [VaultIndexedSession]) -> [VaultIndex
         merged[session.summary.id] = session
     }
     return Array(merged.values).sorted { $0.summary.modifiedAt > $1.summary.modifiedAt }
+}
+
+private func backupSQLiteDatabase(from sourceURL: URL, to destinationURL: URL) throws {
+    try? FileManager.default.removeItem(at: destinationURL)
+    var source: OpaquePointer?
+    var destination: OpaquePointer?
+    guard sqlite3_open_v2(sourceURL.path, &source, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+          let source
+    else {
+        let message = source.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open source SQLite database"
+        if let source {
+            sqlite3_close(source)
+        }
+        throw VaultSQLiteError.open(message)
+    }
+    defer { sqlite3_close(source) }
+
+    guard sqlite3_open_v2(destinationURL.path, &destination, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+          let destination
+    else {
+        let message = destination.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open destination SQLite database"
+        if let destination {
+            sqlite3_close(destination)
+        }
+        throw VaultSQLiteError.open(message)
+    }
+    defer { sqlite3_close(destination) }
+
+    guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
+        throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(destination)))
+    }
+    defer { sqlite3_backup_finish(backup) }
+
+    let result = sqlite3_backup_step(backup, -1)
+    guard result == SQLITE_DONE else {
+        throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(destination)))
+    }
 }
 
 private func preferred(_ candidates: [String], in columns: [String]) -> String? {

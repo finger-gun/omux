@@ -43,11 +43,11 @@ The official packaging model SHALL be a bundled Swift `ai-status` host that cont
 
 ### Decision 3: Make hook setup explicit and marker-owned
 
-OpenMUX SHALL expose `omux ai-status hooks setup|uninstall [codex|claude|gemini]` for managed vendor config edits. Setup SHALL add only OpenMUX-owned hook entries, and uninstall SHALL remove only entries identifiable by OpenMUX markers.
+OpenMUX SHALL expose `omux ai-status hooks setup|uninstall [codex|claude|gemini]` for command-driven hook installation. Setup SHALL add only OpenMUX-owned hook entries for vendors where direct config edits are safe and marker-owned, and uninstall SHALL remove only entries identifiable by OpenMUX markers. Claude SHALL initially follow the cmux-style conservative path: wrapper-injected or guided hook configuration, not silent edits to Claude-owned settings.
 
 **Rationale:** cmux’s current architecture shows that explicit hook setup plus a socket/CLI relay is practical for normal interactive sessions. The setup must be deliberate because it edits vendor-owned configuration files, and marker-based uninstall prevents OpenMUX from deleting user-authored hook entries.
 
-**Alternatives considered:** Automatically patching vendor configs on first launch would be more seamless but would be surprising and risky. Requiring users to hand-edit configs would preserve control but make first-wave support too fragile.
+**Alternatives considered:** Automatically patching vendor configs on first launch would be more seamless but would be surprising and risky. Requiring users to hand-edit every config would preserve control but make first-wave support too fragile.
 
 ### Decision 4: Normalize vendor hook stdin through one relay
 
@@ -111,5 +111,4 @@ Rollback is straightforward: disable the bundled `ai-status` feature and remove 
 ## Open Questions
 
 - Which Codex UI strings should be treated as stable enough for the first adapter release?
-- Should Claude setup be wrapper-injected only, guided manual config, or a managed config edit once the safest local format is confirmed?
 - Should observer adapters have a shared helper for bounded history polling, or should each adapter own its polling loop initially?
