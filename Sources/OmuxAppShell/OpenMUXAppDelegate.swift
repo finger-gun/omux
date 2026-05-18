@@ -290,7 +290,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         do {
             let workspace = try workspaceController.createPaneTab()
             do {
-                try workspaceController.runCommand(target: .focused, command: "omux worktree --clear")
+                let result = try workspaceController.runCommand(target: .focused, command: "omux worktree --clear")
+                if result == nil {
+                    // runCommand returned nil (no focused terminal target); close the orphaned tab.
+                    if let paneID = workspace?.focusedPane?.id {
+                        _ = try? workspaceController.closePane(paneID: paneID)
+                    }
+                    assertionFailure("Failed to inject worktree command: no focused terminal target")
+                }
             } catch {
                 // If we can't inject the command, close the tab we just opened to avoid leaving
                 // an orphaned empty tab behind.

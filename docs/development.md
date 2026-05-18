@@ -108,6 +108,7 @@ swift run omux history clear --workspace <workspace-id>
 swift run omux run <session-id> "pwd"
 swift run omux run --pane <pane-id> -- "pwd"
 swift run omux send-text --session <session-id> -- "hello"
+swift run omux worktree <branch>
 swift run omux install-cli [destination]
 swift run omux help
 swift run OpenMUXApp

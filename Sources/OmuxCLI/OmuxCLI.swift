@@ -373,7 +373,7 @@ public struct OmuxCLICommand {
             FileHandle.standardOutput.write(Data("\u{1B}[2J\u{1B}[H".utf8))
             let defaultBranch = Self.generatedWorktreeBranchName()
             FileHandle.standardOutput.write(Data("Worktree branch name [\(defaultBranch)]: ".utf8))
-            let input = readLine() ?? ""
+            let input = readInputLine() ?? ""
             let branch = input.trimmingCharacters(in: .whitespacesAndNewlines)
             request.branch = branch.isEmpty ? defaultBranch : branch
         }
@@ -420,23 +420,28 @@ public struct OmuxCLICommand {
         if request.clear {
             // Stay in current tab: clear screen, then cd into the worktree.
             let focusedTarget = RPCValue.object(["type": .string("focused")])
-            let response = try client.request(
+            let cdResponse = try client.request(
                 method: .runCommand,
                 params: .object([
                     "target": focusedTarget,
                     "command": .string("cd \(worktreePath.shellEscaped)"),
                 ])
             )
-            if let error = response.error {
+            if let error = cdResponse.error {
                 writeLine("omux error: cd failed: \(error.message)")
+                return 1
             }
-            _ = try client.request(
+            let clearResponse = try client.request(
                 method: .runCommand,
                 params: .object([
                     "target": focusedTarget,
                     "command": .string("clear"),
                 ])
             )
+            if let error = clearResponse.error {
+                writeLine("omux error: clear failed: \(error.message)")
+                return 1
+            }
         } else {
             // Default: open a new pane tab in the worktree directory.
             var params: [String: RPCValue] = [
@@ -447,6 +452,10 @@ public struct OmuxCLICommand {
                 params["paneStackID"] = .string(paneStackID)
             }
             let response = try client.request(method: .createPaneTab, params: .object(params))
+            if let error = response.error {
+                writeLine("omux error: createPaneTab failed: \(error.message)")
+                return 1
+            }
             writeLine(response.result?.prettyPrinted ?? "")
         }
         return 0

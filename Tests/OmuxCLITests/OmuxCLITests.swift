@@ -577,9 +577,13 @@ final class OmuxCLITests: XCTestCase {
             .appending(path: "worktree.sock")
             .path(percentEncoded: false)
         let receivedParams = LockedValue<[String: RPCValue]?>(nil)
+        let receivedMethod = LockedValue<String?>(nil)
+        let requestCount = LockedValue(0)
         let server = LocalControlServer(socketPath: socketPath)
         try server.start { request in
             receivedParams.value = request.params?.objectValue
+            receivedMethod.value = request.method
+            requestCount.value += 1
             return JSONRPCResponse(id: request.id, result: .string("ok"))
         }
         defer { server.stop() }
@@ -620,6 +624,8 @@ final class OmuxCLITests: XCTestCase {
         ])
         XCTAssertEqual(receivedParams.value?["workingDirectory"]?.stringValue, "/tmp/openmux-feature-new-api")
         XCTAssertEqual(receivedParams.value?["title"]?.stringValue, "new-api")
+        XCTAssertEqual(receivedMethod.value, ControlMethod.createPaneTab.rawValue)
+        XCTAssertEqual(requestCount.value, 1)
     }
 
     func testCLIWorktreeReportsGitFailureWithoutRPC() throws {
