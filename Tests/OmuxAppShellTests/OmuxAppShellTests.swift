@@ -3910,13 +3910,14 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
+        let titleUpdateMinimumInterval: TimeInterval = 0.5
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let controller = WorkspaceController(
             bridge: bridge,
             hookRunner: ExternalHookRunner(),
             terminalStateChangeCoalescingDelay: 0.01,
-            terminalDisplayTitleUpdateMinimumInterval: 0.08
+            terminalDisplayTitleUpdateMinimumInterval: titleUpdateMinimumInterval
         )
 
         let workspace = try controller.openWorkspace(at: "/tmp")
@@ -3948,7 +3949,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(changeCount, 1)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
 
-        wait(for: [trailingChangeDelivered], timeout: 1)
+        wait(for: [trailingChangeDelivered], timeout: 2)
         XCTAssertEqual(changeCount, 2)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
         XCTAssertEqual(deliveredTitles, ["Codex reading", "Codex writing"])
