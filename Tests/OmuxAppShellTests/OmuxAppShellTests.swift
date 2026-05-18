@@ -3884,15 +3884,15 @@ final class OmuxAppShellTests: XCTestCase {
         let pane = try XCTUnwrap(workspace.focusedPane)
         let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
-        runtime.emit(.titleChanged("Action Required"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("[ . ] Action Required | omux"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
 
-        runtime.emit(.titleChanged("⠋ Codex"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("⠇ omux"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
 
-        runtime.emit(.titleChanged("Action Required"), on: runtimeSurfaceID)
+        runtime.emit(.titleChanged("[ ! ] Action Required | omux"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
 

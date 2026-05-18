@@ -887,12 +887,14 @@ enum OmuxCodexTitleAdapter {
     ) -> OmuxAIStatusTitleObservation? {
         let normalized = title.lowercased()
         let hasCodexIdentity = isCodexTitle(normalized)
+        if isCodexActionRequiredTitle(normalized) {
+            return observation(title: title, state: .needsInput, confidence: hasCodexIdentity ? 0.75 : 0.6)
+        }
         if normalized.contains("approval")
             || normalized.contains("permission")
             || normalized.contains("confirm")
             || normalized.contains("waiting")
-            || normalized.contains("needs input")
-            || normalized.contains("action required") {
+            || normalized.contains("needs input") {
             guard hasCodexIdentity || allowsStateOnlyMatch else {
                 return nil
             }
@@ -910,6 +912,9 @@ enum OmuxCodexTitleAdapter {
             }
             return observation(title: title, state: .idle, confidence: hasCodexIdentity ? 0.75 : 0.55)
         }
+        if isCodexWorkingTitle(normalized) {
+            return observation(title: title, state: .working, confidence: hasCodexIdentity ? 0.75 : 0.6)
+        }
         guard hasCodexIdentity else {
             return nil
         }
@@ -918,6 +923,55 @@ enum OmuxCodexTitleAdapter {
 
     private static func isCodexTitle(_ normalized: String) -> Bool {
         normalized.contains("codex")
+    }
+
+    private static func isCodexActionRequiredTitle(_ normalized: String) -> Bool {
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "action required" {
+            return true
+        }
+
+        let strippedPrefix = trimmed.replacingOccurrences(
+            of: #"^\[\s*[.!]\s*\]\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        return strippedPrefix == "action required" || strippedPrefix.hasPrefix("action required |")
+    }
+
+    private static func isCodexWorkingTitle(_ normalized: String) -> Bool {
+        if hasSpinnerPrefix(normalized) {
+            return true
+        }
+
+        if normalized.contains("esc to interrupt") {
+            return true
+        }
+
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workingPrefixes = [
+            "working",
+            "thinking",
+            "reading",
+            "editing",
+            "writing",
+            "running",
+            "searching",
+            "reviewing",
+        ]
+        return workingPrefixes.contains { prefix in
+            trimmed == prefix
+                || trimmed.hasPrefix("\(prefix) ")
+                || trimmed.hasPrefix("\(prefix)(")
+        }
+    }
+
+    private static func hasSpinnerPrefix(_ normalized: String) -> Bool {
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else {
+            return false
+        }
+        return first.isAIStatusSpinnerGlyph
     }
 
     private static func observation(
@@ -938,6 +992,29 @@ enum OmuxCodexTitleAdapter {
     private static func message(forTitle title: String) -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private extension Character {
+    var isAIStatusSpinnerGlyph: Bool {
+        guard unicodeScalars.count == 1,
+              let scalar = unicodeScalars.first
+        else {
+            return false
+        }
+
+        if (0x2800...0x28FF).contains(Int(scalar.value)) {
+            return true
+        }
+
+        switch scalar {
+        case "•", "●", "◦", "○",
+             "◐", "◓", "◑", "◒",
+             "◜", "◠", "◝", "◞", "◡", "◟":
+            return true
+        default:
+            return false
+        }
     }
 }
 
