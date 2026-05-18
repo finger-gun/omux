@@ -844,53 +844,50 @@ final class WorkspaceShellViewController: NSViewController {
                     _ = try? self.controller.runCommand(target: .focused, command: command)
                     return
                 }
-
-                switch self.confirmMismatchedVaultResume(workingDirectory: snapshot.workingDirectory) {
-                case .resumeHere:
+                if snapshot.kind == .codex {
                     _ = try? self.controller.runCommand(target: .focused, command: command)
-                case .openWorkspace:
-                    if let workingDirectory = snapshot.workingDirectory {
-                        _ = try? self.controller.openWorkspace(at: workingDirectory)
-                        _ = try? self.controller.runCommand(target: .focused, command: command)
-                    }
-                case .cancel:
                     return
                 }
+
+                self.presentVaultResumeMismatchModal(
+                    resumeCommand: command,
+                    workingDirectory: snapshot.workingDirectory,
+                    connectedPaths: connectedPaths
+                )
             } catch {
                 fputs("vault resume failed: \(error)\n", stderr)
             }
         }
     }
 
-    private enum MismatchedVaultResumeChoice {
-        case resumeHere
-        case openWorkspace
-        case cancel
-    }
-
-    private func confirmMismatchedVaultResume(workingDirectory: String?) -> MismatchedVaultResumeChoice {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Session path differs"
-        if let workingDirectory {
-            alert.informativeText = "This session was captured in \(workingDirectory), which is not connected to the current workspace."
-            alert.addButton(withTitle: "Resume Here")
-            alert.addButton(withTitle: "Open Workspace")
-            alert.addButton(withTitle: "Cancel")
-        } else {
-            alert.informativeText = "This session does not include a working directory that matches the current workspace."
-            alert.addButton(withTitle: "Resume Here")
-            alert.addButton(withTitle: "Cancel")
+    private func presentVaultResumeMismatchModal(
+        resumeCommand: String,
+        workingDirectory: String?,
+        connectedPaths: [String]
+    ) {
+        let modal = AgentSessionPathMismatchModalView(
+            workingDirectory: workingDirectory,
+            connectedPaths: connectedPaths,
+            theme: currentTheme
+        )
+        modal.onChoice = { [weak self, weak modal] choice in
+            guard let self else { return }
+            if let modal {
+                self.shellOverlayHostView.dismiss(agentSessionPathMismatchView: modal)
+            }
+            switch choice {
+            case .resumeHere:
+                _ = try? self.controller.runCommand(target: .focused, command: resumeCommand)
+            case .openWorkspace:
+                if let workingDirectory {
+                    _ = try? self.controller.openWorkspace(at: workingDirectory)
+                    _ = try? self.controller.runCommand(target: .focused, command: resumeCommand)
+                }
+            case .cancel:
+                break
+            }
         }
-
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .resumeHere
-        case .alertSecondButtonReturn where workingDirectory != nil:
-            return .openWorkspace
-        default:
-            return .cancel
-        }
+        shellOverlayHostView.present(agentSessionPathMismatchView: modal)
     }
 
     private func applySidebarVisibility() {
@@ -3187,7 +3184,9 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private let titleLabel = NSTextField(labelWithString: "AGENT SESSIONS")
     private let refreshButton = NSButton()
     private let collapseButton = NSButton()
-    private let searchField = NSSearchField()
+    private let searchContainer = NSView()
+    private let searchIcon = NSImageView()
+    private let searchField = AgentSessionsSearchField()
     private let filterRow = NSStackView()
     private let agentPopup = NSPopUpButton()
     private let workspacePopup = NSPopUpButton()
@@ -3231,15 +3230,21 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         collapseButton.action = #selector(collapsePressed)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
 
-        searchField.placeholderString = "Search"
+        searchContainer.wantsLayer = true
+        searchContainer.layer?.cornerRadius = 14
+        searchContainer.layer?.borderWidth = 1
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        searchIcon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+        searchIcon.translatesAutoresizingMaskIntoConstraints = false
+        searchIcon.setContentHuggingPriority(.required, for: .horizontal)
+
         searchField.font = .systemFont(ofSize: 14, weight: .regular)
         searchField.isBordered = false
-        searchField.isBezeled = false
-        searchField.drawsBackground = false
         searchField.focusRingType = .none
-        searchField.wantsLayer = true
-        searchField.layer?.cornerRadius = 14
-        searchField.layer?.borderWidth = 1
+        searchField.backgroundColor = .clear
+        searchField.placeholderString = "Search"
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
@@ -3285,10 +3290,12 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         header.addArrangedSubview(NSView())
         header.addArrangedSubview(refreshButton)
         header.addArrangedSubview(collapseButton)
+        searchContainer.addSubview(searchIcon)
+        searchContainer.addSubview(searchField)
         filterRow.addArrangedSubview(workspacePopup)
         filterRow.addArrangedSubview(agentPopup)
         addSubview(header)
-        addSubview(searchField)
+        addSubview(searchContainer)
         addSubview(filterRow)
         addSubview(scrollView)
         addSubview(statusLabel)
@@ -3308,12 +3315,20 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             refreshButton.heightAnchor.constraint(equalToConstant: 22),
             collapseButton.widthAnchor.constraint(equalToConstant: 22),
             collapseButton.heightAnchor.constraint(equalToConstant: 22),
-            searchField.heightAnchor.constraint(equalToConstant: 28),
-            searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            searchField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            searchField.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            searchContainer.heightAnchor.constraint(equalToConstant: 28),
+            searchContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            searchContainer.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            searchContainer.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
+            searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            searchIcon.widthAnchor.constraint(equalToConstant: 14),
+            searchIcon.heightAnchor.constraint(equalToConstant: 14),
+            searchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 7),
+            searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -10),
+            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            searchField.heightAnchor.constraint(equalTo: searchContainer.heightAnchor),
             filterRow.heightAnchor.constraint(equalToConstant: 24),
-            filterRow.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
+            filterRow.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 6),
             filterRow.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             filterRow.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 10),
@@ -3367,8 +3382,9 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
                 .font: NSFont.systemFont(ofSize: 14, weight: .regular),
             ]
         )
-        searchField.layer?.backgroundColor = colors.paneCardBackground.cgColor
-        searchField.layer?.borderColor = (isSearchFocused ? colors.accent : colors.subduedBorder).cgColor
+        searchIcon.contentTintColor = colors.textMuted
+        searchContainer.layer?.backgroundColor = colors.paneCardBackground.cgColor
+        searchContainer.layer?.borderColor = (isSearchFocused ? colors.accent : colors.subduedBorder).cgColor
     }
 
     private func applyFilterMenuTheme() {
@@ -3566,6 +3582,50 @@ extension WorkspaceVaultSidebarView {
 }
 
 @MainActor
+private final class AgentSessionsSearchField: NSTextField {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let centeredCell = AgentSessionsSearchFieldCell()
+        centeredCell.isEditable = true
+        centeredCell.isSelectable = true
+        centeredCell.isBordered = false
+        centeredCell.backgroundColor = NSColor.clear
+        centeredCell.focusRingType = NSFocusRingType.none
+        centeredCell.usesSingleLineMode = true
+        centeredCell.lineBreakMode = NSLineBreakMode.byClipping
+        cell = centeredCell
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+}
+
+@MainActor
+private final class AgentSessionsSearchFieldCell: NSTextFieldCell {
+    private func centeredRect(for rect: NSRect) -> NSRect {
+        let size = cellSize(forBounds: rect)
+        let y = rect.minY + (rect.height - size.height) / 2
+        return NSRect(x: rect.minX, y: y, width: rect.width, height: size.height)
+    }
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        centeredRect(for: rect)
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: centeredRect(for: rect), in: controlView, editor: textObj, delegate: delegate, event: event)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: centeredRect(for: rect), in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
+    }
+
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        super.drawInterior(withFrame: centeredRect(for: cellFrame), in: controlView)
+    }
+}
+
+@MainActor
 private final class VaultSessionRowButton: NSControl {
     private let session: VaultSessionSummary
     private let titleLabel = NSTextField(labelWithString: "")
@@ -3590,7 +3650,7 @@ private final class VaultSessionRowButton: NSControl {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let folderName = session.workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
-        subtitleLabel.stringValue = "\(session.agent.rawValue) · \(folderName)"
+        subtitleLabel.stringValue = "\(session.agent.rawValue) · \(folderName) · \(Self.formattedDate(session.modifiedAt))"
         subtitleLabel.font = .systemFont(ofSize: 10)
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.maximumNumberOfLines = 1
@@ -3612,6 +3672,13 @@ private final class VaultSessionRowButton: NSControl {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    private static func formattedDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     func apply(theme: WorkspaceShellTheme) {
@@ -3669,6 +3736,7 @@ final class ShellOverlayHostView: NSView {
     }
 
     private let paletteHostView = PassthroughOverlayView()
+    private let modalHostView = PassthroughOverlayView()
     let floatingModalOverlayView = FloatingModalOverlayView()
     private var currentTheme: WorkspaceShellTheme = .defaultTheme
 
@@ -3679,8 +3747,10 @@ final class ShellOverlayHostView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
 
         paletteHostView.translatesAutoresizingMaskIntoConstraints = false
+        modalHostView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(floatingModalOverlayView)
         addSubview(paletteHostView)
+        addSubview(modalHostView)
 
         NSLayoutConstraint.activate([
             floatingModalOverlayView.topAnchor.constraint(equalTo: topAnchor),
@@ -3691,6 +3761,10 @@ final class ShellOverlayHostView: NSView {
             paletteHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
             paletteHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
             paletteHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            modalHostView.topAnchor.constraint(equalTo: topAnchor),
+            modalHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            modalHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            modalHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -3707,6 +3781,7 @@ final class ShellOverlayHostView: NSView {
     func apply(theme: WorkspaceShellTheme) {
         currentTheme = theme
         floatingModalOverlayView.apply(theme: theme)
+        modalHostView.subviews.compactMap { $0 as? AgentSessionPathMismatchModalView }.forEach { $0.apply(theme: theme) }
     }
 
     func present(commandPaletteView: CommandPaletteView) {
@@ -3725,6 +3800,181 @@ final class ShellOverlayHostView: NSView {
     func dismiss(commandPaletteView: CommandPaletteView) {
         if commandPaletteView.superview === paletteHostView {
             commandPaletteView.removeFromSuperview()
+        }
+    }
+
+    func present(agentSessionPathMismatchView modalView: AgentSessionPathMismatchModalView) {
+        modalHostView.subviews.forEach { $0.removeFromSuperview() }
+        modalView.apply(theme: currentTheme)
+        modalHostView.addSubview(modalView)
+        NSLayoutConstraint.activate([
+            modalView.centerXAnchor.constraint(equalTo: modalHostView.centerXAnchor),
+            modalView.centerYAnchor.constraint(equalTo: modalHostView.centerYAnchor),
+            modalView.widthAnchor.constraint(lessThanOrEqualTo: modalHostView.widthAnchor, constant: -48),
+            modalView.widthAnchor.constraint(equalToConstant: 460),
+        ])
+        window?.makeFirstResponder(modalView)
+    }
+
+    func dismiss(agentSessionPathMismatchView modalView: AgentSessionPathMismatchModalView) {
+        if modalView.superview === modalHostView {
+            modalView.removeFromSuperview()
+        }
+    }
+}
+
+@MainActor
+enum AgentSessionPathMismatchChoice {
+    case resumeHere
+    case openWorkspace
+    case cancel
+}
+
+@MainActor
+final class AgentSessionPathMismatchModalView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "Session Path Differs")
+    private let messageLabel = NSTextField(labelWithString: "")
+    private let resumeButton = AgentSessionModalButton(title: "Resume Here", active: true)
+    private let openWorkspaceButton = AgentSessionModalButton(title: "Open Workspace", active: false)
+    private let cancelButton = AgentSessionModalButton(title: "Cancel", active: false)
+    private let workingDirectory: String?
+    private let connectedPaths: [String]
+    var onChoice: ((AgentSessionPathMismatchChoice) -> Void)?
+
+    init(workingDirectory: String?, connectedPaths: [String], theme: WorkspaceShellTheme) {
+        self.workingDirectory = workingDirectory
+        self.connectedPaths = connectedPaths
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        setAccessibilityRole(.group)
+
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let sessionPath = workingDirectory ?? "unknown"
+        let currentPath = connectedPaths.isEmpty ? "unknown" : connectedPaths.joined(separator: ", ")
+        messageLabel.stringValue = "This agent session was captured in:\n\(sessionPath)\n\nCurrent workspace paths:\n\(currentPath)"
+        messageLabel.font = .systemFont(ofSize: 12)
+        messageLabel.maximumNumberOfLines = 6
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        resumeButton.onPress = { [weak self] in self?.onChoice?(.resumeHere) }
+        openWorkspaceButton.onPress = { [weak self] in self?.onChoice?(.openWorkspace) }
+        cancelButton.onPress = { [weak self] in self?.onChoice?(.cancel) }
+        openWorkspaceButton.isEnabled = workingDirectory != nil
+
+        let buttonRow = NSStackView(views: [cancelButton, NSView(), openWorkspaceButton, resumeButton])
+        buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
+        buttonRow.spacing = 8
+        buttonRow.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(titleLabel)
+        addSubview(messageLabel)
+        addSubview(buttonRow)
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 18),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            messageLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
+            messageLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            messageLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            buttonRow.topAnchor.constraint(equalTo: messageLabel.bottomAnchor, constant: 18),
+            buttonRow.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            buttonRow.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            buttonRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
+        ])
+        apply(theme: theme)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            onChoice?(.cancel)
+        } else if event.keyCode == 36 {
+            onChoice?(.resumeHere)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
+        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        titleLabel.textColor = theme.shell.textPrimary
+        messageLabel.textColor = theme.shell.textSecondary
+        resumeButton.apply(theme: theme)
+        openWorkspaceButton.apply(theme: theme)
+        cancelButton.apply(theme: theme)
+    }
+}
+
+@MainActor
+private final class AgentSessionModalButton: NSControl {
+    var onPress: (() -> Void)?
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let title: String
+    private let active: Bool
+    private var theme = WorkspaceShellTheme.defaultTheme
+
+    init(title: String, active: Bool) {
+        self.title = title
+        self.active = active
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+
+        titleLabel.stringValue = title
+        titleLabel.font = .systemFont(ofSize: 12, weight: active ? .semibold : .medium)
+        titleLabel.alignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 30),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(theme: WorkspaceShellTheme) {
+        self.theme = theme
+        titleLabel.textColor = active ? theme.shell.selectedText : theme.shell.textSecondary
+        layer?.backgroundColor = (active ? theme.shell.selection : theme.shell.chromeButtonBackground).cgColor
+        layer?.borderWidth = active ? 0 : 1
+        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        alphaValue = isEnabled ? 1 : 0.45
+    }
+
+    override var isEnabled: Bool {
+        didSet { apply(theme: theme) }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        onPress?()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 49 {
+            onPress?()
+        } else {
+            super.keyDown(with: event)
         }
     }
 }

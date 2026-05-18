@@ -79,33 +79,58 @@ public actor VaultStore {
                 row: decodeSummary
             )
         } else {
-            guard let ftsQuery = ftsQuery(for: trimmed) else {
+            let searchTokens = searchTokens(for: trimmed)
+            guard searchTokens.isEmpty == false,
+                  let ftsQuery = ftsQuery(for: searchTokens) else {
                 return VaultSearchResponse(sessions: [], totalCount: 0)
             }
-            let ftsWhere = baseWhere.isEmpty ? "WHERE vault_messages_fts MATCH ?" : "\(baseWhere) AND vault_messages_fts MATCH ?"
-            let ftsBindings = bindings + [.string(ftsQuery)]
+            let metadataClauses = searchTokens.map { _ in
+                """
+                (
+                  s.title LIKE ? ESCAPE '\\'
+                  OR s.agent LIKE ? ESCAPE '\\'
+                  OR s.working_directory LIKE ? ESCAPE '\\'
+                  OR s.id LIKE ? ESCAPE '\\'
+                )
+                """
+            }.joined(separator: " AND ")
+            let metadataBindings = searchTokens.flatMap { token -> [SQLiteBinding] in
+                let pattern = searchLikePattern(for: token)
+                return [.string(pattern), .string(pattern), .string(pattern), .string(pattern)]
+            }
+            let searchWhere = """
+            (
+              (\(metadataClauses))
+              OR EXISTS (
+                SELECT 1
+                FROM vault_messages m
+                JOIN vault_messages_fts ON vault_messages_fts.rowid = m.rowid
+                WHERE m.session_id = s.id
+                  AND vault_messages_fts MATCH ?
+              )
+            )
+            """
+            let searchBindings = metadataBindings + [.string(ftsQuery)]
+            let searchFilteredWhere = baseWhere.isEmpty ? "WHERE \(searchWhere)" : "\(baseWhere) AND \(searchWhere)"
+            let searchFilteredBindings = bindings + searchBindings
             total = try count(
                 """
-                SELECT COUNT(DISTINCT s.id)
+                SELECT COUNT(*)
                 FROM vault_sessions s
-                JOIN vault_messages m ON m.session_id = s.id
-                JOIN vault_messages_fts ON vault_messages_fts.rowid = m.rowid
-                \(ftsWhere)
+                \(searchFilteredWhere)
                 """,
-                bindings: ftsBindings
+                bindings: searchFilteredBindings
             )
             rows = try database.query(
                 """
-                SELECT DISTINCT s.id, s.agent, s.source_kind, s.source_path, s.title, s.working_directory, s.model,
+                SELECT s.id, s.agent, s.source_kind, s.source_path, s.title, s.working_directory, s.model,
                        s.git_branch, s.pr_url, s.modified_at_ms, s.preview_available, s.resume_available
                 FROM vault_sessions s
-                JOIN vault_messages m ON m.session_id = s.id
-                JOIN vault_messages_fts ON vault_messages_fts.rowid = m.rowid
-                \(ftsWhere)
+                \(searchFilteredWhere)
                 ORDER BY s.modified_at_ms DESC
                 LIMIT ? OFFSET ?
                 """,
-                bindings: ftsBindings + [.int(Int64(request.limit)), .int(Int64(request.offset))],
+                bindings: searchFilteredBindings + [.int(Int64(request.limit)), .int(Int64(request.offset))],
                 row: decodeSummary
             )
         }
@@ -377,22 +402,28 @@ public actor VaultStore {
     }
 }
 
-private func ftsQuery(for raw: String) -> String? {
-    let tokens = raw
+private func searchTokens(for raw: String) -> [String] {
+    raw
         .split { character in
             character.isLetter == false && character.isNumber == false
         }
         .map(String.init)
         .filter { $0.isEmpty == false }
+}
+
+private func ftsQuery(for tokens: [String]) -> String? {
     guard tokens.isEmpty == false else {
         return nil
     }
-    return tokens
-        .map { token in
-            let escaped = token.replacingOccurrences(of: "\"", with: "\"\"")
-            return "\"\(escaped)\""
-        }
-        .joined(separator: " ")
+    return tokens.map { "\($0)*" }.joined(separator: " ")
+}
+
+private func searchLikePattern(for raw: String) -> String {
+    let escaped = raw
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "%", with: "\\%")
+        .replacingOccurrences(of: "_", with: "\\_")
+    return "%\(escaped)%"
 }
 
 private func expandHome(_ path: String) -> String {

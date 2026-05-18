@@ -2557,6 +2557,59 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["Cancelled."])
     }
 
+    func testCLIVaultResumeChoiceFallbackWritesSelectedCommand() throws {
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        var output = [String]()
+        let command = OmuxCLICommand(
+            writeLine: { output.append($0) },
+            readInputLine: { "2" }
+        )
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "vault", "resume-choice", "codex:abc",
+            "--resume-command", "codex resume 'abc'",
+            "--output", outputURL.path,
+            "--session-path", "/Users/example/projects/other",
+            "--current-path", "/Users/example/projects/omux",
+        ]), 0)
+
+        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "omux vault resume 'codex:abc' --workspace")
+        XCTAssertTrue(output.contains("Agent session path differs."))
+        XCTAssertTrue(output.contains("2. Open Matching Workspace — Open the session path as a workspace and resume there"))
+    }
+
+    func testCLIInteractiveVaultResumeChoiceWritesSelectedCommand() throws {
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: "/tmp/not-used.sock"),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            isInteractiveVaultResumeChoicePickerAvailable: { true },
+            selectVaultResumeChoiceInteractively: { items, context in
+                XCTAssertEqual(context.sessionPath, "/Users/example/projects/other")
+                XCTAssertEqual(context.currentPaths, ["/Users/example/projects/omux"])
+                return items.first { $0.keyword == "resume" }
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "vault", "resume-choice", "codex:abc",
+            "--resume-command", "codex resume 'abc'",
+            "--output", outputURL.path,
+            "--session-path", "/Users/example/projects/other",
+            "--current-path", "/Users/example/projects/omux",
+        ]), 0)
+
+        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "codex resume 'abc'")
+        XCTAssertEqual(output, ["Selected: Resume Here"])
+    }
+
     func testThemePickerSearchFiltersThemesByNameOrDisplayName() {
         let themes = [
             pickerTheme(name: "catppuccin", displayName: "Catppuccin"),

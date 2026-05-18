@@ -154,6 +154,55 @@ struct OmuxVaultTests {
         #expect(result.totalCount == 0)
     }
 
+    @Test("Vault search matches title and transcript prefixes")
+    func searchMatchesTitleAndTranscriptPrefixes() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let bundle = VaultExportBundle(
+            sessions: [
+                VaultSessionSummary(
+                    id: "codex:previous",
+                    agent: .codex,
+                    sourceKind: "fixture",
+                    title: "A previous agent produced the plan below",
+                    workingDirectory: "/tmp/omux",
+                    modifiedAt: Date(timeIntervalSince1970: 2),
+                    previewAvailable: true,
+                    resumeAvailable: true
+                ),
+                VaultSessionSummary(
+                    id: "gemini:hello",
+                    agent: .gemini,
+                    sourceKind: "fixture",
+                    title: "hello",
+                    workingDirectory: "/tmp/omux",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    previewAvailable: true,
+                    resumeAvailable: true
+                ),
+            ],
+            resumeSnapshots: [:],
+            turns: [
+                "codex:previous": [
+                    VaultTranscriptTurn(sessionID: "codex:previous", turnID: "0", role: "user", text: "A previous agent produced the plan below", ordinal: 0, modifiedAt: Date(timeIntervalSince1970: 2)),
+                ],
+                "gemini:hello": [
+                    VaultTranscriptTurn(sessionID: "gemini:hello", turnID: "0", role: "user", text: "hello", ordinal: 0, modifiedAt: Date(timeIntervalSince1970: 1)),
+                ],
+            ]
+        )
+        try await store.import(data: JSONEncoder.vaultTest.encode(bundle))
+
+        let prefix = try await store.search(VaultSearchRequest(query: "pre"))
+        #expect(prefix.sessions.map(\.id) == ["codex:previous"])
+
+        let fuzzyTitle = try await store.search(VaultSearchRequest(query: "a p"))
+        #expect(fuzzyTitle.sessions.map(\.id) == ["codex:previous"])
+
+        let title = try await store.search(VaultSearchRequest(query: "previous"))
+        #expect(title.sessions.map(\.id) == ["codex:previous"])
+    }
+
     @Test("Codex adapter prefers SQLite thread timestamps")
     func codexAdapterPrefersSQLiteThreadTimestamps() async throws {
         let root = try temporaryDirectory()
