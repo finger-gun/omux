@@ -415,7 +415,7 @@ public struct OmuxCLICommand {
             guard let params = parseVaultSearchOptions(rest, commandName: commandName, subcommand: "list", requiresQuery: false) else {
                 return 1
             }
-            let response = try client.request(method: .vaultList, params: params.isEmpty ? nil : .object(params))
+            let response = try client.request(method: .agentSessionsList, params: params.isEmpty ? nil : .object(params))
             writeLine(response.result?.prettyPrinted ?? "[]")
             return 0
         case "search":
@@ -423,7 +423,7 @@ public struct OmuxCLICommand {
                 return 1
             }
             let response = try client.request(
-                method: .vaultSearch,
+                method: .agentSessionsSearch,
                 params: .object(params)
             )
             writeLine(response.result?.prettyPrinted ?? "[]")
@@ -433,7 +433,7 @@ public struct OmuxCLICommand {
                 writeLine("usage: omux \(commandName) preview <session-id>")
                 return 1
             }
-            let response = try client.request(method: .vaultPreview, params: .object(["sessionID": .string(id)]))
+            let response = try client.request(method: .agentSessionsPreview, params: .object(["sessionID": .string(id)]))
             writeLine(response.result?.prettyPrinted ?? "")
             return 0
         case "resume":
@@ -458,7 +458,7 @@ public struct OmuxCLICommand {
                 destination = .focused
             }
             let response = try client.request(
-                method: .vaultResume,
+                method: .agentSessionsResume,
                 params: .object(["sessionID": .string(id), "destination": .string(destination.rawValue)])
             )
             writeLine(response.result?.prettyPrinted ?? "")
@@ -475,7 +475,7 @@ public struct OmuxCLICommand {
                 }
                 params["agent"] = .string(rest[agentIndex + 1])
             }
-            let response = try client.request(method: .vaultReindex, params: params.isEmpty ? nil : .object(params))
+            let response = try client.request(method: .agentSessionsReindex, params: params.isEmpty ? nil : .object(params))
             writeLine(response.result?.prettyPrinted ?? "")
             return 0
         case "export":
@@ -491,7 +491,7 @@ public struct OmuxCLICommand {
                 return 1
             }
             let response = try client.request(
-                method: .vaultExport,
+                method: .agentSessionsExport,
                 params: .object(["ids": .array(ids.map(RPCValue.string))])
             )
             guard let encoded = response.result?.objectValue?["data"]?.stringValue,
@@ -509,13 +509,13 @@ public struct OmuxCLICommand {
             }
             let data = try Data(contentsOf: URL(fileURLWithPath: resolveCLIPath(path)))
             let response = try client.request(
-                method: .vaultImport,
+                method: .agentSessionsImport,
                 params: .object(["data": .string(data.base64EncodedString())])
             )
             writeLine(response.result?.prettyPrinted ?? "")
             return 0
         case "agents":
-            let response = try client.request(method: .vaultAgents)
+            let response = try client.request(method: .agentSessionsAgents)
             writeLine(response.result?.prettyPrinted ?? "[]")
             return 0
         case "open", "show", "close", "hide", "toggle", "palette", "command-palette":
@@ -592,7 +592,7 @@ public struct OmuxCLICommand {
 
     private func runVaultResumeChoiceCommand(arguments: [String]) -> Int32 {
         guard let request = VaultResumeChoiceRequest(arguments: arguments) else {
-            writeLine("usage: omux vault resume-choice <session-id> --resume-command <command> --output <path> [--session-path <path>] [--current-path <path>...]")
+            writeLine("usage: omux agent-sessions resume-choice <session-id> --resume-command <command> --output <path> [--session-path <path>] [--current-path <path>...]")
             return 1
         }
 
@@ -2230,7 +2230,7 @@ struct VaultResumeChoiceItem: Equatable {
                     keyword: "workspace",
                     title: "Open Matching Workspace",
                     subtitle: "Open the session path as a workspace and resume there",
-                    shellCommand: "omux vault resume \(sessionID.shellEscaped) --workspace"
+                    shellCommand: "omux agent-sessions resume \(sessionID.shellEscaped) --workspace"
                 )
             )
         }

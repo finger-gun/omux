@@ -99,11 +99,11 @@ final class VaultIndexRefreshCoordinator {
                 do {
                     let warnings = try await self?.reindex(agent) ?? []
                     for warning in warnings {
-                        fputs("vault background index warning: \(warning)\n", stderr)
+                        fputs("Agent Sessions background index warning: \(warning)\n", stderr)
                     }
                     completed.insert(agent)
                 } catch {
-                    fputs("vault background index failed for \(agent.rawValue): \(error)\n", stderr)
+                    fputs("Agent Sessions background index failed for \(agent.rawValue): \(error)\n", stderr)
                 }
             }
             await MainActor.run {
@@ -144,7 +144,7 @@ final class VaultIndexRefreshCoordinator {
 }
 
 final class VaultSourceEventWatcher {
-    private let queue = DispatchQueue(label: "dev.openmux.vault-source-events", qos: .utility)
+    private let queue = DispatchQueue(label: "dev.openmux.agent-sessions-source-events", qos: .utility)
     private let sources: [(agent: VaultAgentKind, path: String)]
     private let onDirty: @MainActor (VaultAgentKind) -> Void
     private var stream: FSEventStreamRef?

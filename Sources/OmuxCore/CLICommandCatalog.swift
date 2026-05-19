@@ -173,7 +173,7 @@ public enum OpenMUXCLICommandCatalog {
             usage: "omux agent-sessions list",
             title: "omux: Agent Sessions List",
             summary: "List indexed agent sessions",
-            aliases: ["omux as list", "omux vault list", "sessions history agents"],
+            aliases: ["omux as list", "sessions history agents"],
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
@@ -181,7 +181,7 @@ public enum OpenMUXCLICommandCatalog {
             usage: "omux agent-sessions search <query>",
             title: "omux: Agent Sessions Search",
             summary: "Search indexed agent session transcripts",
-            aliases: ["omux as search", "omux vault search", "session search transcript search"],
+            aliases: ["omux as search", "session search transcript search"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
             paletteExecution: .sendToTerminal
@@ -191,7 +191,7 @@ public enum OpenMUXCLICommandCatalog {
             usage: "omux agent-sessions reindex",
             title: "omux: Agent Sessions Reindex",
             summary: "Refresh the local agent session index",
-            aliases: ["omux as reindex", "omux vault reindex", "index agent sessions"],
+            aliases: ["omux as reindex", "index agent sessions"],
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(

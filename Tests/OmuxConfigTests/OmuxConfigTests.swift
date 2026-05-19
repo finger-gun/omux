@@ -692,6 +692,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))
+        #expect(contents.contains("[agent-sessions]"))
         #expect(contents.contains("[plugins.markdown-preview]"))
         #expect(contents.contains("enabled = true"))
         #expect(contents.contains("renderer = \"builtin\""))
@@ -711,7 +712,44 @@ struct OmuxConfigTests {
     }
 
     @Test
-    func vaultConfigParsesAgentOverride() throws {
+    func agentSessionsConfigParsesAgentOverride() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent-sessions]
+            enabled = true
+            preview_enabled = false
+            index_on_launch = false
+            included_agents = ["codex", "copilot"]
+            excluded_paths = ["~/secret"]
+            max_preview_bytes = 2048
+
+            [agent-sessions.agents.copilot]
+            enabled = true
+            home = "~/.copilot-test"
+            resume_command = "copilot --resume {session_id}"
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agentSessions.previewEnabled == false)
+        #expect(result.config.agentSessions.indexOnLaunch == false)
+        #expect(result.config.agentSessions.includedAgents == ["codex", "copilot"])
+        #expect(result.config.agentSessions.excludedPaths == ["~/secret"])
+        #expect(result.config.agentSessions.maxPreviewBytes == 2048)
+        #expect(result.config.agentSessions.agents["copilot"]?.enabled == true)
+        #expect(result.config.agentSessions.agents["copilot"]?.home == "~/.copilot-test")
+        #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
+    }
+
+    @Test
+    func legacyVaultConfigStillParsesAgentOverride() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
         let configURL = home.appendingPathComponent("config.toml")
@@ -722,10 +760,7 @@ struct OmuxConfigTests {
             [vault]
             enabled = true
             preview_enabled = false
-            index_on_launch = false
             included_agents = ["codex", "copilot"]
-            excluded_paths = ["~/secret"]
-            max_preview_bytes = 2048
 
             [vault.agents.copilot]
             enabled = true
@@ -737,14 +772,9 @@ struct OmuxConfigTests {
 
         let result = OmuxConfigLoader(configURL: configURL).load()
         #expect(result.hasErrors == false)
-        #expect(result.config.vault.previewEnabled == false)
-        #expect(result.config.vault.indexOnLaunch == false)
-        #expect(result.config.vault.includedAgents == ["codex", "copilot"])
-        #expect(result.config.vault.excludedPaths == ["~/secret"])
-        #expect(result.config.vault.maxPreviewBytes == 2048)
-        #expect(result.config.vault.agents["copilot"]?.enabled == true)
-        #expect(result.config.vault.agents["copilot"]?.home == "~/.copilot-test")
-        #expect(result.config.vault.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
+        #expect(result.config.agentSessions.previewEnabled == false)
+        #expect(result.config.agentSessions.includedAgents == ["codex", "copilot"])
+        #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
     }
 }
 

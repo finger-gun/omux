@@ -100,11 +100,13 @@ final class OmuxAppShellTests: XCTestCase {
         let workspaceMenu = menus.first { $0.title == "Workspace" }
         let paneMenu = menus.first { $0.title == "Pane" }
         let viewMenu = menus.first { $0.title == "View" }
+        let agentSessionsMenu = menus.first { $0.title == "Agent Sessions" }
         let configurationMenu = menus.first { $0.title == "Configuration" }
         let resizeSplitMenu = paneMenu?.items.first { $0.title == "Resize Split" }?.submenu
         XCTAssertNotNil(workspaceMenu)
         XCTAssertNotNil(paneMenu)
         XCTAssertNotNil(viewMenu)
+        XCTAssertNotNil(agentSessionsMenu)
         XCTAssertNotNil(configurationMenu)
         XCTAssertNotNil(resizeSplitMenu)
 
@@ -208,6 +210,9 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Open" })
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Reload" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Show Agent Sessions" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
@@ -661,12 +666,12 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
 
         let vaultCommand = CommandPaletteCommand(
-            id: "builtin:vault-sessions",
+            id: "builtin:agent-sessions",
             title: "Agent Sessions",
             subtitle: "Resume an indexed agent session",
             category: .action,
-            matchText: "agent sessions vault history resume codex copilot",
-            aliases: ["vault sessions", "resume session"],
+            matchText: "agent sessions history resume codex copilot",
+            aliases: ["resume session"],
             invocationTarget: .vaultSessions
         )
         let vaultResult = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "codex sessions", commands: commands + [vaultCommand]).first {

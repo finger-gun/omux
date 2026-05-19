@@ -8,7 +8,7 @@ private enum VaultControlPlaneError: Error, CustomStringConvertible {
     case unavailable
 
     var description: String {
-        "vault store unavailable"
+        "Agent Sessions store unavailable"
     }
 }
 
@@ -163,11 +163,11 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
         } else {
             do {
                 self.vaultStore = try VaultStore(
-                    databaseURL: FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-control-\(UUID().uuidString).sqlite"),
+                    databaseURL: FileManager.default.temporaryDirectory.appendingPathComponent("omux-agent-sessions-control-\(UUID().uuidString).sqlite"),
                     configuration: VaultConfiguration(enabled: false)
                 )
             } catch {
-                fputs("error: failed to initialize disabled Vault control-plane store: \(error)\n", stderr)
+                fputs("error: failed to initialize disabled Agent Sessions control-plane store: \(error)\n", stderr)
                 self.vaultStore = nil
             }
         }
@@ -439,27 +439,27 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .vaultList:
+        case .agentSessionsList, .vaultList:
             let searchRequest = VaultSearchRequest(rpcValue: request.params)
             let result = try awaitVault { store in
                 try await store.list(limit: searchRequest.limit, offset: searchRequest.offset)
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .vaultSearch:
+        case .agentSessionsSearch, .vaultSearch:
             let searchRequest = VaultSearchRequest(rpcValue: request.params)
             let result = try awaitVault { store in
                 try await store.search(searchRequest)
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .vaultPreview:
+        case .agentSessionsPreview, .vaultPreview:
             guard let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? request.params?.objectValue?["id"]?.stringValue else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing sessionID"))
             }
             guard let preview = try awaitVault({ store in try await store.preview(sessionID: sessionID) }) else {
-                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "vault session not found"))
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "agent session not found"))
             }
             return JSONRPCResponse(id: request.id, result: preview.rpcValue)
-        case .vaultResume:
+        case .agentSessionsResume, .vaultResume:
             guard let params = request.params?.objectValue,
                   let sessionID = params["sessionID"]?.stringValue ?? params["id"]?.stringValue
             else {
@@ -470,19 +470,19 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                   let command = snapshot.resumeCommand,
                   command.isEmpty == false
             else {
-                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "vault session cannot be resumed"))
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "agent session cannot be resumed"))
             }
             guard let result = try resumeVault(command: command, workingDirectory: snapshot.workingDirectory, destination: destination) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "resume target unavailable"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .vaultReindex:
+        case .agentSessionsReindex, .vaultReindex:
             let agent = request.params?.objectValue?["agent"]?.stringValue.flatMap(VaultAgentKind.init(rawValue:))
             let warnings = try awaitVault { store in
                 try await store.reindex(agent: agent)
             }
             return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true), "warnings": .array(warnings.map(RPCValue.string))]))
-        case .vaultExport:
+        case .agentSessionsExport, .vaultExport:
             guard case .array(let rawIDs)? = request.params?.objectValue?["ids"] else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing ids"))
             }
@@ -491,7 +491,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 try await store.export(ids: ids)
             }
             return JSONRPCResponse(id: request.id, result: .object(["data": .string(data.base64EncodedString())]))
-        case .vaultImport:
+        case .agentSessionsImport, .vaultImport:
             guard let dataString = request.params?.objectValue?["data"]?.stringValue,
                   let data = Data(base64Encoded: dataString)
             else {
@@ -501,7 +501,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 try await store.import(data: data)
             }
             return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))
-        case .vaultAgents:
+        case .agentSessionsAgents, .vaultAgents:
             return JSONRPCResponse(
                 id: request.id,
                 result: .array(VaultAgentKind.allCases.filter { $0 != .custom }.map { .string($0.rawValue) })

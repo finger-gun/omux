@@ -34,6 +34,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var resizeSplitDownMenuItem: NSMenuItem?
     private weak var resizeSplitLeftMenuItem: NSMenuItem?
     private weak var resizeSplitRightMenuItem: NSMenuItem?
+    private weak var agentSessionsMenuItem: NSMenuItem?
+    private weak var openAgentSessionsMenuItem: NSMenuItem?
+    private weak var searchAgentSessionsMenuItem: NSMenuItem?
+    private weak var reindexAgentSessionsMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
     private weak var toggleAgentSessionsMenuItem: NSMenuItem?
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
@@ -51,6 +55,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
     private let autoCheckUpdate: Bool
     private var vaultConfiguration: VaultConfiguration
+    private var aiStatusConfiguration: OmuxConfigPlugins.AIStatus
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
@@ -83,9 +88,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.workspaceController = workspaceController
         let vaultStore: VaultStore?
         do {
-            vaultStore = try VaultStore(configuration: preparedConfiguration.vault)
+            vaultStore = try VaultStore(configuration: preparedConfiguration.agentSessions)
         } catch {
-            fputs("error: failed to initialize Vault store; vault disabled for this session. configuration=\(preparedConfiguration.vault), error=\(error)\n", stderr)
+            fputs("error: failed to initialize Agent Sessions store; Agent Sessions disabled for this session. configuration=\(preparedConfiguration.agentSessions), error=\(error)\n", stderr)
             vaultStore = nil
         }
         self.vaultStore = vaultStore
@@ -104,7 +109,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.workspacePersistenceStore = WorkspacePersistenceStore.shared
         self.initialTheme = preparedConfiguration.theme
         self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
-        self.vaultConfiguration = preparedConfiguration.vault
+        self.vaultConfiguration = preparedConfiguration.agentSessions
+        self.aiStatusConfiguration = preparedConfiguration.aiStatus
         self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
         OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
@@ -187,8 +193,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onAIStatusConfigurationChange = { [weak self] configuration in
                 self?.workspaceController.updateAIStatusConfiguration(configuration)
+                self?.aiStatusConfiguration = configuration
+                self?.refreshMenuValidation()
             }
-            configurationCoordinator.onVaultConfigurationChange = { [weak self] configuration in
+            configurationCoordinator.onAgentSessionsConfigurationChange = { [weak self] configuration in
                 self?.vaultConfiguration = configuration
             }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
@@ -210,17 +218,15 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             )
             try controlPlaneService.start()
             if vaultConfiguration.enabled && vaultConfiguration.indexOnLaunch, let vaultStore = self.vaultStore {
-                Task.detached { [weak self] in
+                Task { @MainActor [weak self, vaultStore] in
                     do {
                         let warnings = try await vaultStore.reindex()
                         for warning in warnings {
-                            fputs("vault warning: \(warning)\n", stderr)
+                            fputs("Agent Sessions warning: \(warning)\n", stderr)
                         }
-                        await MainActor.run {
-                            self?.windowController?.vaultIndexDidUpdate()
-                        }
+                        self?.windowController?.vaultIndexDidUpdate()
                     } catch {
-                        fputs("vault indexing failed: \(error)\n", stderr)
+                        fputs("Agent Sessions indexing failed: \(error)\n", stderr)
                     }
                 }
             }
@@ -409,6 +415,34 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     @objc private func toggleAgentSessionsFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.toggleAgentSessionsVisibility()
+    }
+
+    @objc private func openAgentSessionsFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.setAgentSessionsVisibility(true)
+    }
+
+    @objc private func searchAgentSessionsFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.presentAgentSessionsPalette(keyBindings: keyBindingRegistry)
+    }
+
+    @objc private func reindexAgentSessionsFromMenu(_ sender: Any?) {
+        _ = sender
+        guard vaultConfiguration.enabled, let vaultStore else {
+            return
+        }
+        Task { @MainActor [weak self, vaultStore] in
+            do {
+                let warnings = try await vaultStore.reindex()
+                for warning in warnings {
+                    fputs("Agent Sessions warning: \(warning)\n", stderr)
+                }
+                self?.windowController?.vaultIndexDidUpdate()
+            } catch {
+                fputs("Agent Sessions reindex failed: \(error)\n", stderr)
+            }
+        }
     }
 
     @objc private func openWorkspaceCommandPaletteFromMenu(_ sender: Any?) {
@@ -833,6 +867,38 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         paneMenuItem.submenu = paneMenu
         mainMenu.addItem(paneMenuItem)
 
+        let agentSessionsMenuItem = NSMenuItem()
+        let agentSessionsMenu = NSMenu(title: "Agent Sessions")
+
+        let openAgentSessionsMenuItem = NSMenuItem(
+            title: "Show Agent Sessions",
+            action: #selector(openAgentSessionsFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        openAgentSessionsMenuItem.target = self
+        agentSessionsMenu.addItem(openAgentSessionsMenuItem)
+
+        let searchAgentSessionsMenuItem = NSMenuItem(
+            title: "Search Agent Sessions…",
+            action: #selector(searchAgentSessionsFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        searchAgentSessionsMenuItem.target = self
+        agentSessionsMenu.addItem(searchAgentSessionsMenuItem)
+
+        agentSessionsMenu.addItem(.separator())
+
+        let reindexAgentSessionsMenuItem = NSMenuItem(
+            title: "Reindex Agent Sessions",
+            action: #selector(reindexAgentSessionsFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        reindexAgentSessionsMenuItem.target = self
+        agentSessionsMenu.addItem(reindexAgentSessionsMenuItem)
+
+        agentSessionsMenuItem.submenu = agentSessionsMenu
+        mainMenu.addItem(agentSessionsMenuItem)
+
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
 
@@ -903,6 +969,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.resizeSplitDownMenuItem = resizeSplitDownMenuItem
         self.resizeSplitLeftMenuItem = resizeSplitLeftMenuItem
         self.resizeSplitRightMenuItem = resizeSplitRightMenuItem
+        self.agentSessionsMenuItem = agentSessionsMenuItem
+        self.openAgentSessionsMenuItem = openAgentSessionsMenuItem
+        self.searchAgentSessionsMenuItem = searchAgentSessionsMenuItem
+        self.reindexAgentSessionsMenuItem = reindexAgentSessionsMenuItem
         applyMenuKeyBindings()
         return mainMenu
     }
@@ -924,8 +994,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLIMenuItem?.title = cliInstallStatus.menuTitle
         installCLIMenuItem?.isEnabled = cliInstallStatus.isActionable
         let hasWorkspace = workspaceController.activeWorkspace() != nil
+        let agentSessionsMenuVisible = aiStatusConfiguration.enabled
+        agentSessionsMenuItem?.isHidden = !agentSessionsMenuVisible
+        openAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
+        searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
+        reindexAgentSessionsMenuItem?.isEnabled = vaultConfiguration.enabled && vaultStore != nil && agentSessionsMenuVisible
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
-        toggleAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled
+        toggleAgentSessionsMenuItem?.isHidden = !agentSessionsMenuVisible
+        toggleAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace

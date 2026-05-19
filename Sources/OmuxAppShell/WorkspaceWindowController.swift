@@ -784,7 +784,7 @@ final class WorkspaceShellViewController: NSViewController {
                         self?.update(workspace: workspace)
                     }
                 }
-                fputs("vault list failed: \(error)\n", stderr)
+                fputs("Agent Sessions list failed: \(error)\n", stderr)
             }
         }
     }
@@ -814,10 +814,10 @@ final class WorkspaceShellViewController: NSViewController {
             do {
                 let warnings = try await vaultStore.reindex(agent: agent)
                 for warning in warnings {
-                    fputs("vault refresh warning: \(warning)\n", stderr)
+                    fputs("Agent Sessions refresh warning: \(warning)\n", stderr)
                 }
             } catch {
-                fputs("vault refresh failed: \(error)\n", stderr)
+                fputs("Agent Sessions refresh failed: \(error)\n", stderr)
             }
             guard let self, self.vaultLoadGeneration == generation else { return }
             self.vaultIsLoading = false
@@ -840,7 +840,7 @@ final class WorkspaceShellViewController: NSViewController {
                         agents.insert(agent)
                     }
                 } catch {
-                    fputs("vault agent availability failed for \(agent.rawValue): \(error)\n", stderr)
+                    fputs("Agent Sessions agent availability failed for \(agent.rawValue): \(error)\n", stderr)
                 }
             }
             guard let self, self.vaultAgentLoadGeneration == generation else { return }
@@ -906,7 +906,7 @@ final class WorkspaceShellViewController: NSViewController {
                     connectedPaths: connectedPaths
                 )
             } catch {
-                fputs("vault resume failed: \(error)\n", stderr)
+                fputs("Agent Sessions resume failed: \(error)\n", stderr)
             }
         }
     }
@@ -1544,12 +1544,12 @@ final class WorkspaceShellViewController: NSViewController {
     private func vaultSessionsCommand(keyBindings: OpenMUXKeyBindingRegistry) -> CommandPaletteCommand {
         _ = keyBindings
         return CommandPaletteCommand(
-            id: "builtin:vault-sessions",
+            id: "builtin:agent-sessions",
             title: "Agent Sessions",
             subtitle: "Resume an indexed agent session",
             category: .action,
-            matchText: "agent sessions vault history resume codex copilot",
-            aliases: ["vault sessions", "resume session", "codex sessions", "copilot sessions"],
+            matchText: "agent sessions history resume codex copilot",
+            aliases: ["resume session", "codex sessions", "copilot sessions"],
             requiresArguments: false,
             hasSafeDefaultTarget: true,
             invocationTarget: .vaultSessions
@@ -1601,7 +1601,7 @@ final class WorkspaceShellViewController: NSViewController {
                     }
                 } while offset < totalCount
             } catch {
-                fputs("vault palette search failed: \(error)\n", stderr)
+                fputs("Agent Sessions palette search failed: \(error)\n", stderr)
             }
         }
     }

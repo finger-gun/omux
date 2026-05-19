@@ -224,7 +224,7 @@ public struct VaultConfiguration: Equatable, Sendable {
         self.resumeCommands = resumeCommands
     }
 
-    public init(config: OmuxConfigVault) {
+    public init(config: OmuxConfigAgentSessions) {
         var included = config.includedAgents.compactMap(VaultAgentKind.init(rawValue:))
         var homes: [VaultAgentKind: String] = [:]
         var commands: [VaultAgentKind: String] = [:]

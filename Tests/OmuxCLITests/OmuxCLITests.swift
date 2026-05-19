@@ -2565,7 +2565,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["Cancelled."])
     }
 
-    func testCLIVaultResumeChoiceFallbackWritesSelectedCommand() throws {
+    func testCLIAgentSessionsResumeChoiceFallbackWritesSelectedCommand() throws {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: outputURL) }
         var output = [String]()
@@ -2575,19 +2575,19 @@ final class OmuxCLITests: XCTestCase {
         )
 
         XCTAssertEqual(command.run(arguments: [
-            "omux", "vault", "resume-choice", "codex:abc",
+            "omux", "agent-sessions", "resume-choice", "codex:abc",
             "--resume-command", "codex resume 'abc'",
             "--output", outputURL.path,
             "--session-path", "/Users/example/projects/other",
             "--current-path", "/Users/example/projects/omux",
         ]), 0)
 
-        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "omux vault resume 'codex:abc' --workspace")
+        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "omux agent-sessions resume 'codex:abc' --workspace")
         XCTAssertTrue(output.contains("Agent session path differs."))
         XCTAssertTrue(output.contains("2. Open Matching Workspace — Open the session path as a workspace and resume there"))
     }
 
-    func testCLIInteractiveVaultResumeChoiceWritesSelectedCommand() throws {
+    func testCLIInteractiveAgentSessionsResumeChoiceWritesSelectedCommand() throws {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: outputURL) }
         var output = [String]()
@@ -2607,7 +2607,7 @@ final class OmuxCLITests: XCTestCase {
         )
 
         XCTAssertEqual(command.run(arguments: [
-            "omux", "vault", "resume-choice", "codex:abc",
+            "omux", "agent-sessions", "resume-choice", "codex:abc",
             "--resume-command", "codex resume 'abc'",
             "--output", outputURL.path,
             "--session-path", "/Users/example/projects/other",

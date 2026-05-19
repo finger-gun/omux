@@ -344,7 +344,7 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
     }
 }
 
-public struct OmuxConfigVault: Equatable, Sendable {
+public struct OmuxConfigAgentSessions: Equatable, Sendable {
     public struct Agent: Equatable, Sendable {
         public let enabled: Bool?
         public let home: String?
@@ -355,6 +355,8 @@ public struct OmuxConfigVault: Equatable, Sendable {
             self.home = home
             self.resumeCommand = resumeCommand
         }
+
+        public typealias OmuxConfigVault = OmuxConfigAgentSessions
     }
 
     public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
@@ -393,7 +395,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
-    public let vault: OmuxConfigVault
+    public let agentSessions: OmuxConfigAgentSessions
     public let plugins: OmuxConfigPlugins
     public let registries: OmuxConfigRegistries
     public let keyBindings: [OpenMUXKeyBindingOverride]
@@ -407,7 +409,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
-        vault: OmuxConfigVault = OmuxConfigVault(),
+        vault: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
@@ -420,7 +422,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
-        self.vault = vault
+        self.agentSessions = vault
         self.plugins = plugins
         self.registries = registries
         self.keyBindings = keyBindings
@@ -435,12 +437,16 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
-        vault: OmuxConfigVault(),
+        vault: OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
         keyBindings: [],
         ghostty: []
     )
+
+    public var vault: OmuxConfigAgentSessions {
+        agentSessions
+    }
 }
 
 public enum OmuxWorkspacePathResolver {
@@ -523,8 +529,12 @@ public enum OmuxConfigPaths {
         generatedDirectoryURL.appendingPathComponent("ghostty", isDirectory: true)
     }
 
-    public static var vaultDatabaseURL: URL {
+    public static var agentSessionsDatabaseURL: URL {
         baseDirectoryURL.appendingPathComponent("vault.sqlite", isDirectory: false)
+    }
+
+    public static var vaultDatabaseURL: URL {
+        agentSessionsDatabaseURL
     }
 }
 
@@ -559,7 +569,7 @@ public enum OmuxConfigTemplate {
         # colors_enabled = true
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
-        [vault]
+        [agent-sessions]
         enabled = true
         preview_enabled = true
         index_on_launch = true
@@ -937,9 +947,24 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "vault", "plugins.markdown-preview", "plugins.ai-status", "registries", "keys", "ghostty"]
+        let agentSessionsTableNames = ["vault", "agent-sessions"]
+        let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
+        let allowedTables: Set<String> = [
+            "theme",
+            "terminal",
+            "workspace",
+            "ui.panes",
+            "ui.icons",
+            "vault",
+            "agent-sessions",
+            "plugins.markdown-preview",
+            "plugins.ai-status",
+            "registries",
+            "keys",
+            "ghostty",
+        ]
         for tableName in document.tableNames
-        where allowedTables.contains(tableName) == false && tableName.hasPrefix("vault.agents.") == false {
+        where allowedTables.contains(tableName) == false && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
                     severity: .error,
@@ -1021,7 +1046,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
-                vault: config.vault,
+                vault: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1036,7 +1061,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
-                vault: config.vault,
+                vault: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1579,8 +1604,8 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let supportedVaultAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
-        let vaultAllowedKeys: Set<String> = [
+        let supportedAgentSessionAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+        let agentSessionsAllowedKeys: Set<String> = [
             "enabled",
             "preview_enabled",
             "index_on_launch",
@@ -1588,77 +1613,80 @@ public struct OmuxConfigLoader {
             "excluded_paths",
             "max_preview_bytes",
         ]
-        var vaultEnabled = config.vault.enabled
-        var vaultPreviewEnabled = config.vault.previewEnabled
-        var vaultIndexOnLaunch = config.vault.indexOnLaunch
-        var vaultIncludedAgents = config.vault.includedAgents
-        var vaultExcludedPaths = config.vault.excludedPaths
-        var vaultMaxPreviewBytes = config.vault.maxPreviewBytes
-        for entry in document.entries(in: "vault") {
-            guard vaultAllowedKeys.contains(entry.key) else {
-                diagnostics.append(
-                    OmuxConfigDiagnostic(
-                        severity: .error,
-                        message: "Unknown [vault] key '\(entry.key)'.",
-                        filePath: sourceURL.path,
-                        line: entry.line
+        var agentSessionsEnabled = config.agentSessions.enabled
+        var agentSessionsPreviewEnabled = config.agentSessions.previewEnabled
+        var agentSessionsIndexOnLaunch = config.agentSessions.indexOnLaunch
+        var agentSessionsIncludedAgents = config.agentSessions.includedAgents
+        var agentSessionsExcludedPaths = config.agentSessions.excludedPaths
+        var agentSessionsMaxPreviewBytes = config.agentSessions.maxPreviewBytes
+        for tableName in agentSessionsTableNames {
+            for entry in document.entries(in: tableName) {
+                guard agentSessionsAllowedKeys.contains(entry.key) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
                     )
-                )
-                continue
-            }
+                    continue
+                }
 
-            switch entry.key {
-            case "enabled":
-                guard let value = entry.value.boolValue else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
-                    continue
+                switch entry.key {
+                case "enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsEnabled = value
+                case "preview_enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).preview_enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsPreviewEnabled = value
+                case "index_on_launch":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).index_on_launch must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsIndexOnLaunch = value
+                case "included_agents":
+                    guard let values = stringArray(from: entry.value),
+                          values.allSatisfy(supportedAgentSessionAgents.contains)
+                    else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).included_agents must contain supported agent names.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsIncludedAgents = values
+                case "excluded_paths":
+                    guard let values = stringArray(from: entry.value) else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).excluded_paths must be an array of strings.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsExcludedPaths = values
+                case "max_preview_bytes":
+                    guard let value = entry.value.intValue, value >= 1024 else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).max_preview_bytes must be an integer greater than or equal to 1024.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsMaxPreviewBytes = value
+                default:
+                    break
                 }
-                vaultEnabled = value
-            case "preview_enabled":
-                guard let value = entry.value.boolValue else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.preview_enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
-                    continue
-                }
-                vaultPreviewEnabled = value
-            case "index_on_launch":
-                guard let value = entry.value.boolValue else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.index_on_launch must be a boolean.", filePath: sourceURL.path, line: entry.line))
-                    continue
-                }
-                vaultIndexOnLaunch = value
-            case "included_agents":
-                guard let values = stringArray(from: entry.value),
-                      values.allSatisfy(supportedVaultAgents.contains)
-                else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.included_agents must contain supported agent names.", filePath: sourceURL.path, line: entry.line))
-                    continue
-                }
-                vaultIncludedAgents = values
-            case "excluded_paths":
-                guard let values = stringArray(from: entry.value) else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.excluded_paths must be an array of strings.", filePath: sourceURL.path, line: entry.line))
-                    continue
-                }
-                vaultExcludedPaths = values
-            case "max_preview_bytes":
-                guard let value = entry.value.intValue, value >= 1024 else {
-                    diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "vault.max_preview_bytes must be an integer greater than or equal to 1024.", filePath: sourceURL.path, line: entry.line))
-                    continue
-                }
-                vaultMaxPreviewBytes = value
-            default:
-                break
             }
         }
 
-        var vaultAgents = config.vault.agents
-        for tableName in document.tableNames where tableName.hasPrefix("vault.agents.") {
-            let agentName = String(tableName.dropFirst("vault.agents.".count))
-            guard supportedVaultAgents.contains(agentName) else {
+        var agentSessionsAgents = config.agentSessions.agents
+        for tableName in document.tableNames where agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) {
+            let tablePrefix = agentSessionsAgentTablePrefixes.first(where: { tableName.hasPrefix($0) }) ?? "agent-sessions.agents."
+            let agentName = String(tableName.dropFirst(tablePrefix.count))
+            guard supportedAgentSessionAgents.contains(agentName) else {
                 diagnostics.append(
                     OmuxConfigDiagnostic(
                         severity: .error,
-                        message: "Unsupported vault agent '\(agentName)'.",
+                        message: "Unsupported Agent Sessions agent '\(agentName)'.",
                         filePath: sourceURL.path
                     )
                 )
@@ -1711,7 +1739,7 @@ public struct OmuxConfigLoader {
                     break
                 }
             }
-            vaultAgents[agentName] = OmuxConfigVault.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
+            agentSessionsAgents[agentName] = OmuxConfigAgentSessions.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
         }
 
         var keyBindings: [OpenMUXKeyBindingOverride] = []
@@ -1804,14 +1832,14 @@ public struct OmuxConfigLoader {
                     colorsEnabled: iconsColorsEnabled
                 )
             ),
-            vault: OmuxConfigVault(
-                enabled: vaultEnabled,
-                previewEnabled: vaultPreviewEnabled,
-                indexOnLaunch: vaultIndexOnLaunch,
-                includedAgents: vaultIncludedAgents,
-                excludedPaths: vaultExcludedPaths,
-                maxPreviewBytes: vaultMaxPreviewBytes,
-                agents: vaultAgents
+            vault: OmuxConfigAgentSessions(
+                enabled: agentSessionsEnabled,
+                previewEnabled: agentSessionsPreviewEnabled,
+                indexOnLaunch: agentSessionsIndexOnLaunch,
+                includedAgents: agentSessionsIncludedAgents,
+                excludedPaths: agentSessionsExcludedPaths,
+                maxPreviewBytes: agentSessionsMaxPreviewBytes,
+                agents: agentSessionsAgents
             ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
