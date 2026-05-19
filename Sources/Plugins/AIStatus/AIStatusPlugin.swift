@@ -37,8 +37,8 @@ public struct OmuxAIStatusPlugin {
         case "hooks":
             return runHooks(arguments: rest, writeLine: writeLine)
         case "clear-stale":
-            writeLine("No stale bundled AI status entries.")
-            return 0
+            writeLine("clear-stale is not implemented for bundled ai-status.")
+            return 1
         default:
             writeLine(Self.usage)
             return 1
@@ -201,7 +201,7 @@ public struct OmuxAIStatusPlugin {
             state: .working,
             target: target,
             label: vendor.label,
-            message: commandArguments.joined(separator: " "),
+            message: redactedCommandSummary(commandArguments),
             source: vendor.source,
             client: client,
             writeLine: { _ in }
@@ -237,6 +237,15 @@ public struct OmuxAIStatusPlugin {
             writeLine: { _ in }
         )
         return process.terminationStatus
+    }
+
+    private func redactedCommandSummary(_ commandArguments: [String]) -> String {
+        guard let executable = commandArguments.first,
+              executable.isEmpty == false
+        else {
+            return "<redacted command>"
+        }
+        return "\(executable) [arguments redacted]"
     }
 
     private func sendStatus(
@@ -540,15 +549,27 @@ public struct OmuxAIStatusHookInstaller {
         codex_hooks = true
         # OpenMUX ai-status managed end
         """
-        let path = url.path(percentEncoded: false)
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         guard existing.contains("# OpenMUX ai-status managed start") == false else {
             return
         }
+        let existingWithoutManagedBlock = existing.replacingOccurrences(
+            of: #"(?ms)^# OpenMUX ai-status managed start\n.*?\n# OpenMUX ai-status managed end\n?"#,
+            with: "",
+            options: .regularExpression
+        )
+        if existingWithoutManagedBlock.range(of: #"(?m)^\s*codex_hooks\s*="#, options: .regularExpression) != nil {
+            throw NSError(
+                domain: "OmuxAIStatusHookInstaller",
+                code: 3,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "\(url.path(percentEncoded: false)) already defines codex_hooks; remove it before running ai-status hooks setup.",
+                ]
+            )
+        }
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let separator = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
         try (existing + separator + block + "\n").write(to: url, atomically: true, encoding: .utf8)
-        _ = path
     }
 
     private func removeCodexHooksEnabledBlock() throws {

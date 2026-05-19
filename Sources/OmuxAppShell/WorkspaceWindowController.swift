@@ -447,7 +447,11 @@ final class WorkspaceShellViewController: NSViewController {
             activeWorkspace: workspace,
             terminalTextProvider: terminalTextProvider
         )
-        let scopedVaultSessions = vaultSessions(for: vaultWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
+        let normalizedWorkspaceFilter = normalizedVaultWorkspaceFilter(for: allWorkspaces)
+        if vaultWorkspaceFilter != normalizedWorkspaceFilter {
+            vaultWorkspaceFilter = normalizedWorkspaceFilter
+        }
+        let scopedVaultSessions = vaultSessions(for: normalizedWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
@@ -482,7 +486,7 @@ final class WorkspaceShellViewController: NSViewController {
             searchQuery: vaultSearchQuery,
             selectedAgent: vaultAgentFilter,
             availableAgents: availableAgents,
-            workspaceFilter: vaultWorkspaceFilter,
+            workspaceFilter: normalizedWorkspaceFilter,
             workspaceFilterItems: workspaceFilterItems,
             isLoading: vaultIsLoading,
             hasMore: vaultHasMore,
@@ -1025,13 +1029,25 @@ final class WorkspaceShellViewController: NSViewController {
             }
         case .workspace(let workspaceID):
             guard let workspace = allWorkspaces.first(where: { $0.id == workspaceID }) else {
-                return []
+                let connectedPaths = vaultConnectedPaths(for: activeWorkspace)
+                return vaultSessions.filter {
+                    Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
+                }
             }
             let connectedPaths = vaultConnectedPaths(for: workspace)
             return vaultSessions.filter {
                 Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
             }
         }
+    }
+
+    private func normalizedVaultWorkspaceFilter(for allWorkspaces: [Workspace]) -> VaultWorkspaceFilter {
+        guard case .workspace(let workspaceID) = vaultWorkspaceFilter,
+              allWorkspaces.contains(where: { $0.id == workspaceID }) == false
+        else {
+            return vaultWorkspaceFilter
+        }
+        return .current
     }
 
     private func vaultWorkspaceFilterItems(
@@ -1083,12 +1099,12 @@ final class WorkspaceShellViewController: NSViewController {
         let components = url.standardizedFileURL.pathComponents
         let markers: Set<String> = ["projects", "project", "src", "source", "workspace", "workspaces", "developer"]
         guard let markerIndex = components.firstIndex(where: { markers.contains($0.lowercased()) }),
-              markerIndex + 1 < components.count
+              markerIndex + 2 < components.count
         else {
             return path
         }
 
-        let rootComponents = Array(components.prefix(markerIndex + 2))
+        let rootComponents = Array(components.prefix(markerIndex + 3))
         return NSString.path(withComponents: rootComponents)
     }
 
@@ -3548,7 +3564,15 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             view.removeFromSuperview()
         }
         if sessions.isEmpty {
-            let empty = NSTextField(labelWithString: isLoading ? "Loading sessions..." : "No sessions for this workspace")
+            let empty = NSTextField(
+                labelWithString: emptyStateMessage(
+                    isLoading: isLoading,
+                    workspaceFilter: workspaceFilter,
+                    workspaceFilterItems: workspaceFilterItems,
+                    selectedAgent: selectedAgent,
+                    searchQuery: searchQuery
+                )
+            )
             empty.font = .systemFont(ofSize: 11)
             empty.textColor = theme.shell.textMuted
             empty.maximumNumberOfLines = 2
@@ -3571,6 +3595,32 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         }
         apply(theme: theme)
         pinScrollToTopIfContentFits()
+    }
+
+    private func emptyStateMessage(
+        isLoading: Bool,
+        workspaceFilter: WorkspaceShellViewController.VaultWorkspaceFilter,
+        workspaceFilterItems: [WorkspaceFilterItem],
+        selectedAgent: VaultAgentKind?,
+        searchQuery: String
+    ) -> String {
+        if isLoading {
+            return "Loading sessions..."
+        }
+        if selectedAgent != nil || searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "No sessions match your filters/search"
+        }
+        switch workspaceFilter {
+        case .all:
+            return "No sessions across all workspaces"
+        case .current:
+            return "No sessions for this workspace"
+        case .workspace:
+            if let title = workspaceFilterItems.first(where: { $0.filter == workspaceFilter })?.title {
+                return "No sessions in \(title)"
+            }
+            return "No sessions for this workspace"
+        }
     }
 
     private static func visibleSessions(_ sessions: [VaultSessionSummary]) -> [VaultSessionSummary] {
@@ -3837,8 +3887,12 @@ final class ShellOverlayHostView: NSView {
         }
     }
 
+    private final class BlockingOverlayView: NSView {
+        override var isFlipped: Bool { true }
+    }
+
     private let paletteHostView = PassthroughOverlayView()
-    private let modalHostView = PassthroughOverlayView()
+    private let modalHostView = BlockingOverlayView()
     let floatingModalOverlayView = FloatingModalOverlayView()
     private var currentTheme: WorkspaceShellTheme = .defaultTheme
 
@@ -3909,11 +3963,13 @@ final class ShellOverlayHostView: NSView {
         modalHostView.subviews.forEach { $0.removeFromSuperview() }
         modalView.apply(theme: currentTheme)
         modalHostView.addSubview(modalView)
+        let preferredWidth = modalView.widthAnchor.constraint(equalToConstant: 460)
+        preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             modalView.centerXAnchor.constraint(equalTo: modalHostView.centerXAnchor),
             modalView.centerYAnchor.constraint(equalTo: modalHostView.centerYAnchor),
             modalView.widthAnchor.constraint(lessThanOrEqualTo: modalHostView.widthAnchor, constant: -48),
-            modalView.widthAnchor.constraint(equalToConstant: 460),
+            preferredWidth,
         ])
         window?.makeFirstResponder(modalView)
     }

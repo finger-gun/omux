@@ -441,7 +441,7 @@ public struct OmuxCLICommand {
                 writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
                 return 1
             }
-            let destinationFlags = ["--new-tab", "--split", "--workspace"].filter(rest.contains)
+            let destinationFlags = ["--focused", "--new-tab", "--split", "--workspace"].filter(rest.contains)
             guard destinationFlags.count <= 1 else {
                 writeLine("error: agent session resume destination flags are mutually exclusive")
                 writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
@@ -498,7 +498,7 @@ public struct OmuxCLICommand {
                   let data = Data(base64Encoded: encoded)
             else {
                 writeLine(response.result?.prettyPrinted ?? "")
-                return response.error == nil ? 0 : 1
+                return 1
             }
             try data.write(to: URL(fileURLWithPath: resolveCLIPath(rest[outputIndex + 1])))
             return 0
@@ -2230,7 +2230,7 @@ struct VaultResumeChoiceItem: Equatable {
                     keyword: "workspace",
                     title: "Open Matching Workspace",
                     subtitle: "Open the session path as a workspace and resume there",
-                    shellCommand: "omux agent-sessions resume \(sessionID.shellEscaped) --workspace"
+                    shellCommand: "\(currentExecutableCommand()) agent-sessions resume \(sessionID.shellEscaped) --workspace"
                 )
             )
         }
@@ -2243,6 +2243,15 @@ struct VaultResumeChoiceItem: Equatable {
             )
         )
         return result
+    }
+
+    private static func currentExecutableCommand() -> String {
+        let executable = CommandLine.arguments.first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let executable, executable.isEmpty == false else {
+            return "omux"
+        }
+        return executable.shellEscaped
     }
 }
 

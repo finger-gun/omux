@@ -55,7 +55,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
     private let autoCheckUpdate: Bool
     private var vaultConfiguration: VaultConfiguration
-    private var aiStatusConfiguration: OmuxConfigPlugins.AIStatus
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
@@ -110,7 +109,6 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.initialTheme = preparedConfiguration.theme
         self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
         self.vaultConfiguration = preparedConfiguration.agentSessions
-        self.aiStatusConfiguration = preparedConfiguration.aiStatus
         self.keyBindingRegistry = preparedConfiguration.keyBindingRegistry
         OpenMUXShortcutClassifier.updateKeyBindings(preparedConfiguration.keyBindingRegistry)
         super.init()
@@ -193,11 +191,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onAIStatusConfigurationChange = { [weak self] configuration in
                 self?.workspaceController.updateAIStatusConfiguration(configuration)
-                self?.aiStatusConfiguration = configuration
-                self?.refreshMenuValidation()
             }
             configurationCoordinator.onAgentSessionsConfigurationChange = { [weak self] configuration in
                 self?.vaultConfiguration = configuration
+                DispatchQueue.main.async { [weak self] in
+                    self?.refreshMenuValidation()
+                    NSApp.mainMenu?.update()
+                }
             }
             configurationCoordinator.onKeyBindingsChange = { [weak self] registry in
                 self?.applyKeyBindings(registry)
@@ -994,14 +994,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLIMenuItem?.title = cliInstallStatus.menuTitle
         installCLIMenuItem?.isEnabled = cliInstallStatus.isActionable
         let hasWorkspace = workspaceController.activeWorkspace() != nil
-        let agentSessionsMenuVisible = aiStatusConfiguration.enabled
+        let agentSessionsMenuVisible = vaultConfiguration.enabled
         agentSessionsMenuItem?.isHidden = !agentSessionsMenuVisible
-        openAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
-        searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
-        reindexAgentSessionsMenuItem?.isEnabled = vaultConfiguration.enabled && vaultStore != nil && agentSessionsMenuVisible
+        openAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
+        searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
+        reindexAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible && vaultStore != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
         toggleAgentSessionsMenuItem?.isHidden = !agentSessionsMenuVisible
-        toggleAgentSessionsMenuItem?.isEnabled = hasWorkspace && vaultConfiguration.enabled && agentSessionsMenuVisible
+        toggleAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace

@@ -58,6 +58,8 @@ struct CommandPaletteCommandCatalog {
             switch command.target {
             case "theme.switch":
                 return .themeSwitch
+            case "omux.agent-sessions.open":
+                return .vaultSessions
             default:
                 guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else {
                     return nil
@@ -91,6 +93,8 @@ struct CommandPaletteCommandCatalog {
         case .builtin:
             switch command.target {
             case "theme.switch":
+                return true
+            case "omux.agent-sessions.open":
                 return true
             default:
                 guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else { return false }

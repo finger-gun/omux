@@ -2582,7 +2582,16 @@ final class OmuxCLITests: XCTestCase {
             "--current-path", "/Users/example/projects/omux",
         ]), 0)
 
-        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "omux agent-sessions resume 'codex:abc' --workspace")
+        let expectedExecutable: String
+        if let executable = CommandLine.arguments.first, executable.isEmpty == false {
+            expectedExecutable = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        } else {
+            expectedExecutable = "omux"
+        }
+        XCTAssertEqual(
+            try String(contentsOf: outputURL, encoding: .utf8),
+            "\(expectedExecutable) agent-sessions resume 'codex:abc' --workspace"
+        )
         XCTAssertTrue(output.contains("Agent session path differs."))
         XCTAssertTrue(output.contains("2. Open Matching Workspace — Open the session path as a workspace and resume there"))
     }

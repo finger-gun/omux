@@ -88,11 +88,6 @@ final class VaultIndexRefreshCoordinator {
         }
 
         isIndexing = true
-        for agent in dueAgents {
-            dirtyAgents.remove(agent)
-            dirtySince.removeValue(forKey: agent)
-        }
-
         Task { [weak self] in
             var completed = Set<VaultAgentKind>()
             for agent in dueAgents {
@@ -115,6 +110,8 @@ final class VaultIndexRefreshCoordinator {
     private func finishIndexing(completed: Set<VaultAgentKind>) {
         let now = Date()
         for agent in completed {
+            dirtyAgents.remove(agent)
+            dirtySince.removeValue(forKey: agent)
             lastIndexedAt[agent] = now
         }
         isIndexing = false

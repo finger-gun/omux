@@ -1679,8 +1679,12 @@ public struct OmuxConfigLoader {
         }
 
         var agentSessionsAgents = config.agentSessions.agents
-        for tableName in document.tableNames where agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) {
-            let tablePrefix = agentSessionsAgentTablePrefixes.first(where: { tableName.hasPrefix($0) }) ?? "agent-sessions.agents."
+        let orderedAgentTablePrefixes = ["vault.agents.", "agent-sessions.agents."]
+        for tablePrefix in orderedAgentTablePrefixes {
+            let tableNames = document.tableNames
+                .filter { $0.hasPrefix(tablePrefix) }
+                .sorted()
+            for tableName in tableNames {
             let agentName = String(tableName.dropFirst(tablePrefix.count))
             guard supportedAgentSessionAgents.contains(agentName) else {
                 diagnostics.append(
@@ -1740,6 +1744,7 @@ public struct OmuxConfigLoader {
                 }
             }
             agentSessionsAgents[agentName] = OmuxConfigAgentSessions.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
+            }
         }
 
         var keyBindings: [OpenMUXKeyBindingOverride] = []
