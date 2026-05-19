@@ -453,7 +453,6 @@ final class WorkspaceShellViewController: NSViewController {
         }
         let scopedVaultSessions = vaultSessions(for: normalizedWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
-        let sessionActivityByID = vaultSessionActivityByID(allWorkspaces: allWorkspaces, sessions: vaultSessions)
         let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
@@ -492,7 +491,7 @@ final class WorkspaceShellViewController: NSViewController {
             workspaceFilterItems: workspaceFilterItems,
             isLoading: vaultIsLoading,
             hasMore: vaultHasMore,
-            sessionActivityByID: sessionActivityByID,
+            sessionActivityByID: [:],
             theme: currentTheme,
             onToggle: { [weak self] in
                 self?.toggleVaultSidebar()
@@ -931,6 +930,9 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         activeVaultSessionByPaneID[paneID] = sessionID
+        if let workspace = currentWorkspace {
+            update(workspace: workspace)
+        }
     }
 
     private func activePaneID(forVaultSession sessionID: String, allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> PaneID? {
@@ -948,19 +950,6 @@ final class WorkspaceShellViewController: NSViewController {
         activeVaultSessionByPaneID = activeVaultSessionByPaneID.filter { validPaneIDs.contains($0.key) }
     }
 
-    private func vaultSessionActivityByID(allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> [String: WorkspaceVaultSidebarView.SessionActivity] {
-        let panesByID = Dictionary(uniqueKeysWithValues: allVaultActivityPanes(in: allWorkspaces).map { ($0.id, $0) })
-        var activityByID: [String: WorkspaceVaultSidebarView.SessionActivity] = [:]
-        for (paneID, sessionID) in activeVaultSessionBindings(allWorkspaces: allWorkspaces, sessions: sessions) {
-            let progress = panesByID[paneID]?.terminalState.progress ?? PaneProgress(state: .paused)
-            activityByID[sessionID] = WorkspaceVaultSidebarView.SessionActivity(
-                isActive: true,
-                progress: progress
-            )
-        }
-        return activityByID
-    }
-
     private func activeVaultSessionBindings(allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> [PaneID: String] {
         let panes = allVaultActivityPanes(in: allWorkspaces)
         let validPaneIDs = Set(panes.map(\.id))
@@ -972,34 +961,13 @@ final class WorkspaceShellViewController: NSViewController {
             else {
                 return false
             }
-            return Self.paneLooksActiveForVaultSession(pane, session: session)
+            if let agent = Self.inferredVaultAgentKind(for: pane) {
+                return agent == session.agent
+            }
+            return true
         }
-        var bindings = activeExplicitBindings
         activeVaultSessionByPaneID = activeExplicitBindings
-        var boundSessionIDs = Set(bindings.values)
-
-        for pane in panes where bindings[pane.id] == nil {
-            guard let agent = Self.inferredVaultAgentKind(for: pane),
-                  let panePath = Self.currentVaultPath(for: pane)
-            else {
-                continue
-            }
-
-            let matchingSession = sessions
-                .filter { session in
-                    session.agent == agent
-                        && boundSessionIDs.contains(session.id) == false
-                        && Self.vaultPathsOverlap(session.workingDirectory, panePath)
-                }
-                .max { $0.modifiedAt < $1.modifiedAt }
-
-            if let matchingSession {
-                bindings[pane.id] = matchingSession.id
-                boundSessionIDs.insert(matchingSession.id)
-            }
-        }
-
-        return bindings
+        return activeExplicitBindings
     }
 
     private func allVaultActivityPanes(in workspaces: [Workspace]) -> [Pane] {
@@ -1248,11 +1216,6 @@ final class WorkspaceShellViewController: NSViewController {
     private static func currentVaultPath(for pane: Pane) -> String? {
         pane.terminalState.reportedWorkingDirectory
             ?? pane.terminalSession?.workingDirectory
-    }
-
-    private static func paneLooksActiveForVaultSession(_ pane: Pane, session: VaultSessionSummary) -> Bool {
-        inferredVaultAgentKind(for: pane) == session.agent
-            && vaultPathsOverlap(session.workingDirectory, currentVaultPath(for: pane))
     }
 
     private static func inferredVaultAgentKind(for pane: Pane) -> VaultAgentKind? {
