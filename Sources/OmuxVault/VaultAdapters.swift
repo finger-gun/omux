@@ -9,13 +9,13 @@ public protocol VaultAgentAdapter: Sendable {
 public enum VaultAdapterFactory {
     public static func adapters(configuration: VaultConfiguration) -> [VaultAgentAdapter] {
         [
+            CopilotVaultAdapter(root: configuration.home(for: .copilot), configuration: configuration),
             CodexVaultAdapter(root: configuration.home(for: .codex), configuration: configuration),
+            GeminiVaultAdapter(root: configuration.home(for: .gemini), configuration: configuration),
             JSONLDirectoryVaultAdapter(kind: .claude, root: configuration.home(for: .claude), sourceKind: "claude_jsonl", globHint: "projects", configuration: configuration),
             SQLiteBackedVaultAdapter(kind: .opencode, root: configuration.home(for: .opencode), databaseNames: ["opencode.db", "state.db", "db.sqlite"], sourceKind: "opencode_db", configuration: configuration),
             JSONLDirectoryVaultAdapter(kind: .pi, root: configuration.home(for: .pi), sourceKind: "pi_jsonl", globHint: nil, configuration: configuration),
             JSONLDirectoryVaultAdapter(kind: .rovodev, root: configuration.home(for: .rovodev), sourceKind: "rovodev_jsonl", globHint: nil, configuration: configuration),
-            CopilotVaultAdapter(root: configuration.home(for: .copilot), configuration: configuration),
-            GeminiVaultAdapter(root: configuration.home(for: .gemini), configuration: configuration),
         ]
     }
 }
@@ -142,18 +142,86 @@ public struct CopilotVaultAdapter: VaultAgentAdapter {
 
     public func discoverSessions() async throws -> [VaultIndexedSession] {
         let stateRoot = root.appendingPathComponent("session-state", isDirectory: true)
-        let stateSessions = SessionFileScanner.files(under: stateRoot, extensions: ["jsonl", "json"])
-            .compactMap { parseStateFile($0) }
         let dbURL = root.appendingPathComponent("session-store.db", isDirectory: false)
-        let dbSessions = SQLiteBackedVaultAdapter(
-            kind: .copilot,
-            root: root,
-            databaseNames: [dbURL.lastPathComponent],
-            sourceKind: "copilot_sqlite",
-            configuration: configuration
-        )
-        let sqliteSessions = (try? await dbSessions.discoverSessions()) ?? []
-        return mergePreferNewest(stateSessions + sqliteSessions)
+        let sqliteSessions = (try? discoverSessionStore(dbURL: dbURL)) ?? []
+        if sqliteSessions.isEmpty == false {
+            return sqliteSessions
+        }
+        let stateSessions = SessionFileScanner.files(under: stateRoot, extensions: ["jsonl", "json"], limit: 250)
+            .compactMap { parseStateFile($0) }
+        return stateSessions
+    }
+
+    private func discoverSessionStore(dbURL: URL) throws -> [VaultIndexedSession] {
+        guard FileManager.default.fileExists(atPath: dbURL.path) else {
+            return []
+        }
+        let copyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omux-vault-copilot-\(UUID().uuidString).sqlite")
+        try backupSQLiteDatabase(from: dbURL, to: copyURL)
+        defer { try? FileManager.default.removeItem(at: copyURL) }
+
+        let db = try VaultSQLiteDatabase(url: copyURL)
+        let tables = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'") { sqliteText($0, 0) ?? "" }
+        guard tables.contains("sessions") else {
+            return []
+        }
+        let sessionColumns = try db.query("PRAGMA table_info(sessions)") { sqliteText($0, 1) ?? "" }
+        guard let idColumn = preferred(["id", "session_id", "sessionId"], in: sessionColumns) else {
+            return []
+        }
+        let titleColumn = preferred(["summary", "title", "name"], in: sessionColumns)
+        let cwdColumn = preferred(["cwd", "working_directory", "workingDirectory", "repo_path", "repository"], in: sessionColumns)
+        let modelColumn = preferred(["model", "model_name"], in: sessionColumns)
+        let branchColumn = preferred(["git_branch", "branch"], in: sessionColumns)
+        let updatedColumn = preferred(["updated_at", "updatedAt", "modified_at", "modifiedAt", "created_at", "createdAt"], in: sessionColumns)
+
+        let qIDColumn = sqliteIdentifier(idColumn)
+        let qTitleColumn = titleColumn.map(sqliteIdentifier)
+        let qCwdColumn = cwdColumn.map(sqliteIdentifier)
+        let qModelColumn = modelColumn.map(sqliteIdentifier)
+        let qBranchColumn = branchColumn.map(sqliteIdentifier)
+        let qUpdatedColumn = updatedColumn.map(sqliteIdentifier)
+
+        let selected = [
+            "s.\(qIDColumn)",
+            qTitleColumn.map { "s.\($0)" } ?? "NULL",
+            qCwdColumn.map { "s.\($0)" } ?? "NULL",
+            qModelColumn.map { "s.\($0)" } ?? "NULL",
+            qBranchColumn.map { "s.\($0)" } ?? "NULL",
+            qUpdatedColumn.map { "s.\($0)" } ?? "NULL",
+        ].joined(separator: ", ")
+        let order = qUpdatedColumn.map { " ORDER BY s.\($0) DESC" } ?? ""
+
+        return try db.query("SELECT \(selected) FROM sessions s\(order) LIMIT 10000") { statement in
+            let sessionID = sqliteText(statement, 0) ?? UUID().uuidString
+            let title = sqliteText(statement, 1)?.firstLine(maxLength: 80).nilIfEmpty ?? "Untitled Copilot Session"
+            let rawTimestampText = sqliteText(statement, 5)
+            let modifiedAt = parseTimestampDate(rawNumeric: sqliteInt(statement, 5), rawText: rawTimestampText)
+                ?? ((try? FileManager.default.attributesOfItem(atPath: dbURL.path))?[.modificationDate] as? Date)
+                ?? Date()
+            let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
+            let summary = VaultSessionSummary(
+                id: "\(kind.rawValue):\(sessionID)",
+                agent: kind,
+                sourceKind: "copilot_sqlite",
+                sourcePath: dbURL.path,
+                title: title,
+                workingDirectory: sqliteText(statement, 2),
+                model: sqliteText(statement, 3),
+                gitBranch: sqliteText(statement, 4),
+                modifiedAt: modifiedAt,
+                previewAvailable: title.isEmpty == false,
+                resumeAvailable: resume != nil
+            )
+            return VaultIndexedSession(
+                summary: summary,
+                resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: summary.workingDirectory, resumeCommand: resume),
+                turns: [
+                    VaultTranscriptTurn(sessionID: summary.id, turnID: "title", role: "summary", text: title, ordinal: 0, modifiedAt: modifiedAt),
+                ]
+            )
+        }
     }
 
     private func parseStateFile(_ file: URL) -> VaultIndexedSession? {
@@ -303,7 +371,7 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
         let cwdColumn = preferred(["cwd", "working_directory", "workingDirectory", "project_path"], in: columns)
         let modelColumn = preferred(["model", "model_name"], in: columns)
         let branchColumn = preferred(["git_branch", "branch"], in: columns)
-        let updatedColumn = preferred(["updated_at_ms", "modified_at_ms", "updatedAt", "mtime"], in: columns)
+        let updatedColumn = preferred(["updated_at_ms", "modified_at_ms", "updatedAt", "updated_at", "modifiedAt", "modified_at", "createdAt", "created_at", "timestamp", "mtime"], in: columns)
         let selected = [
             idColumn,
             titleColumn,
@@ -319,11 +387,8 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
             let model = sqliteText(statement, 3)
             let branch = sqliteText(statement, 4)
             let modifiedAt: Date
-            let rawTime = sqliteInt(statement, 5)
-            if rawTime > 10_000_000_000 {
-                modifiedAt = Date(timeIntervalSince1970: TimeInterval(rawTime) / 1000)
-            } else if rawTime > 0 {
-                modifiedAt = Date(timeIntervalSince1970: TimeInterval(rawTime))
+            if let parsedDate = parseTimestampDate(rawNumeric: sqliteInt(statement, 5), rawText: sqliteText(statement, 5)) {
+                modifiedAt = parsedDate
             } else {
                 let attributes = try? FileManager.default.attributesOfItem(atPath: dbURL.path)
                 modifiedAt = attributes?[.modificationDate] as? Date ?? Date()
@@ -360,7 +425,7 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
 }
 
 private enum SessionFileScanner {
-    static func files(under root: URL, extensions: Set<String>) -> [URL] {
+    static func files(under root: URL, extensions: Set<String>, limit: Int = 5000) -> [URL] {
         guard FileManager.default.fileExists(atPath: root.path),
               let enumerator = FileManager.default.enumerator(
                 at: root,
@@ -384,7 +449,7 @@ private enum SessionFileScanner {
             let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return left > right
         }
-        .prefix(5000)
+        .prefix(limit)
         .map { $0 }
     }
 }
@@ -449,6 +514,29 @@ private func parseISO8601Date(_ value: String) -> Date? {
     let plain = ISO8601DateFormatter()
     plain.formatOptions = [.withInternetDateTime]
     return plain.date(from: value)
+}
+
+private func parseTimestampDate(rawNumeric: Int64, rawText: String?) -> Date? {
+    if let rawText = rawText?.trimmingCharacters(in: .whitespacesAndNewlines),
+       rawText.isEmpty == false {
+        if let isoDate = parseISO8601Date(rawText) {
+            return isoDate
+        }
+        if let numericDate = Double(rawText), numericDate > 0 {
+            return dateFromUnixTimestamp(numericDate)
+        }
+    }
+    if rawNumeric > 0 {
+        return dateFromUnixTimestamp(Double(rawNumeric))
+    }
+    return nil
+}
+
+private func dateFromUnixTimestamp(_ value: Double) -> Date {
+    if value > 10_000_000_000 {
+        return Date(timeIntervalSince1970: value / 1000)
+    }
+    return Date(timeIntervalSince1970: value)
 }
 
 private func text(from object: [String: Any]) -> String? {
@@ -537,5 +625,9 @@ private extension String {
             return line
         }
         return String(line.prefix(maxLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

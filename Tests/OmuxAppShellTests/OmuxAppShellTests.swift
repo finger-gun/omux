@@ -100,7 +100,7 @@ final class OmuxAppShellTests: XCTestCase {
         let workspaceMenu = menus.first { $0.title == "Workspace" }
         let paneMenu = menus.first { $0.title == "Pane" }
         let viewMenu = menus.first { $0.title == "View" }
-        let agentSessionsMenu = menus.first { $0.title == "Agent Sessions" }
+        let agentSessionsMenu = menus.first { $0.title == "Agents" }
         let configurationMenu = menus.first { $0.title == "Configuration" }
         let resizeSplitMenu = paneMenu?.items.first { $0.title == "Resize Split" }?.submenu
         XCTAssertNotNil(workspaceMenu)

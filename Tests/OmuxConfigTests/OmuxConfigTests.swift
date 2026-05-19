@@ -727,6 +727,7 @@ struct OmuxConfigTests {
             included_agents = ["codex", "copilot"]
             excluded_paths = ["~/secret"]
             max_preview_bytes = 2048
+            sidebar_rows_per_agent = 12
 
             [agent-sessions.agents.copilot]
             enabled = true
@@ -743,6 +744,7 @@ struct OmuxConfigTests {
         #expect(result.config.agentSessions.includedAgents == ["codex", "copilot"])
         #expect(result.config.agentSessions.excludedPaths == ["~/secret"])
         #expect(result.config.agentSessions.maxPreviewBytes == 2048)
+        #expect(result.config.agentSessions.sidebarRowsPerAgent == 12)
         #expect(result.config.agentSessions.agents["copilot"]?.enabled == true)
         #expect(result.config.agentSessions.agents["copilot"]?.home == "~/.copilot-test")
         #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")

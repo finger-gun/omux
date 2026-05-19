@@ -31,6 +31,7 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
             if let pointer {
                 sqlite3_close(pointer)
             }
+
             throw VaultSQLiteError.open(message)
         }
         self.db = pointer
@@ -185,6 +186,10 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
               session_id TEXT PRIMARY KEY,
               imported_at_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS vault_deleted_sessions (
+              session_id TEXT PRIMARY KEY,
+              deleted_at_ms INTEGER NOT NULL
+            );
             CREATE TRIGGER IF NOT EXISTS vault_messages_ai AFTER INSERT ON vault_messages BEGIN
               INSERT INTO vault_messages_fts(rowid, session_id, turn_id, text)
               VALUES (new.rowid, new.session_id, new.turn_id, new.text);
@@ -206,6 +211,86 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
     }
 }
 
+final class ExternalSQLiteDatabase: @unchecked Sendable {
+    private let db: OpaquePointer
+
+    init(url: URL) throws {
+        var pointer: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let pointer
+        else {
+            let message = pointer.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open SQLite database"
+            if let pointer {
+                sqlite3_close(pointer)
+            }
+            throw VaultSQLiteError.open(message)
+        }
+        self.db = pointer
+    }
+
+    deinit {
+        sqlite3_close(db)
+    }
+
+    func write(_ sql: String, bindings: [SQLiteBinding] = []) throws {
+        let statement = try prepare(sql, bindings: bindings)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    func query<T>(_ sql: String, bindings: [SQLiteBinding] = [], row: (OpaquePointer) throws -> T) throws -> [T] {
+        let statement = try prepare(sql, bindings: bindings)
+        defer { sqlite3_finalize(statement) }
+        var values: [T] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_ROW {
+                values.append(try row(statement))
+            } else if result == SQLITE_DONE {
+                return values
+            } else {
+                throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(db)))
+            }
+        }
+    }
+
+    private func prepare(_ sql: String, bindings: [SQLiteBinding]) throws -> OpaquePointer {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement
+        else {
+            throw VaultSQLiteError.prepare(String(cString: sqlite3_errmsg(db)))
+        }
+        var shouldFinalizeOnError = true
+        defer {
+            if shouldFinalizeOnError {
+                sqlite3_finalize(statement)
+            }
+        }
+        for (index, binding) in bindings.enumerated() {
+            let result: Int32
+            let position = Int32(index + 1)
+            switch binding {
+            case .string(let value):
+                result = sqlite3_bind_text(statement, position, value, -1, SQLITE_TRANSIENT)
+            case .int(let value):
+                result = sqlite3_bind_int64(statement, position, sqlite3_int64(value))
+            case .bool(let value):
+                result = sqlite3_bind_int(statement, position, value ? 1 : 0)
+            case .null:
+                result = sqlite3_bind_null(statement, position)
+            }
+            guard result == SQLITE_OK else {
+                throw VaultSQLiteError.bind(String(cString: sqlite3_errmsg(db)))
+            }
+        }
+        shouldFinalizeOnError = false
+        return statement
+    }
+}
+
 enum SQLiteBinding {
     case string(String)
     case int(Int64)
@@ -224,4 +309,8 @@ func sqliteText(_ statement: OpaquePointer, _ index: Int32) -> String? {
 
 func sqliteInt(_ statement: OpaquePointer, _ index: Int32) -> Int64 {
     sqlite3_column_int64(statement, index)
+}
+
+func sqliteIdentifier(_ value: String) -> String {
+    "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
 }

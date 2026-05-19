@@ -219,15 +219,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             try controlPlaneService.start()
             if vaultConfiguration.enabled && vaultConfiguration.indexOnLaunch, let vaultStore = self.vaultStore {
                 Task { @MainActor [weak self, vaultStore] in
-                    do {
-                        let warnings = try await vaultStore.reindex()
-                        for warning in warnings {
-                            fputs("Agent Sessions warning: \(warning)\n", stderr)
-                        }
-                        self?.windowController?.vaultIndexDidUpdate()
-                    } catch {
-                        fputs("Agent Sessions indexing failed: \(error)\n", stderr)
-                    }
+                    await self?.reindexAgentSessionsIncrementally(vaultStore: vaultStore)
                 }
             }
             if autoCheckUpdate {
@@ -433,16 +425,31 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             return
         }
         Task { @MainActor [weak self, vaultStore] in
+            await self?.reindexAgentSessionsIncrementally(vaultStore: vaultStore)
+        }
+    }
+
+    @MainActor
+    private func reindexAgentSessionsIncrementally(vaultStore: VaultStore) async {
+        for agent in prioritizedAgentSessionsAgents() {
             do {
-                let warnings = try await vaultStore.reindex()
+                let warnings = try await vaultStore.reindex(agent: agent)
                 for warning in warnings {
                     fputs("Agent Sessions warning: \(warning)\n", stderr)
                 }
-                self?.windowController?.vaultIndexDidUpdate()
+                windowController?.vaultIndexDidUpdate()
             } catch {
-                fputs("Agent Sessions reindex failed: \(error)\n", stderr)
+                fputs("Agent Sessions indexing failed for \(agent.rawValue): \(error)\n", stderr)
             }
         }
+    }
+
+    private func prioritizedAgentSessionsAgents() -> [VaultAgentKind] {
+        let priority: [VaultAgentKind] = [.copilot, .codex, .gemini]
+        let included = vaultConfiguration.includedAgents.filter { $0 != .custom }
+        var result = priority.filter { included.contains($0) }
+        result += included.filter { result.contains($0) == false }
+        return result
     }
 
     @objc private func openWorkspaceCommandPaletteFromMenu(_ sender: Any?) {
@@ -868,7 +875,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         mainMenu.addItem(paneMenuItem)
 
         let agentSessionsMenuItem = NSMenuItem()
-        let agentSessionsMenu = NSMenu(title: "Agent Sessions")
+        let agentSessionsMenu = NSMenu(title: "Agents")
 
         let openAgentSessionsMenuItem = NSMenuItem(
             title: "Show Agent Sessions",

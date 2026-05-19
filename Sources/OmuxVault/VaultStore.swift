@@ -59,6 +59,16 @@ public actor VaultStore {
             whereClauses.append("s.working_directory = ?")
             bindings.append(.string(workingDirectory))
         }
+        if let prefixes = request.workingDirectoryPrefixes?.filter({ $0.isEmpty == false }), prefixes.isEmpty == false {
+            let prefixClauses = prefixes.map { _ in
+                "(s.working_directory = ? OR s.working_directory LIKE ? ESCAPE '\\')"
+            }.joined(separator: " OR ")
+            whereClauses.append("(\(prefixClauses))")
+            for prefix in prefixes {
+                bindings.append(.string(prefix))
+                bindings.append(.string(sqlLikeEscaped(prefix) + "/%"))
+            }
+        }
 
         let baseWhere = whereClauses.isEmpty ? "" : "WHERE " + whereClauses.joined(separator: " AND ")
         let rows: [VaultSessionSummary]
@@ -246,6 +256,94 @@ public actor VaultStore {
                     "INSERT OR REPLACE INTO vault_imported_sessions(session_id, imported_at_ms) VALUES (?, ?)",
                     bindings: [.string(session.id), .int(Int64(Date().timeIntervalSince1970 * 1000))]
                 )
+                try database.write("DELETE FROM vault_deleted_sessions WHERE session_id = ?", bindings: [.string(session.id)])
+            }
+        }
+    }
+
+    public func delete(sessionID: String) throws {
+        let normalizedID = Self.rawSessionID(sessionID)
+        let summary = try session(id: sessionID)
+        try deleteSourceSession(summary: summary, normalizedID: normalizedID)
+        try database.inTransaction {
+            try database.write("DELETE FROM vault_sessions WHERE id = ?", bindings: [.string(sessionID)])
+            try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(sessionID)])
+            try database.write(
+                "DELETE FROM vault_resume_snapshots WHERE session_id IN (?, ?)",
+                bindings: [.string(sessionID), .string(normalizedID)]
+            )
+            try database.write("DELETE FROM vault_imported_sessions WHERE session_id = ?", bindings: [.string(sessionID)])
+            try database.write(
+                "DELETE FROM vault_source_state WHERE source_key IN (?, ?)",
+                bindings: [.string(sessionID), .string(normalizedID)]
+            )
+            try database.write(
+                "INSERT OR REPLACE INTO vault_deleted_sessions(session_id, deleted_at_ms) VALUES (?, ?)",
+                bindings: [.string(sessionID), .int(Int64(Date().timeIntervalSince1970 * 1000))]
+            )
+        }
+    }
+
+    private func deleteSourceSession(summary: VaultSessionSummary?, normalizedID: String) throws {
+        guard let summary else {
+            return
+        }
+        switch summary.sourceKind {
+        case "copilot_sqlite":
+            try deleteCopilotSourceSession(normalizedID: normalizedID)
+        case "copilot_session_state":
+            try deleteSourceFileOrDirectory(summary.sourcePath)
+            try deleteCopilotSessionStateDirectory(normalizedID: normalizedID)
+        case "codex_jsonl", "claude_jsonl", "pi_jsonl", "rovodev_jsonl", "gemini_logs":
+            try deleteSourceFileOrDirectory(summary.sourcePath)
+        default:
+            break
+        }
+    }
+
+    private func deleteSourceFileOrDirectory(_ sourcePath: String?) throws {
+        guard let sourcePath, FileManager.default.fileExists(atPath: sourcePath) else {
+            return
+        }
+        let url = URL(fileURLWithPath: sourcePath)
+        if url.lastPathComponent == "events.jsonl" || url.lastPathComponent == "vscode.metadata.json" {
+            try FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        } else {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func deleteCopilotSourceSession(normalizedID: String) throws {
+        let dbURL = configuration.home(for: .copilot).appendingPathComponent("session-store.db", isDirectory: false)
+        if FileManager.default.fileExists(atPath: dbURL.path) {
+            try deleteRowsReferencingSession(normalizedID, in: dbURL)
+        }
+        try deleteCopilotSessionStateDirectory(normalizedID: normalizedID)
+    }
+
+    private func deleteCopilotSessionStateDirectory(normalizedID: String) throws {
+        let stateURL = configuration.home(for: .copilot)
+            .appendingPathComponent("session-state", isDirectory: true)
+            .appendingPathComponent(normalizedID, isDirectory: true)
+        if FileManager.default.fileExists(atPath: stateURL.path) {
+            try FileManager.default.removeItem(at: stateURL)
+        }
+    }
+
+    private func deleteRowsReferencingSession(_ sessionID: String, in dbURL: URL) throws {
+        let external = try ExternalSQLiteDatabase(url: dbURL)
+        let tables = try external.query("SELECT name FROM sqlite_master WHERE type = 'table'") { statement in
+            sqliteText(statement, 0) ?? ""
+        }
+        for table in tables where table.hasPrefix("sqlite_") == false {
+            let quotedTable = sqliteIdentifier(table)
+            let columns = try external.query("PRAGMA table_info(\(quotedTable))") { statement in
+                sqliteText(statement, 1) ?? ""
+            }
+            if columns.contains("session_id") {
+                try external.write("DELETE FROM \(quotedTable) WHERE session_id = ?", bindings: [.string(sessionID)])
+            } else if table == "sessions", columns.contains("id") {
+                try external.write("DELETE FROM sessions WHERE id = ?", bindings: [.string(sessionID)])
             }
         }
     }
@@ -391,6 +489,9 @@ public actor VaultStore {
     }
 
     private func shouldExclude(_ summary: VaultSessionSummary) -> Bool {
+        if (try? isDeleted(sessionID: summary.id)) == true {
+            return true
+        }
         guard let path = summary.sourcePath ?? summary.workingDirectory else {
             return false
         }
@@ -399,6 +500,10 @@ public actor VaultStore {
             let excludedPath = URL(fileURLWithPath: expandHome(excluded)).standardized.path
             return normalizedPath == excludedPath || normalizedPath.hasPrefix(excludedPath + "/")
         }
+    }
+
+    private func isDeleted(sessionID: String) throws -> Bool {
+        try count("SELECT COUNT(*) FROM vault_deleted_sessions WHERE session_id = ?", bindings: [.string(sessionID)]) > 0
     }
 }
 
@@ -419,11 +524,14 @@ private func ftsQuery(for tokens: [String]) -> String? {
 }
 
 private func searchLikePattern(for raw: String) -> String {
-    let escaped = raw
+    "%\(sqlLikeEscaped(raw))%"
+}
+
+private func sqlLikeEscaped(_ raw: String) -> String {
+    raw
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "%", with: "\\%")
         .replacingOccurrences(of: "_", with: "\\_")
-    return "%\(escaped)%"
 }
 
 private func expandHome(_ path: String) -> String {

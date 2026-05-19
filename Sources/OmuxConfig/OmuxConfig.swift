@@ -367,6 +367,7 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
     public let includedAgents: [String]
     public let excludedPaths: [String]
     public let maxPreviewBytes: Int
+    public let sidebarRowsPerAgent: Int
     public let agents: [String: Agent]
 
     public init(
@@ -376,6 +377,7 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
         includedAgents: [String] = Self.defaultIncludedAgents,
         excludedPaths: [String] = [],
         maxPreviewBytes: Int = 1_048_576,
+        sidebarRowsPerAgent: Int = 10,
         agents: [String: Agent] = [:]
     ) {
         self.enabled = enabled
@@ -384,6 +386,7 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
         self.includedAgents = includedAgents
         self.excludedPaths = excludedPaths
         self.maxPreviewBytes = maxPreviewBytes
+        self.sidebarRowsPerAgent = sidebarRowsPerAgent
         self.agents = agents
     }
 }
@@ -530,7 +533,7 @@ public enum OmuxConfigPaths {
     }
 
     public static var agentSessionsDatabaseURL: URL {
-        baseDirectoryURL.appendingPathComponent("vault.sqlite", isDirectory: false)
+        baseDirectoryURL.appendingPathComponent("agent-sessions.sqlite", isDirectory: false)
     }
 
     public static var vaultDatabaseURL: URL {
@@ -576,6 +579,7 @@ public enum OmuxConfigTemplate {
         included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
         excluded_paths = []
         max_preview_bytes = 1048576
+        sidebar_rows_per_agent = 10
 
         [plugins.markdown-preview]
         enabled = true
@@ -1612,6 +1616,7 @@ public struct OmuxConfigLoader {
             "included_agents",
             "excluded_paths",
             "max_preview_bytes",
+            "sidebar_rows_per_agent",
         ]
         var agentSessionsEnabled = config.agentSessions.enabled
         var agentSessionsPreviewEnabled = config.agentSessions.previewEnabled
@@ -1619,6 +1624,7 @@ public struct OmuxConfigLoader {
         var agentSessionsIncludedAgents = config.agentSessions.includedAgents
         var agentSessionsExcludedPaths = config.agentSessions.excludedPaths
         var agentSessionsMaxPreviewBytes = config.agentSessions.maxPreviewBytes
+        var agentSessionsSidebarRowsPerAgent = config.agentSessions.sidebarRowsPerAgent
         for tableName in agentSessionsTableNames {
             for entry in document.entries(in: tableName) {
                 guard agentSessionsAllowedKeys.contains(entry.key) else {
@@ -1672,6 +1678,12 @@ public struct OmuxConfigLoader {
                         continue
                     }
                     agentSessionsMaxPreviewBytes = value
+                case "sidebar_rows_per_agent":
+                    guard let value = entry.value.intValue, value >= 1 else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).sidebar_rows_per_agent must be an integer greater than or equal to 1.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsSidebarRowsPerAgent = value
                 default:
                     break
                 }
@@ -1844,6 +1856,7 @@ public struct OmuxConfigLoader {
                 includedAgents: agentSessionsIncludedAgents,
                 excludedPaths: agentSessionsExcludedPaths,
                 maxPreviewBytes: agentSessionsMaxPreviewBytes,
+                sidebarRowsPerAgent: agentSessionsSidebarRowsPerAgent,
                 agents: agentSessionsAgents
             ),
             plugins: OmuxConfigPlugins(

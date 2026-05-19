@@ -17,7 +17,7 @@ struct OmuxVaultTests {
         """.write(to: file, atomically: true, encoding: .utf8)
 
         let store = try VaultStore(
-            databaseURL: root.appendingPathComponent("vault.sqlite"),
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
             configuration: VaultConfiguration(enabled: true, includedAgents: [.codex]),
             adapters: [
                 JSONLDirectoryVaultAdapter(
@@ -78,10 +78,57 @@ struct OmuxVaultTests {
         #expect(try await target.preview(sessionID: "copilot:one")?.turns.first?.text == "hello copilot")
     }
 
+    @Test("Vault search can scope sessions by workspace path prefixes")
+    func searchScopesByWorkspacePathPrefixes() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("agent-sessions.sqlite"), configuration: VaultConfiguration())
+        let bundle = VaultExportBundle(
+            sessions: [
+                VaultSessionSummary(
+                    id: "copilot:current-root",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "Current root",
+                    workingDirectory: "/tmp/omux",
+                    modifiedAt: Date(timeIntervalSince1970: 3),
+                    previewAvailable: false,
+                    resumeAvailable: true
+                ),
+                VaultSessionSummary(
+                    id: "copilot:current-child",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "Current child",
+                    workingDirectory: "/tmp/omux/Sources",
+                    modifiedAt: Date(timeIntervalSince1970: 2),
+                    previewAvailable: false,
+                    resumeAvailable: true
+                ),
+                VaultSessionSummary(
+                    id: "copilot:other",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "Other",
+                    workingDirectory: "/tmp/other",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    previewAvailable: false,
+                    resumeAvailable: true
+                ),
+            ],
+            resumeSnapshots: [:],
+            turns: [:]
+        )
+        try await store.import(data: JSONEncoder.vaultTest.encode(bundle))
+
+        let result = try await store.search(VaultSearchRequest(workingDirectoryPrefixes: ["/tmp/omux"]))
+        #expect(result.totalCount == 2)
+        #expect(result.sessions.map(\.id) == ["copilot:current-root", "copilot:current-child"])
+    }
+
     @Test("Vault hides UUID-only sessions from browse results")
     func hidesUUIDOnlySessionsFromBrowseResults() async throws {
         let root = try temporaryDirectory()
-        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("agent-sessions.sqlite"), configuration: VaultConfiguration())
         let bundle = VaultExportBundle(
             sessions: [
                 VaultSessionSummary(
@@ -125,7 +172,7 @@ struct OmuxVaultTests {
     @Test("Vault search ignores punctuation-only FTS queries")
     func searchIgnoresPunctuationOnlyQueries() async throws {
         let root = try temporaryDirectory()
-        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("agent-sessions.sqlite"), configuration: VaultConfiguration())
         let bundle = VaultExportBundle(
             sessions: [
                 VaultSessionSummary(
@@ -157,7 +204,7 @@ struct OmuxVaultTests {
     @Test("Vault search matches title and transcript prefixes")
     func searchMatchesTitleAndTranscriptPrefixes() async throws {
         let root = try temporaryDirectory()
-        let store = try VaultStore(databaseURL: root.appendingPathComponent("vault.sqlite"), configuration: VaultConfiguration())
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("agent-sessions.sqlite"), configuration: VaultConfiguration())
         let bundle = VaultExportBundle(
             sessions: [
                 VaultSessionSummary(
@@ -241,7 +288,7 @@ struct OmuxVaultTests {
         """)
 
         let store = try VaultStore(
-            databaseURL: root.appendingPathComponent("vault.sqlite"),
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
             configuration: VaultConfiguration(enabled: true, includedAgents: [.codex]),
             adapters: [CodexVaultAdapter(root: root, configuration: VaultConfiguration(enabled: true, includedAgents: [.codex]))]
         )
@@ -280,7 +327,7 @@ struct OmuxVaultTests {
         """.write(to: logs, atomically: true, encoding: .utf8)
 
         let store = try VaultStore(
-            databaseURL: root.appendingPathComponent("vault.sqlite"),
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
             configuration: VaultConfiguration(enabled: true, includedAgents: [.gemini]),
             adapters: [GeminiVaultAdapter(root: root, configuration: VaultConfiguration(enabled: true, includedAgents: [.gemini]))]
         )
@@ -294,6 +341,271 @@ struct OmuxVaultTests {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         #expect(list.sessions.first?.modifiedAt == formatter.date(from: "2026-05-18T12:04:16.729Z"))
         #expect(try await store.preview(sessionID: "gemini:gemini-one")?.turns.count == 2)
+    }
+
+    @Test("SQLite adapter parses text timestamps for Copilot sessions")
+    func sqliteAdapterParsesTextTimestamps() async throws {
+        let root = try temporaryDirectory()
+        let db = root.appendingPathComponent("session-store.db")
+        try runSQLite(db, """
+        create table sessions (
+          id text primary key,
+          title text,
+          cwd text,
+          updatedAt text
+        );
+        insert into sessions values (
+          'session-a',
+          'Newest Copilot Session',
+          '/tmp/newest',
+          '2026-05-19T08:31:45.000Z'
+        );
+        """)
+
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot]),
+            adapters: [
+                SQLiteBackedVaultAdapter(
+                    kind: .copilot,
+                    root: root,
+                    databaseNames: ["session-store.db"],
+                    sourceKind: "copilot_sqlite",
+                    configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot])
+                ),
+            ]
+        )
+
+        _ = try await store.reindex()
+        let list = try await store.list()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(list.sessions.map(\.id) == ["copilot:session-a"])
+        #expect(list.sessions.first?.workingDirectory == "/tmp/newest")
+        #expect(list.sessions.first?.modifiedAt == formatter.date(from: "2026-05-19T08:31:45.000Z"))
+    }
+
+    @Test("Copilot adapter uses sessions table over session-state file mtimes")
+    func copilotAdapterUsesSessionsTableOverSessionStateFileMtimes() async throws {
+        let root = try temporaryDirectory()
+        let state = root.appendingPathComponent("session-state/session-a", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        let stateFile = state.appendingPathComponent("events.jsonl")
+        try #"{"role":"user","content":"fallback title","cwd":"/tmp/fallback"}"#.write(to: stateFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_900_000_000)],
+            ofItemAtPath: stateFile.path
+        )
+
+        let db = root.appendingPathComponent("session-store.db")
+        try runSQLite(db, """
+        create table sessions (
+          id text primary key,
+          cwd text,
+          repository text,
+          host_type text,
+          branch text,
+          summary text,
+          created_at text,
+          updated_at text
+        );
+        create table turns (
+          id integer primary key,
+          session_id text not null,
+          turn_index integer not null,
+          user_message text,
+          assistant_response text,
+          timestamp text
+        );
+        insert into sessions values (
+          'session-a',
+          '/tmp/store',
+          'finger-gun/omux',
+          'cli',
+          'main',
+          'Store title',
+          '2026-05-18T07:00:00.000Z',
+          '2026-05-18T07:00:01.000Z'
+        );
+        insert into turns values (
+          1,
+          'session-a',
+          0,
+          'hello from store',
+          null,
+          '2026-05-18T07:00:02.000Z'
+        );
+        """)
+
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot]),
+            adapters: [CopilotVaultAdapter(root: root, configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot]))]
+        )
+
+        _ = try await store.reindex()
+        let list = try await store.list()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(list.sessions.map(\.id) == ["copilot:session-a"])
+        #expect(list.sessions.first?.title == "Store title")
+        #expect(list.sessions.first?.workingDirectory == "/tmp/store")
+        #expect(list.sessions.first?.modifiedAt == formatter.date(from: "2026-05-18T07:00:01.000Z"))
+    }
+
+    @Test("Copilot adapter sorts by sessions updated timestamp")
+    func copilotAdapterSortsBySessionsUpdatedTimestamp() async throws {
+        let root = try temporaryDirectory()
+        let db = root.appendingPathComponent("session-store.db")
+        try runSQLite(db, """
+        create table sessions (
+          id text primary key,
+          cwd text,
+          repository text,
+          host_type text,
+          branch text,
+          summary text,
+          created_at text,
+          updated_at text
+        );
+        create table turns (
+          id integer primary key,
+          session_id text not null,
+          turn_index integer not null,
+          user_message text,
+          assistant_response text,
+          timestamp text
+        );
+        insert into sessions values (
+          'session-a',
+          '/tmp/store',
+          'finger-gun/omux',
+          'cli',
+          'main',
+          'Store title',
+          '2026-05-01T07:00:00.000Z',
+          '2026-05-19T07:00:01.000Z'
+        );
+        insert into sessions values (
+          'session-b',
+          '/tmp/store',
+          'finger-gun/omux',
+          'cli',
+          'main',
+          'Older store title',
+          '2026-05-01T07:00:00.000Z',
+          '2026-05-18T07:00:01.000Z'
+        );
+        insert into turns values (
+          1,
+          'session-b',
+          0,
+          'newer turn ignored for sidebar ordering',
+          null,
+          '2026-05-20T07:00:02.000Z'
+        );
+        """)
+
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot]),
+            adapters: [CopilotVaultAdapter(root: root, configuration: VaultConfiguration(enabled: true, includedAgents: [.copilot]))]
+        )
+
+        _ = try await store.reindex()
+        let list = try await store.list()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(list.sessions.map(\.id) == ["copilot:session-a", "copilot:session-b"])
+        #expect(list.sessions.first?.modifiedAt == formatter.date(from: "2026-05-19T07:00:01.000Z"))
+    }
+
+    @Test("Vault store deletes indexed session data")
+    func vaultStoreDeletesIndexedSessionData() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(databaseURL: root.appendingPathComponent("agent-sessions.sqlite"), configuration: VaultConfiguration())
+        let bundle = VaultExportBundle(
+            sessions: [
+                VaultSessionSummary(
+                    id: "copilot:delete-me",
+                    agent: .copilot,
+                    sourceKind: "fixture",
+                    title: "Delete me",
+                    workingDirectory: "/tmp",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    previewAvailable: true,
+                    resumeAvailable: true
+                ),
+            ],
+            resumeSnapshots: [
+                "copilot:delete-me": VaultResumeSnapshot(
+                    kind: .copilot,
+                    sessionID: "delete-me",
+                    workingDirectory: "/tmp",
+                    resumeCommand: "copilot --resume 'delete-me'"
+                ),
+            ],
+            turns: [
+                "copilot:delete-me": [
+                    VaultTranscriptTurn(
+                        sessionID: "copilot:delete-me",
+                        turnID: "0",
+                        role: "user",
+                        text: "cleanup",
+                        ordinal: 0,
+                        modifiedAt: Date(timeIntervalSince1970: 1)
+                    ),
+                ],
+            ]
+        )
+        try await store.import(data: JSONEncoder.vaultTest.encode(bundle))
+        #expect(try await store.list().totalCount == 1)
+
+        try await store.delete(sessionID: "copilot:delete-me")
+
+        #expect(try await store.list().totalCount == 0)
+        #expect(try await store.preview(sessionID: "copilot:delete-me") == nil)
+        #expect(try await store.resumeSnapshot(sessionID: "copilot:delete-me") == nil)
+    }
+
+    @Test("Vault store deletes Copilot source session")
+    func vaultStoreDeletesCopilotSourceSession() async throws {
+        let root = try temporaryDirectory()
+        let state = root.appendingPathComponent("session-state/session-a", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        try #"{"role":"user","content":"delete source"}"#.write(
+            to: state.appendingPathComponent("events.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let db = root.appendingPathComponent("session-store.db")
+        try runSQLite(db, """
+        create table sessions (id text primary key, summary text, updated_at text);
+        create table turns (id integer primary key, session_id text not null, turn_index integer, user_message text, timestamp text);
+        insert into sessions values ('session-a', 'Delete source', '2026-05-18T07:00:01.000Z');
+        insert into turns values (1, 'session-a', 0, 'hello', '2026-05-18T07:00:02.000Z');
+        """)
+        let configuration = VaultConfiguration(
+            enabled: true,
+            includedAgents: [.copilot],
+            agentHomes: [.copilot: root.path]
+        )
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: configuration,
+            adapters: [CopilotVaultAdapter(root: root, configuration: configuration)]
+        )
+        _ = try await store.reindex()
+        #expect(try await store.list().totalCount == 1)
+
+        try await store.delete(sessionID: "copilot:session-a")
+
+        #expect(try await store.list().totalCount == 0)
+        #expect(FileManager.default.fileExists(atPath: state.path) == false)
+        let remainingSessions = try sqliteScalar(db, "select count(*) from sessions where id = 'session-a'")
+        let remainingTurns = try sqliteScalar(db, "select count(*) from turns where session_id = 'session-a'")
+        #expect(remainingSessions == 0)
+        #expect(remainingTurns == 0)
     }
 
     @Test("Vault watch sources use narrow agent homes")
@@ -335,6 +647,19 @@ private func runSQLite(_ db: URL, _ sql: String) throws {
     try process.run()
     process.waitUntilExit()
     #expect(process.terminationStatus == 0)
+}
+
+private func sqliteScalar(_ db: URL, _ sql: String) throws -> Int {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+    process.arguments = [db.path, sql]
+    process.standardOutput = output
+    try process.run()
+    process.waitUntilExit()
+    #expect(process.terminationStatus == 0)
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    return Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
 }
 
 private extension JSONEncoder {

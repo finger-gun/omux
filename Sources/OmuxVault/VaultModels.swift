@@ -130,6 +130,7 @@ public struct VaultSearchRequest: Codable, Equatable, Sendable {
     public let query: String
     public let agents: [VaultAgentKind]?
     public let workingDirectory: String?
+    public let workingDirectoryPrefixes: [String]?
     public let offset: Int
     public let limit: Int
 
@@ -137,12 +138,14 @@ public struct VaultSearchRequest: Codable, Equatable, Sendable {
         query: String = "",
         agents: [VaultAgentKind]? = nil,
         workingDirectory: String? = nil,
+        workingDirectoryPrefixes: [String]? = nil,
         offset: Int = 0,
         limit: Int = 50
     ) {
         self.query = query
         self.agents = agents
         self.workingDirectory = workingDirectory
+        self.workingDirectoryPrefixes = workingDirectoryPrefixes
         self.offset = max(0, offset)
         self.limit = min(max(1, limit), 500)
     }
@@ -201,6 +204,7 @@ public struct VaultConfiguration: Equatable, Sendable {
     public var includedAgents: [VaultAgentKind]
     public var excludedPaths: [String]
     public var maxPreviewBytes: Int
+    public var sidebarRowsPerAgent: Int
     public var agentHomes: [VaultAgentKind: String]
     public var resumeCommands: [VaultAgentKind: String]
 
@@ -211,6 +215,7 @@ public struct VaultConfiguration: Equatable, Sendable {
         includedAgents: [VaultAgentKind] = Self.defaultIncludedAgents,
         excludedPaths: [String] = [],
         maxPreviewBytes: Int = 1_048_576,
+        sidebarRowsPerAgent: Int = 10,
         agentHomes: [VaultAgentKind: String] = [:],
         resumeCommands: [VaultAgentKind: String] = [:]
     ) {
@@ -220,6 +225,7 @@ public struct VaultConfiguration: Equatable, Sendable {
         self.includedAgents = includedAgents
         self.excludedPaths = excludedPaths
         self.maxPreviewBytes = maxPreviewBytes
+        self.sidebarRowsPerAgent = max(1, sidebarRowsPerAgent)
         self.agentHomes = agentHomes
         self.resumeCommands = resumeCommands
     }
@@ -251,6 +257,7 @@ public struct VaultConfiguration: Equatable, Sendable {
             includedAgents: included,
             excludedPaths: config.excludedPaths,
             maxPreviewBytes: config.maxPreviewBytes,
+            sidebarRowsPerAgent: config.sidebarRowsPerAgent,
             agentHomes: homes,
             resumeCommands: commands
         )

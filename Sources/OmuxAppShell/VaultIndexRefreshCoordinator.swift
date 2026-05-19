@@ -8,7 +8,7 @@ final class VaultIndexRefreshCoordinator {
         let debounce: TimeInterval
         let minimumInterval: TimeInterval
 
-        init(debounce: TimeInterval = 20, minimumInterval: TimeInterval = 120) {
+        init(debounce: TimeInterval = 4, minimumInterval: TimeInterval = 20) {
             self.debounce = debounce
             self.minimumInterval = minimumInterval
         }
