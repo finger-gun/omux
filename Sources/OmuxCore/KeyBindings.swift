@@ -214,7 +214,7 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+left"), .paneResizeLeft),
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+right"), .paneResizeRight),
         (try! OpenMUXKeyChord(parsing: "cmd+t"), .paneTabCreate),
-        (try! OpenMUXKeyChord(parsing: "cmd+shift+t"), .paneTabCreateWorktree),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+g"), .paneTabCreateWorktree),
         (try! OpenMUXKeyChord(parsing: "cmd+w"), .paneTabClose),
         (try! OpenMUXKeyChord(parsing: "ctrl+tab"), .paneTabNext),
         (try! OpenMUXKeyChord(parsing: "cmd+f"), .paneFind),

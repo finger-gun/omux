@@ -679,7 +679,7 @@ final class OmuxAppShellTests: XCTestCase {
             $0.invocationTarget == .action(.paneTabCreateWorktree)
         })
 
-        XCTAssertEqual(worktree.shortcutLabel, "⌘⇧T")
+        XCTAssertEqual(worktree.shortcutLabel, "⌘⇧G")
         XCTAssertEqual(worktree.category, .action)
         XCTAssertEqual(controller.invokeCommandPaletteResult(worktree), .invoked)
         XCTAssertEqual(runtime.executedCommands.count, 1)

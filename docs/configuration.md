@@ -90,7 +90,7 @@ plugins = ["https://github.com/finger-gun/omux-plugins"]
 "cmd+ctrl+left" = "pane.resize-left"
 "cmd+ctrl+right" = "pane.resize-right"
 "cmd+t" = "pane-tab.create"
-"cmd+shift+t" = "pane-tab.create-worktree"
+"cmd+shift+g" = "pane-tab.create-worktree"
 "cmd+w" = "pane-tab.close"
 "ctrl+tab" = "pane-tab.next"
 
