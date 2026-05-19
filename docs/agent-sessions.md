@@ -8,7 +8,7 @@ Agent Sessions is local-first. OpenMUX reads session metadata from agent-owned f
 
 - Open the sidebar from **View -> Toggle Agent Sessions**, **Agents -> Show Agent Sessions**, or the command palette.
 - Filter by workspace and agent.
-- Search indexed session titles and transcript text.
+- Search indexed session titles, agent names, paths, and IDs.
 - Resume a session in the focused terminal pane.
 - See active sessions and their status orb when a resumed session is running in an OpenMUX pane.
 - Delete a session from the row context menu.
@@ -16,7 +16,7 @@ Agent Sessions is local-first. OpenMUX reads session metadata from agent-owned f
 
 ## How sessions are loaded
 
-OpenMUX keeps a local SQLite index at `~/.omux/agent-sessions.sqlite`.
+OpenMUX keeps a local SQLite index at `~/.omux/agent-sessions.sqlite`. The index stores one normalized row per session: agent, session ID, source kind/path, cwd, title, updated time, and a local deleted flag.
 
 ```mermaid
 flowchart LR
@@ -37,7 +37,7 @@ OpenMUX uses one adapter per supported agent:
 | Agent | Primary source | Notes |
 | --- | --- | --- |
 | Copilot | `~/.copilot/session-store.db` | Reads the `sessions` table directly (`id`, `cwd`, `summary`, `updated_at`). Recent `session-state` files are used only when the database is unavailable or empty, so normal startup does not block on scanning large session-state files. |
-| Codex | `~/.codex` state databases and JSONL session files | Prefers the newest indexed record when both sources describe the same session. |
+| Codex | `~/.codex` state databases and JSONL session files | Uses readable state SQLite databases as authoritative when they contain sessions. JSONL rollout files are a fallback for missing, unreadable, incompatible, or empty databases, and stale JSONL fallback rows are removed after successful SQLite indexing. |
 | Gemini | `~/.gemini/tmp/**/logs.json` | Groups log rows by session ID and uses message timestamps. |
 | Claude, opencode, pi, rovodev | Known local homes and common JSONL/SQLite layouts | Support depends on the agent's local file format. |
 
@@ -71,7 +71,7 @@ omux agent-sessions reindex
 
 ## Resume flow
 
-Each indexed session can include a resume command. OpenMUX builds the command from the agent type and the session ID, for example:
+Each indexed session can be resumed if its agent has a resume command. OpenMUX builds the command from the agent type and raw session ID, for example:
 
 ```text
 copilot --resume '<session-id>'
@@ -84,7 +84,7 @@ You can customize resume commands per agent in config.
 ```mermaid
 flowchart TD
     Select["Select session"]
-    Snapshot["Read resume snapshot<br/>session ID, agent, workspace path, command"]
+    Snapshot["Read indexed row<br/>agent, raw session ID, cwd"]
     Match{"Session path matches<br/>current workspace?"}
     Focused["Run resume command<br/>in focused pane"]
     Prompt["Show path mismatch prompt"]
@@ -120,7 +120,7 @@ The sidebar filters on:
 
 - workspace scope: current workspace, all workspaces, or a specific workspace
 - agent: all agents or one agent
-- search text: session title, agent name, path, ID, and indexed transcript text
+- search text: session title, agent name, path, and ID
 
 The CLI uses the same index:
 
@@ -130,13 +130,11 @@ omux agent-sessions search "release notes"
 omux agent-sessions resume copilot:<session-id> --workspace
 ```
 
-The legacy `omux vault ...` command names still work as compatibility aliases, but `omux agent-sessions ...` is the preferred public command.
-
 ## Deleting sessions
 
-Use **Delete Session...** from a row's context menu to delete the session from the agent's local session store when OpenMUX knows how to do that safely. OpenMUX also removes its indexed copy and records a local tombstone so unsupported or partially deleted sessions are not immediately re-added by the next background reindex.
+Use **Delete Session...** from a row's context menu to hide the session in OpenMUX. OpenMUX marks the normalized row as deleted in its local index and filters it out of the sidebar, palette, CLI, and control-plane results.
 
-Deletion affects local files/databases on your Mac. It does not delete any cloud/provider history the agent may keep outside the local session store. If you later import the session explicitly, OpenMUX clears the tombstone and indexes it again.
+Deletion does not modify Copilot, Codex, Gemini, or other upstream agent files/databases. If the agent updates the same session later, OpenMUX may refresh the indexed metadata while keeping the local deleted flag.
 
 ## Configuration
 
@@ -145,7 +143,7 @@ Agent Sessions is enabled by default. A minimal config looks like:
 ```toml
 [agent-sessions]
 enabled = true
-preview = true
+preview_enabled = true
 index_on_launch = true
 included_agents = ["copilot", "codex", "gemini"]
 
@@ -153,7 +151,5 @@ included_agents = ["copilot", "codex", "gemini"]
 home = "~/.copilot"
 resume_command = "copilot --resume {session_id}"
 ```
-
-The older `[vault]` and `[vault.agents.*]` names are still accepted for compatibility. When both old and new keys exist, `[agent-sessions]` wins.
 
 See [Configuration](./configuration.md#agent-sessions-settings) for the full key list.

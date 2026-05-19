@@ -180,8 +180,8 @@ public enum OpenMUXCLICommandCatalog {
             id: "omux.agent-sessions.search",
             usage: "omux agent-sessions search <query>",
             title: "omux: Agent Sessions Search",
-            summary: "Search indexed agent session transcripts",
-            aliases: ["omux as search", "session search transcript search"],
+            summary: "Search indexed agent sessions",
+            aliases: ["omux as search", "session search agent search"],
             requiresArguments: true,
             hasSafeDefaultTarget: false,
             paletteExecution: .sendToTerminal

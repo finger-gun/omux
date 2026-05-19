@@ -123,8 +123,6 @@ public struct OmuxCLICommand {
                 return runHookRegistryCommand(arguments: Array(commandArguments.dropFirst()))
             case "plugin", "plugins":
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
-            case "vault":
-                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "vault")
             case "agent-sessions", "agent-session", "agents", "as":
                 return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "agent-sessions")
             case "version", "--version":
@@ -398,16 +396,12 @@ public struct OmuxCLICommand {
     private func runVaultCommand(arguments: [String], commandName: String) throws -> Int32 {
         let usage = "usage: omux \(commandName) list|search|preview|resume|reindex|export|import|agents|open|close|toggle|palette"
         guard let subcommand = arguments.first else {
-            if commandName != "vault" {
-                let response = try client.request(
-                    method: .agentSessionsUI,
-                    params: .object(["action": .string("open")])
-                )
-                writeLine(response.result?.prettyPrinted ?? "")
-                return response.error == nil ? 0 : 1
-            }
-            writeLine(usage)
-            return 1
+            let response = try client.request(
+                method: .agentSessionsUI,
+                params: .object(["action": .string("open")])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return response.error == nil ? 0 : 1
         }
         let rest = Array(arguments.dropFirst())
         switch subcommand {

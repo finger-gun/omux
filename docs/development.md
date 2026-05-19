@@ -123,6 +123,8 @@ For local cleanup while developing, run `Scripts/uninstall-local.sh --dry-run` t
 
 If you want one stable, native entrypoint for daily development, prefer the root `Makefile`: run `make setup` once to build the vendored Ghostty runtime, then use `make dev`, `make build`, `make test`, `make verify`, or `make smoke`. Use `make import-themes` when refreshing the selected imported iTerm2 Color Schemes presets from the pinned upstream ref.
 
+For local packaged-app testing, use `make install-local-release`. It runs the release packager, unpacks the newest `dist/release/OpenMUX-*-macos-unsigned.zip`, then hands the quit/copy/relaunch phase to a detached helper so the command is safe to run from inside OpenMUX. Set `SKIP_PACKAGE=1` to install the newest existing archive, `RELAUNCH=0` to leave the app closed, or `TARGET_APP="$HOME/Applications/OpenMUX.app"` for a user-local install.
+
 Release packaging reads the product version from the root `VERSION` file by default. Use `Scripts/check-changes-since-release.sh` to inspect release-impacting changes since the latest `v*` tag and `Scripts/prepare-release.sh <version>` with a reviewed changelog body to update `VERSION` and `CHANGELOG.md`.
 
 For release packaging and GitHub Releases, see [docs/releasing.md](./releasing.md).

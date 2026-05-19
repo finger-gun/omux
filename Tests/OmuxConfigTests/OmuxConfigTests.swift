@@ -750,34 +750,6 @@ struct OmuxConfigTests {
         #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
     }
 
-    @Test
-    func legacyVaultConfigStillParsesAgentOverride() throws {
-        let home = try temporaryHome()
-        defer { cleanup(home) }
-        let configURL = home.appendingPathComponent("config.toml")
-        try write(
-            """
-            schema = 1
-
-            [vault]
-            enabled = true
-            preview_enabled = false
-            included_agents = ["codex", "copilot"]
-
-            [vault.agents.copilot]
-            enabled = true
-            home = "~/.copilot-test"
-            resume_command = "copilot --resume {session_id}"
-            """,
-            to: configURL
-        )
-
-        let result = OmuxConfigLoader(configURL: configURL).load()
-        #expect(result.hasErrors == false)
-        #expect(result.config.agentSessions.previewEnabled == false)
-        #expect(result.config.agentSessions.includedAgents == ["codex", "copilot"])
-        #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
-    }
 }
 
 private func temporaryMissingConfigURL() -> URL {

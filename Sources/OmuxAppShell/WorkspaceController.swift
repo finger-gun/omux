@@ -1922,6 +1922,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
             _ = workspaces[workspaceIndex].updatePane(context.paneID) { pane in
                 pane.terminalState.progress = progress
+                if request.state == .clear {
+                    pane.terminalState.agentStatusAdapterID = nil
+                }
             }
 
             if request.state == .idle {
@@ -3034,10 +3037,12 @@ public final class WorkspaceController: @unchecked Sendable {
         case .progressReported(let state, let progress):
             var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                let previousAgentStatusAdapterID = pane.terminalState.agentStatusAdapterID
                 let nextProgress: PaneProgress
                 switch state {
                 case .removed:
                     nextProgress = PaneProgress(state: .paused)
+                    pane.terminalState.agentStatusAdapterID = nil
                 case .active:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
                     nextProgress = PaneProgress(state: .active, value: progress)
@@ -3053,6 +3058,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 }
                 if pane.terminalState.progress != nextProgress {
                     pane.terminalState.progress = nextProgress
+                    didChange = true
+                }
+                if pane.terminalState.agentStatusAdapterID != previousAgentStatusAdapterID {
                     didChange = true
                 }
             }
@@ -3346,11 +3354,12 @@ public final class WorkspaceController: @unchecked Sendable {
             previousAdapterID: aiStatusManagedAdapterByPaneID[paneID]
         ) {
             let progress = paneProgress(forAIStatusState: observation.state)
-            guard pane.terminalState.progress != progress else {
+            guard pane.terminalState.progress != progress || pane.terminalState.agentStatusAdapterID != observation.adapterID else {
                 aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
                 return false
             }
             pane.terminalState.progress = progress
+            pane.terminalState.agentStatusAdapterID = observation.adapterID
             aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
             if observation.state == .idle {
                 shouldHandleIdle = true
@@ -3366,10 +3375,12 @@ public final class WorkspaceController: @unchecked Sendable {
             return false
         }
         let idleProgress = PaneProgress(state: .paused)
-        guard pane.terminalState.progress != idleProgress else {
+        if pane.terminalState.progress == idleProgress,
+           pane.terminalState.agentStatusAdapterID == nil {
             return false
         }
         pane.terminalState.progress = idleProgress
+        pane.terminalState.agentStatusAdapterID = nil
         shouldHandleIdle = true
         return true
     }

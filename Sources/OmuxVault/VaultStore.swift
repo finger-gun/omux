@@ -19,8 +19,9 @@ public actor VaultStore {
 
     public func reindex(agent filter: VaultAgentKind? = nil) async throws -> [String] {
         guard configuration.enabled else {
-            return ["Vault is disabled."]
+            return ["Agent Sessions are disabled."]
         }
+
         var warnings: [String] = []
         let activeAdapters = adapters.filter { adapter in
             configuration.includedAgents.contains(adapter.kind) && (filter == nil || filter == adapter.kind)
@@ -28,11 +29,13 @@ public actor VaultStore {
         for adapter in activeAdapters {
             do {
                 let sessions = try await adapter.discoverSessions()
-                for session in sessions {
-                    if shouldExclude(session.summary) {
-                        continue
+                let visibleSessions = sessions.filter { shouldExclude($0.summary) == false }
+                let indexedSourceKinds = Set(visibleSessions.map(\.summary.sourceKind))
+                try database.inTransaction {
+                    for session in visibleSessions {
+                        try upsert(session.summary)
                     }
-                    try upsert(session)
+                    try cleanupObsoleteSourceKinds(for: adapter.kind, indexedSourceKinds: indexedSourceKinds)
                 }
             } catch {
                 warnings.append("\(adapter.kind.rawValue): \(error)")
@@ -43,6 +46,20 @@ public actor VaultStore {
 
     public func list(limit: Int = 100, offset: Int = 0) throws -> VaultSearchResponse {
         try search(VaultSearchRequest(query: "", offset: offset, limit: limit))
+    }
+
+    public func availableAgents() throws -> [VaultAgentKind] {
+        try database.query(
+            """
+            SELECT s.agent
+            FROM agent_sessions s
+            WHERE \(Self.visibleSessionWhereClause)
+            GROUP BY s.agent
+            ORDER BY MAX(s.updated_at_ms) DESC
+            """
+        ) { statement in
+            sqliteText(statement, 0).flatMap(VaultAgentKind.init(rawValue:))
+        }.compactMap { $0 }
     }
 
     public func search(_ request: VaultSearchRequest) throws -> VaultSearchResponse {
@@ -56,12 +73,12 @@ public actor VaultStore {
             bindings += agents.map { .string($0.rawValue) }
         }
         if let workingDirectory = request.workingDirectory, workingDirectory.isEmpty == false {
-            whereClauses.append("s.working_directory = ?")
+            whereClauses.append("s.cwd = ?")
             bindings.append(.string(workingDirectory))
         }
         if let prefixes = request.workingDirectoryPrefixes?.filter({ $0.isEmpty == false }), prefixes.isEmpty == false {
             let prefixClauses = prefixes.map { _ in
-                "(s.working_directory = ? OR s.working_directory LIKE ? ESCAPE '\\')"
+                "(s.cwd = ? OR s.cwd LIKE ? ESCAPE '\\')"
             }.joined(separator: " OR ")
             whereClauses.append("(\(prefixClauses))")
             for prefix in prefixes {
@@ -69,29 +86,9 @@ public actor VaultStore {
                 bindings.append(.string(sqlLikeEscaped(prefix) + "/%"))
             }
         }
-
-        let baseWhere = whereClauses.isEmpty ? "" : "WHERE " + whereClauses.joined(separator: " AND ")
-        let rows: [VaultSessionSummary]
-        let total: Int
-
-        if trimmed.isEmpty {
-            total = try count("SELECT COUNT(*) FROM vault_sessions s \(baseWhere)", bindings: bindings)
-            rows = try database.query(
-                """
-                SELECT s.id, s.agent, s.source_kind, s.source_path, s.title, s.working_directory, s.model,
-                       s.git_branch, s.pr_url, s.modified_at_ms, s.preview_available, s.resume_available
-                FROM vault_sessions s
-                \(baseWhere)
-                ORDER BY s.modified_at_ms DESC
-                LIMIT ? OFFSET ?
-                """,
-                bindings: bindings + [.int(Int64(request.limit)), .int(Int64(request.offset))],
-                row: decodeSummary
-            )
-        } else {
+        if trimmed.isEmpty == false {
             let searchTokens = searchTokens(for: trimmed)
-            guard searchTokens.isEmpty == false,
-                  let ftsQuery = ftsQuery(for: searchTokens) else {
+            guard searchTokens.isEmpty == false else {
                 return VaultSearchResponse(sessions: [], totalCount: 0)
             }
             let metadataClauses = searchTokens.map { _ in
@@ -99,330 +96,100 @@ public actor VaultStore {
                 (
                   s.title LIKE ? ESCAPE '\\'
                   OR s.agent LIKE ? ESCAPE '\\'
-                  OR s.working_directory LIKE ? ESCAPE '\\'
+                  OR s.cwd LIKE ? ESCAPE '\\'
                   OR s.id LIKE ? ESCAPE '\\'
+                  OR s.raw_id LIKE ? ESCAPE '\\'
                 )
                 """
             }.joined(separator: " AND ")
-            let metadataBindings = searchTokens.flatMap { token -> [SQLiteBinding] in
+            whereClauses.append(metadataClauses)
+            bindings += searchTokens.flatMap { token -> [SQLiteBinding] in
                 let pattern = searchLikePattern(for: token)
-                return [.string(pattern), .string(pattern), .string(pattern), .string(pattern)]
+                return [.string(pattern), .string(pattern), .string(pattern), .string(pattern), .string(pattern)]
             }
-            let searchWhere = """
-            (
-              (\(metadataClauses))
-              OR EXISTS (
-                SELECT 1
-                FROM vault_messages m
-                JOIN vault_messages_fts ON vault_messages_fts.rowid = m.rowid
-                WHERE m.session_id = s.id
-                  AND vault_messages_fts MATCH ?
-              )
-            )
-            """
-            let searchBindings = metadataBindings + [.string(ftsQuery)]
-            let searchFilteredWhere = baseWhere.isEmpty ? "WHERE \(searchWhere)" : "\(baseWhere) AND \(searchWhere)"
-            let searchFilteredBindings = bindings + searchBindings
-            total = try count(
-                """
-                SELECT COUNT(*)
-                FROM vault_sessions s
-                \(searchFilteredWhere)
-                """,
-                bindings: searchFilteredBindings
-            )
-            rows = try database.query(
-                """
-                SELECT s.id, s.agent, s.source_kind, s.source_path, s.title, s.working_directory, s.model,
-                       s.git_branch, s.pr_url, s.modified_at_ms, s.preview_available, s.resume_available
-                FROM vault_sessions s
-                \(searchFilteredWhere)
-                ORDER BY s.modified_at_ms DESC
-                LIMIT ? OFFSET ?
-                """,
-                bindings: searchFilteredBindings + [.int(Int64(request.limit)), .int(Int64(request.offset))],
-                row: decodeSummary
-            )
         }
+
+        let baseWhere = "WHERE " + whereClauses.joined(separator: " AND ")
+        let total = try count("SELECT COUNT(*) FROM agent_sessions s \(baseWhere)", bindings: bindings)
+        let rows = try database.query(
+            """
+            SELECT s.id, s.agent, s.source_kind, s.source_path, s.title, s.cwd, s.updated_at_ms
+            FROM agent_sessions s
+            \(baseWhere)
+            ORDER BY s.updated_at_ms DESC
+            LIMIT ? OFFSET ?
+            """,
+            bindings: bindings + [.int(Int64(request.limit)), .int(Int64(request.offset))],
+            row: decodeSummary
+        )
         return VaultSearchResponse(sessions: rows, totalCount: total)
     }
-
-    private static let visibleSessionWhereClause = """
-    s.title NOT GLOB '????????-????-????-????-????????????'
-    """
 
     public func preview(sessionID: String, maxBytes: Int? = nil) throws -> VaultPreview? {
         guard let session = try session(id: sessionID) else {
             return nil
         }
-        var totalBytes = 0
-        let limitBytes = maxBytes ?? configuration.maxPreviewBytes
-        var truncated = false
-        var turns: [VaultTranscriptTurn] = []
-        let rows = try database.query(
-            """
-            SELECT session_id, turn_id, role, text, ordinal, modified_at_ms
-            FROM vault_messages
-            WHERE session_id = ?
-            ORDER BY ordinal ASC
-            """,
-            bindings: [.string(sessionID)]
-        ) { statement in
-            VaultTranscriptTurn(
-                sessionID: sqliteText(statement, 0) ?? "",
-                turnID: sqliteText(statement, 1) ?? "",
-                role: sqliteText(statement, 2) ?? "",
-                text: sqliteText(statement, 3) ?? "",
-                ordinal: Int(sqliteInt(statement, 4)),
-                modifiedAt: Date(timeIntervalSince1970: TimeInterval(sqliteInt(statement, 5)) / 1000)
-            )
-        }
-        for row in rows {
-            let size = row.text.utf8.count
-            if totalBytes + size > limitBytes {
-                truncated = true
-                break
-            }
-            totalBytes += size
-            turns.append(row)
-        }
-        return VaultPreview(session: session, turns: turns, truncated: truncated)
+        return VaultPreview(session: session, turns: [], truncated: false)
     }
 
     public func resumeSnapshot(sessionID: String) throws -> VaultResumeSnapshot? {
-        let normalizedID = Self.rawSessionID(sessionID)
-        return try database.query(
-            """
-            SELECT kind, session_id, working_directory, launch_command_json, resume_command, registration_id, metadata_json
-            FROM vault_resume_snapshots
-            WHERE session_id = ?
-            """,
-            bindings: [.string(normalizedID)]
-        ) { statement in
-            let kind = sqliteText(statement, 0).flatMap(VaultAgentKind.init(rawValue:)) ?? .custom
-            let sessionID = sqliteText(statement, 1) ?? ""
-            let launchCommand = decodeJSON([String].self, sqliteText(statement, 3))
-            let metadata = decodeJSON([String: String].self, sqliteText(statement, 6)) ?? [:]
-            return VaultResumeSnapshot(
-                kind: kind,
-                sessionID: sessionID,
-                workingDirectory: sqliteText(statement, 2),
-                launchCommand: launchCommand,
-                resumeCommand: sqliteText(statement, 4),
-                registrationID: sqliteText(statement, 5),
-                metadata: metadata
-            )
-        }.first
+        guard let session = try session(id: sessionID) else {
+            return nil
+        }
+        let rawID = Self.rawSessionID(session.id)
+        return VaultResumeSnapshot(
+            kind: session.agent,
+            sessionID: rawID,
+            workingDirectory: session.workingDirectory,
+            resumeCommand: configuration.resumeCommand(for: session.agent, sessionID: rawID)
+        )
     }
 
     public func export(ids: [String]) throws -> Data {
         var seenIDs = Set<String>()
         let uniqueIds = ids.filter { seenIDs.insert($0).inserted }
         let sessions = try uniqueIds.compactMap { try session(id: $0) }
-        let snapshots = try Dictionary(uniqueKeysWithValues: uniqueIds.compactMap { id -> (String, VaultResumeSnapshot)? in
-            guard let snapshot = try resumeSnapshot(sessionID: id) else { return nil }
-            return (id, snapshot)
-        })
-        let turns = try Dictionary(uniqueKeysWithValues: uniqueIds.map { id in
-            let preview = try preview(sessionID: id, maxBytes: Int.max)
-            return (id, preview?.turns ?? [])
-        })
-        return try JSONEncoder.vault.encode(VaultExportBundle(sessions: sessions, resumeSnapshots: snapshots, turns: turns))
+        return try JSONEncoder.agentSessions.encode(VaultExportBundle(sessions: sessions, resumeSnapshots: [:], turns: [:]))
     }
 
     public func `import`(data: Data) throws {
-        let bundle = try JSONDecoder.vault.decode(VaultExportBundle.self, from: data)
+        let bundle = try JSONDecoder.agentSessions.decode(VaultExportBundle.self, from: data)
         for session in bundle.sessions {
-            try database.inTransaction {
-                try database.write(
-                    """
-                    INSERT OR REPLACE INTO vault_sessions
-                    (id, agent, source_kind, source_path, working_directory, title, model, git_branch, pr_url,
-                     modified_at_ms, preview_available, resume_available)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    bindings: summaryBindings(session)
-                )
-                if let snapshot = bundle.resumeSnapshots[session.id] {
-                    try write(snapshot: snapshot)
-                } else {
-                    try deleteResumeSnapshot(sessionID: session.id)
-                }
-                try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(session.id)])
-                for turn in bundle.turns[session.id] ?? [] {
-                    try write(turn: turn)
-                }
-                try database.write(
-                    "INSERT OR REPLACE INTO vault_imported_sessions(session_id, imported_at_ms) VALUES (?, ?)",
-                    bindings: [.string(session.id), .int(Int64(Date().timeIntervalSince1970 * 1000))]
-                )
-                try database.write("DELETE FROM vault_deleted_sessions WHERE session_id = ?", bindings: [.string(session.id)])
-            }
+            try upsert(session, preserveDeleted: false)
         }
     }
 
     public func delete(sessionID: String) throws {
-        let normalizedID = Self.rawSessionID(sessionID)
-        let summary = try session(id: sessionID)
-        try deleteSourceSession(summary: summary, normalizedID: normalizedID)
-        try database.inTransaction {
-            try database.write("DELETE FROM vault_sessions WHERE id = ?", bindings: [.string(sessionID)])
-            try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(sessionID)])
-            try database.write(
-                "DELETE FROM vault_resume_snapshots WHERE session_id IN (?, ?)",
-                bindings: [.string(sessionID), .string(normalizedID)]
-            )
-            try database.write("DELETE FROM vault_imported_sessions WHERE session_id = ?", bindings: [.string(sessionID)])
-            try database.write(
-                "DELETE FROM vault_source_state WHERE source_key IN (?, ?)",
-                bindings: [.string(sessionID), .string(normalizedID)]
-            )
-            try database.write(
-                "INSERT OR REPLACE INTO vault_deleted_sessions(session_id, deleted_at_ms) VALUES (?, ?)",
-                bindings: [.string(sessionID), .int(Int64(Date().timeIntervalSince1970 * 1000))]
-            )
-        }
-    }
-
-    private func deleteSourceSession(summary: VaultSessionSummary?, normalizedID: String) throws {
-        guard let summary else {
-            return
-        }
-        switch summary.sourceKind {
-        case "copilot_sqlite":
-            try deleteCopilotSourceSession(normalizedID: normalizedID)
-        case "copilot_session_state":
-            try deleteSourceFileOrDirectory(summary.sourcePath)
-            try deleteCopilotSessionStateDirectory(normalizedID: normalizedID)
-        case "codex_jsonl", "claude_jsonl", "pi_jsonl", "rovodev_jsonl", "gemini_logs":
-            try deleteSourceFileOrDirectory(summary.sourcePath)
-        default:
-            break
-        }
-    }
-
-    private func deleteSourceFileOrDirectory(_ sourcePath: String?) throws {
-        guard let sourcePath, FileManager.default.fileExists(atPath: sourcePath) else {
-            return
-        }
-        let url = URL(fileURLWithPath: sourcePath)
-        if url.lastPathComponent == "events.jsonl" || url.lastPathComponent == "vscode.metadata.json" {
-            try FileManager.default.removeItem(at: url.deletingLastPathComponent())
-        } else {
-            try FileManager.default.removeItem(at: url)
-        }
-    }
-
-    private func deleteCopilotSourceSession(normalizedID: String) throws {
-        let dbURL = configuration.home(for: .copilot).appendingPathComponent("session-store.db", isDirectory: false)
-        if FileManager.default.fileExists(atPath: dbURL.path) {
-            try deleteRowsReferencingSession(normalizedID, in: dbURL)
-        }
-        try deleteCopilotSessionStateDirectory(normalizedID: normalizedID)
-    }
-
-    private func deleteCopilotSessionStateDirectory(normalizedID: String) throws {
-        let stateURL = configuration.home(for: .copilot)
-            .appendingPathComponent("session-state", isDirectory: true)
-            .appendingPathComponent(normalizedID, isDirectory: true)
-        if FileManager.default.fileExists(atPath: stateURL.path) {
-            try FileManager.default.removeItem(at: stateURL)
-        }
-    }
-
-    private func deleteRowsReferencingSession(_ sessionID: String, in dbURL: URL) throws {
-        let external = try ExternalSQLiteDatabase(url: dbURL)
-        let tables = try external.query("SELECT name FROM sqlite_master WHERE type = 'table'") { statement in
-            sqliteText(statement, 0) ?? ""
-        }
-        for table in tables where table.hasPrefix("sqlite_") == false {
-            let quotedTable = sqliteIdentifier(table)
-            let columns = try external.query("PRAGMA table_info(\(quotedTable))") { statement in
-                sqliteText(statement, 1) ?? ""
-            }
-            if columns.contains("session_id") {
-                try external.write("DELETE FROM \(quotedTable) WHERE session_id = ?", bindings: [.string(sessionID)])
-            } else if table == "sessions", columns.contains("id") {
-                try external.write("DELETE FROM sessions WHERE id = ?", bindings: [.string(sessionID)])
-            }
-        }
-    }
-
-    private func upsert(_ indexed: VaultIndexedSession) throws {
-        try database.inTransaction {
-            try database.write(
-                """
-                INSERT OR REPLACE INTO vault_sessions
-                (id, agent, source_kind, source_path, working_directory, title, model, git_branch, pr_url,
-                 modified_at_ms, preview_available, resume_available)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                bindings: summaryBindings(indexed.summary)
-            )
-            if let snapshot = indexed.resumeSnapshot {
-                try write(snapshot: snapshot)
-            } else {
-                try deleteResumeSnapshot(sessionID: indexed.summary.id)
-            }
-            try database.write("DELETE FROM vault_messages WHERE session_id = ?", bindings: [.string(indexed.summary.id)])
-            for turn in indexed.turns {
-                try write(turn: turn)
-            }
-            if let sourcePath = indexed.summary.sourcePath {
-                try database.write(
-                    """
-                    INSERT OR REPLACE INTO vault_source_state(source_key, agent, source_path, modified_at_ms, adapter_version)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    bindings: [
-                        .string(indexed.summary.id),
-                        .string(indexed.summary.agent.rawValue),
-                        .string(sourcePath),
-                        .int(Int64(indexed.summary.modifiedAt.timeIntervalSince1970 * 1000)),
-                        .int(1),
-                    ]
-                )
-            }
-        }
-    }
-
-    private func write(snapshot: VaultResumeSnapshot) throws {
         try database.write(
-            """
-            INSERT OR REPLACE INTO vault_resume_snapshots
-            (session_id, kind, working_directory, launch_command_json, resume_command, registration_id, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            bindings: [
-                .string(snapshot.sessionID),
-                .string(snapshot.kind.rawValue),
-                snapshot.workingDirectory.map(SQLiteBinding.string) ?? .null,
-                encodeJSON(snapshot.launchCommand).map(SQLiteBinding.string) ?? .null,
-                snapshot.resumeCommand.map(SQLiteBinding.string) ?? .null,
-                snapshot.registrationID.map(SQLiteBinding.string) ?? .null,
-                .string(encodeJSON(snapshot.metadata) ?? "{}"),
-            ]
+            "UPDATE agent_sessions SET deleted = 1 WHERE id = ?",
+            bindings: [.string(sessionID)]
         )
     }
 
-    private func deleteResumeSnapshot(sessionID: String) throws {
-        try database.write("DELETE FROM vault_resume_snapshots WHERE session_id = ?", bindings: [.string(sessionID)])
-    }
+    private static let visibleSessionWhereClause = """
+    s.deleted = 0
+    AND s.title NOT GLOB '????????-????-????-????-????????????'
+    """
 
-    private func write(turn: VaultTranscriptTurn) throws {
+    private func upsert(_ summary: VaultSessionSummary, preserveDeleted: Bool = true) throws {
+        let deleted = preserveDeleted ? (try existingDeletedValue(for: summary.id)) : 0
         try database.write(
             """
-            INSERT OR REPLACE INTO vault_messages
-            (session_id, turn_id, role, text, ordinal, modified_at_ms)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO agent_sessions
+            (id, raw_id, agent, source_kind, source_path, cwd, title, updated_at_ms, deleted, indexed_at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bindings: [
-                .string(turn.sessionID),
-                .string(turn.turnID),
-                .string(turn.role),
-                .string(turn.text),
-                .int(Int64(turn.ordinal)),
-                .int(Int64(turn.modifiedAt.timeIntervalSince1970 * 1000)),
+                .string(summary.id),
+                .string(Self.rawSessionID(summary.id)),
+                .string(summary.agent.rawValue),
+                .string(summary.sourceKind),
+                summary.sourcePath.map(SQLiteBinding.string) ?? .null,
+                summary.workingDirectory.map(SQLiteBinding.string) ?? .null,
+                .string(summary.title),
+                .int(Int64(summary.modifiedAt.timeIntervalSince1970 * 1000)),
+                .int(deleted),
+                .int(Int64(Date().timeIntervalSince1970 * 1000)),
             ]
         )
     }
@@ -430,10 +197,9 @@ public actor VaultStore {
     private func session(id: String) throws -> VaultSessionSummary? {
         try database.query(
             """
-            SELECT id, agent, source_kind, source_path, title, working_directory, model,
-                   git_branch, pr_url, modified_at_ms, preview_available, resume_available
-            FROM vault_sessions
-            WHERE id = ?
+            SELECT s.id, s.agent, s.source_kind, s.source_path, s.title, s.cwd, s.updated_at_ms
+            FROM agent_sessions s
+            WHERE s.id = ? AND s.deleted = 0
             """,
             bindings: [.string(id)],
             row: decodeSummary
@@ -447,6 +213,36 @@ public actor VaultStore {
         return String(id[id.index(after: separator)...])
     }
 
+    private func existingDeletedValue(for sessionID: String) throws -> Int64 {
+        try database.query(
+            "SELECT deleted FROM agent_sessions WHERE id = ?",
+            bindings: [.string(sessionID)]
+        ) { statement in
+            sqliteInt(statement, 0)
+        }.first ?? 0
+    }
+
+    private func cleanupObsoleteSourceKinds(for agent: VaultAgentKind, indexedSourceKinds: Set<String>) throws {
+        switch agent {
+        case .copilot:
+            if indexedSourceKinds.contains("copilot_sqlite") {
+                try database.write(
+                    "DELETE FROM agent_sessions WHERE agent = ? AND source_kind = ?",
+                    bindings: [.string(agent.rawValue), .string("copilot_session_state")]
+                )
+            }
+        case .codex:
+            if indexedSourceKinds.contains("codex_sqlite") {
+                try database.write(
+                    "DELETE FROM agent_sessions WHERE agent = ? AND source_kind = ?",
+                    bindings: [.string(agent.rawValue), .string("codex_jsonl")]
+                )
+            }
+        default:
+            break
+        }
+    }
+
     private func count(_ sql: String, bindings: [SQLiteBinding]) throws -> Int {
         try database.query(sql, bindings: bindings) { statement in
             Int(sqliteInt(statement, 0))
@@ -455,6 +251,7 @@ public actor VaultStore {
 
     private func decodeSummary(_ statement: OpaquePointer) throws -> VaultSessionSummary {
         let agent = sqliteText(statement, 1).flatMap(VaultAgentKind.init(rawValue:)) ?? .custom
+        let rawID = Self.rawSessionID(sqliteText(statement, 0) ?? "")
         return VaultSessionSummary(
             id: sqliteText(statement, 0) ?? "",
             agent: agent,
@@ -462,36 +259,13 @@ public actor VaultStore {
             sourcePath: sqliteText(statement, 3),
             title: sqliteText(statement, 4) ?? "Untitled",
             workingDirectory: sqliteText(statement, 5),
-            model: sqliteText(statement, 6),
-            gitBranch: sqliteText(statement, 7),
-            prURL: sqliteText(statement, 8),
-            modifiedAt: Date(timeIntervalSince1970: TimeInterval(sqliteInt(statement, 9)) / 1000),
-            previewAvailable: sqliteInt(statement, 10) != 0,
-            resumeAvailable: sqliteInt(statement, 11) != 0
+            modifiedAt: Date(timeIntervalSince1970: TimeInterval(sqliteInt(statement, 6)) / 1000),
+            previewAvailable: false,
+            resumeAvailable: configuration.resumeCommand(for: agent, sessionID: rawID) != nil
         )
     }
 
-    private func summaryBindings(_ summary: VaultSessionSummary) -> [SQLiteBinding] {
-        [
-            .string(summary.id),
-            .string(summary.agent.rawValue),
-            .string(summary.sourceKind),
-            summary.sourcePath.map(SQLiteBinding.string) ?? .null,
-            summary.workingDirectory.map(SQLiteBinding.string) ?? .null,
-            .string(summary.title),
-            summary.model.map(SQLiteBinding.string) ?? .null,
-            summary.gitBranch.map(SQLiteBinding.string) ?? .null,
-            summary.prURL.map(SQLiteBinding.string) ?? .null,
-            .int(Int64(summary.modifiedAt.timeIntervalSince1970 * 1000)),
-            .bool(summary.previewAvailable),
-            .bool(summary.resumeAvailable),
-        ]
-    }
-
     private func shouldExclude(_ summary: VaultSessionSummary) -> Bool {
-        if (try? isDeleted(sessionID: summary.id)) == true {
-            return true
-        }
         guard let path = summary.sourcePath ?? summary.workingDirectory else {
             return false
         }
@@ -500,10 +274,6 @@ public actor VaultStore {
             let excludedPath = URL(fileURLWithPath: expandHome(excluded)).standardized.path
             return normalizedPath == excludedPath || normalizedPath.hasPrefix(excludedPath + "/")
         }
-    }
-
-    private func isDeleted(sessionID: String) throws -> Bool {
-        try count("SELECT COUNT(*) FROM vault_deleted_sessions WHERE session_id = ?", bindings: [.string(sessionID)]) > 0
     }
 }
 
@@ -514,13 +284,6 @@ private func searchTokens(for raw: String) -> [String] {
         }
         .map(String.init)
         .filter { $0.isEmpty == false }
-}
-
-private func ftsQuery(for tokens: [String]) -> String? {
-    guard tokens.isEmpty == false else {
-        return nil
-    }
-    return tokens.map { "\($0)*" }.joined(separator: " ")
 }
 
 private func searchLikePattern(for raw: String) -> String {
@@ -544,24 +307,8 @@ private func expandHome(_ path: String) -> String {
     return path
 }
 
-private func encodeJSON<T: Encodable>(_ value: T?) -> String? {
-    guard let value,
-          let data = try? JSONEncoder.vault.encode(value)
-    else {
-        return nil
-    }
-    return String(data: data, encoding: .utf8)
-}
-
-private func decodeJSON<T: Decodable>(_ type: T.Type, _ string: String?) -> T? {
-    guard let string, let data = string.data(using: .utf8) else {
-        return nil
-    }
-    return try? JSONDecoder.vault.decode(type, from: data)
-}
-
 extension JSONEncoder {
-    static var vault: JSONEncoder {
+    static var agentSessions: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -570,7 +317,7 @@ extension JSONEncoder {
 }
 
 extension JSONDecoder {
-    static var vault: JSONDecoder {
+    static var agentSessions: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder

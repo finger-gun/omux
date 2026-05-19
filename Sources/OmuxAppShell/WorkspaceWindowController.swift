@@ -1,4 +1,5 @@
 import AppKit
+import OmuxAIStatusPlugin
 import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
@@ -232,7 +233,6 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultResultOffset = 0
     private var vaultHasMore = true
     private var vaultIsLoading = false
-    private var pendingVaultReset = false
     private var isVaultSidebarVisible = false
     private var vaultWorkspaceFilter: VaultWorkspaceFilter = .current
     private var activeVaultSessionByPaneID: [PaneID: String] = [:]
@@ -453,7 +453,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
         let scopedVaultSessions = vaultSessions(for: normalizedWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
-        let sessionActivityByID = vaultSessionActivityByID(allWorkspaces: allWorkspaces)
+        let sessionActivityByID = vaultSessionActivityByID(allWorkspaces: allWorkspaces, sessions: vaultSessions)
         let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
@@ -519,15 +519,6 @@ final class WorkspaceShellViewController: NSViewController {
                 self?.deleteVaultSessionPrompt(sessionID: sessionID)
             }
         )
-        if vaultConfiguration.enabled && isVaultSidebarVisible && availableVaultAgents.isEmpty && vaultIsLoading == false {
-            reloadAvailableVaultAgents()
-        }
-        if vaultConfiguration.enabled && isVaultSidebarVisible && vaultSessions.isEmpty && vaultIsLoading == false {
-            reloadVaultSessions(reset: true)
-        } else if vaultConfiguration.enabled && isVaultSidebarVisible && scopedVaultSessions.isEmpty && vaultHasMore && vaultIsLoading == false {
-            loadMoreVaultSessions()
-        }
-
         let plan = WorkspaceRenderReconciliationPlanner.classify(
             previousWorkspaceID: previousWorkspace?.id,
             previousFocusedTabID: previousWorkspace?.focusedTabID,
@@ -724,13 +715,7 @@ final class WorkspaceShellViewController: NSViewController {
         guard let vaultStore else {
             return
         }
-        if vaultIsLoading {
-            if reset {
-                pendingVaultReset = true
-                vaultResultOffset = 0
-                vaultHasMore = true
-                reloadAvailableVaultAgents()
-            }
+        if vaultIsLoading && reset == false {
             return
         }
         if reset {
@@ -752,7 +737,6 @@ final class WorkspaceShellViewController: NSViewController {
         let request = VaultSearchRequest(
             query: vaultSearchQuery,
             agents: vaultAgentFilter.map { [$0] },
-            workingDirectoryPrefixes: vaultSearchDirectoryPrefixes(),
             offset: offset,
             limit: vaultSidebarPageSize()
         )
@@ -760,12 +744,6 @@ final class WorkspaceShellViewController: NSViewController {
             do {
                 let response = try await vaultStore.search(request)
                 guard let self, self.vaultLoadGeneration == generation else { return }
-                if self.pendingVaultReset {
-                    self.pendingVaultReset = false
-                    self.vaultIsLoading = false
-                    self.reloadVaultSessions(reset: true)
-                    return
-                }
                 let nextSessions: [VaultSessionSummary]
                 if offset == 0 {
                     nextSessions = response.sessions
@@ -781,14 +759,10 @@ final class WorkspaceShellViewController: NSViewController {
                     self.update(workspace: workspace)
                 }
             } catch {
-                if let self, self.pendingVaultReset {
-                    self.pendingVaultReset = false
+                if let self, self.vaultLoadGeneration == generation {
                     self.vaultIsLoading = false
-                    self.reloadVaultSessions(reset: true)
-                } else {
-                    self?.vaultIsLoading = false
-                    if let workspace = self?.currentWorkspace {
-                        self?.update(workspace: workspace)
+                    if let workspace = self.currentWorkspace {
+                        self.update(workspace: workspace)
                     }
                 }
                 fputs("Agent Sessions list failed: \(error)\n", stderr)
@@ -805,15 +779,6 @@ final class WorkspaceShellViewController: NSViewController {
             reloadVaultSessions(reset: true)
             return
         }
-        let generation = UUID()
-        vaultLoadGeneration = generation
-        vaultResultOffset = 0
-        vaultHasMore = true
-        vaultIsLoading = true
-        if let workspace = currentWorkspace {
-            update(workspace: workspace)
-        }
-
         let agent = vaultAgentFilter
         Task { [weak self] in
             do {
@@ -824,8 +789,7 @@ final class WorkspaceShellViewController: NSViewController {
             } catch {
                 fputs("Agent Sessions refresh failed: \(error)\n", stderr)
             }
-            guard let self, self.vaultLoadGeneration == generation else { return }
-            self.vaultIsLoading = false
+            guard let self else { return }
             self.reloadVaultSessions(reset: true)
         }
     }
@@ -837,16 +801,12 @@ final class WorkspaceShellViewController: NSViewController {
         let generation = UUID()
         vaultAgentLoadGeneration = generation
         Task { [weak self] in
-            var agents = Set<VaultAgentKind>()
-            for agent in VaultAgentKind.allCases {
-                do {
-                    let response = try await vaultStore.search(VaultSearchRequest(agents: [agent], limit: 1))
-                    if response.totalCount > 0 {
-                        agents.insert(agent)
-                    }
-                } catch {
-                    fputs("Agent Sessions agent availability failed for \(agent.rawValue): \(error)\n", stderr)
-                }
+            let agents: Set<VaultAgentKind>
+            do {
+                agents = Set(try await vaultStore.availableAgents())
+            } catch {
+                fputs("Agent Sessions agent availability failed: \(error)\n", stderr)
+                agents = []
             }
             guard let self, self.vaultAgentLoadGeneration == generation else { return }
             self.availableVaultAgents = agents
@@ -885,7 +845,7 @@ final class WorkspaceShellViewController: NSViewController {
     private func resumeVaultSession(_ sessionID: String) {
         let allWorkspaces = controller.allWorkspaces()
         pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
-        if let activePaneID = activePaneID(forVaultSession: sessionID, allWorkspaces: allWorkspaces) {
+        if let activePaneID = activePaneID(forVaultSession: sessionID, allWorkspaces: allWorkspaces, sessions: vaultSessions) {
             _ = controller.focus(paneID: activePaneID)
             return
         }
@@ -973,14 +933,9 @@ final class WorkspaceShellViewController: NSViewController {
         activeVaultSessionByPaneID[paneID] = sessionID
     }
 
-    private func activePaneID(forVaultSession sessionID: String, allWorkspaces: [Workspace]) -> PaneID? {
-        let validPaneIDs = Set(
-            allWorkspaces.flatMap { workspace in
-                workspace.tabs.flatMap { $0.panes.map(\.id) }
-            }
-        )
-        return activeVaultSessionByPaneID.first { paneID, activeSessionID in
-            activeSessionID == sessionID && validPaneIDs.contains(paneID)
+    private func activePaneID(forVaultSession sessionID: String, allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> PaneID? {
+        activeVaultSessionBindings(allWorkspaces: allWorkspaces, sessions: sessions).first { _, activeSessionID in
+            activeSessionID == sessionID
         }?.key
     }
 
@@ -993,25 +948,64 @@ final class WorkspaceShellViewController: NSViewController {
         activeVaultSessionByPaneID = activeVaultSessionByPaneID.filter { validPaneIDs.contains($0.key) }
     }
 
-    private func vaultSessionActivityByID(allWorkspaces: [Workspace]) -> [String: WorkspaceVaultSidebarView.SessionActivity] {
-        var progressByPaneID: [PaneID: PaneProgress] = [:]
-        for workspace in allWorkspaces {
-            for pane in workspace.tabs.flatMap(\.panes) {
-                if let progress = pane.terminalState.progress {
-                    progressByPaneID[pane.id] = progress
-                }
-            }
-        }
-
+    private func vaultSessionActivityByID(allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> [String: WorkspaceVaultSidebarView.SessionActivity] {
+        let panesByID = Dictionary(uniqueKeysWithValues: allVaultActivityPanes(in: allWorkspaces).map { ($0.id, $0) })
         var activityByID: [String: WorkspaceVaultSidebarView.SessionActivity] = [:]
-        for (paneID, sessionID) in activeVaultSessionByPaneID {
-            let progress = progressByPaneID[paneID] ?? PaneProgress(state: .paused)
+        for (paneID, sessionID) in activeVaultSessionBindings(allWorkspaces: allWorkspaces, sessions: sessions) {
+            let progress = panesByID[paneID]?.terminalState.progress ?? PaneProgress(state: .paused)
             activityByID[sessionID] = WorkspaceVaultSidebarView.SessionActivity(
                 isActive: true,
                 progress: progress
             )
         }
         return activityByID
+    }
+
+    private func activeVaultSessionBindings(allWorkspaces: [Workspace], sessions: [VaultSessionSummary]) -> [PaneID: String] {
+        let panes = allVaultActivityPanes(in: allWorkspaces)
+        let validPaneIDs = Set(panes.map(\.id))
+        let sessionByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let activeExplicitBindings = activeVaultSessionByPaneID.filter { paneID, sessionID in
+            guard validPaneIDs.contains(paneID),
+                  let pane = panes.first(where: { $0.id == paneID }),
+                  let session = sessionByID[sessionID]
+            else {
+                return false
+            }
+            return Self.paneLooksActiveForVaultSession(pane, session: session)
+        }
+        var bindings = activeExplicitBindings
+        activeVaultSessionByPaneID = activeExplicitBindings
+        var boundSessionIDs = Set(bindings.values)
+
+        for pane in panes where bindings[pane.id] == nil {
+            guard let agent = Self.inferredVaultAgentKind(for: pane),
+                  let panePath = Self.currentVaultPath(for: pane)
+            else {
+                continue
+            }
+
+            let matchingSession = sessions
+                .filter { session in
+                    session.agent == agent
+                        && boundSessionIDs.contains(session.id) == false
+                        && Self.vaultPathsOverlap(session.workingDirectory, panePath)
+                }
+                .max { $0.modifiedAt < $1.modifiedAt }
+
+            if let matchingSession {
+                bindings[pane.id] = matchingSession.id
+                boundSessionIDs.insert(matchingSession.id)
+            }
+        }
+
+        return bindings
+    }
+
+    private func allVaultActivityPanes(in workspaces: [Workspace]) -> [Pane] {
+        workspaces.flatMap { workspace in
+            workspace.tabs.flatMap(\.panes) + workspace.floatingPaneModals.flatMap(\.panes)
+        }
     }
 
     private func deleteVaultSessionPrompt(sessionID: String) {
@@ -1152,22 +1146,6 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
-    private func vaultSearchDirectoryPrefixes() -> [String]? {
-        guard let activeWorkspace = currentWorkspace else {
-            return nil
-        }
-        let allWorkspaces = controller.allWorkspaces()
-        switch normalizedVaultWorkspaceFilter(for: allWorkspaces) {
-        case .all:
-            return nil
-        case .current:
-            return vaultConnectedPaths(for: activeWorkspace)
-        case .workspace(let workspaceID):
-            let workspace = allWorkspaces.first(where: { $0.id == workspaceID }) ?? activeWorkspace
-            return vaultConnectedPaths(for: workspace)
-        }
-    }
-
     private func vaultSidebarPageSize() -> Int {
         let agentCount: Int
         if vaultAgentFilter != nil {
@@ -1210,13 +1188,12 @@ final class WorkspaceShellViewController: NSViewController {
                 .flatMap(Self.standardizedVaultPath)
         }
 
-        let rootPaths = [workspace.rootPath].compactMap(Self.standardizedVaultPath)
-        let scopePaths = Self.workspaceScopePaths(from: panePaths) + rootPaths
+        let scopePaths = Self.workspaceScopePaths(from: panePaths)
         if scopePaths.isEmpty == false {
             return Array(Set(scopePaths)).sorted { $0.count < $1.count }
         }
 
-        return rootPaths
+        return [workspace.rootPath].compactMap(Self.standardizedVaultPath)
     }
 
     private static func workspaceScopePaths(from panePaths: [String]) -> [String] {
@@ -1255,6 +1232,71 @@ final class WorkspaceShellViewController: NSViewController {
             candidate == connectedPath
                 || candidate.hasPrefix(connectedPath + "/")
         }
+    }
+
+    private static func vaultPathsOverlap(_ sessionPath: String?, _ panePath: String?) -> Bool {
+        guard let sessionPath = sessionPath.flatMap(standardizedVaultPath),
+              let panePath = panePath.flatMap(standardizedVaultPath)
+        else {
+            return false
+        }
+        return sessionPath == panePath
+            || sessionPath.hasPrefix(panePath + "/")
+            || panePath.hasPrefix(sessionPath + "/")
+    }
+
+    private static func currentVaultPath(for pane: Pane) -> String? {
+        pane.terminalState.reportedWorkingDirectory
+            ?? pane.terminalSession?.workingDirectory
+    }
+
+    private static func paneLooksActiveForVaultSession(_ pane: Pane, session: VaultSessionSummary) -> Bool {
+        inferredVaultAgentKind(for: pane) == session.agent
+            && vaultPathsOverlap(session.workingDirectory, currentVaultPath(for: pane))
+    }
+
+    private static func inferredVaultAgentKind(for pane: Pane) -> VaultAgentKind? {
+        if let adapterID = pane.terminalState.agentStatusAdapterID,
+           let agent = VaultAgentKind(rawValue: adapterID) {
+            return agent
+        }
+
+        let titleCandidates = [
+            pane.terminalState.reportedTitle,
+            pane.title,
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        for title in titleCandidates where title.isEmpty == false {
+            if let observed = OmuxAIStatusTitleObserver.observe(title: title),
+               let agent = VaultAgentKind(rawValue: observed.adapterID) {
+                return agent
+            }
+
+            let normalized = title.localizedLowercase
+            if normalized.contains("github copilot") || normalized.contains("copilot") {
+                return .copilot
+            }
+            if normalized.contains("codex") {
+                return .codex
+            }
+            if normalized.contains("gemini") {
+                return .gemini
+            }
+            if normalized.contains("claude") {
+                return .claude
+            }
+            if normalized.contains("opencode") {
+                return .opencode
+            }
+            if normalized.contains("rovodev") || normalized.contains("rovo dev") {
+                return .rovodev
+            }
+            if normalized == "pi" || normalized.contains(" pi ") {
+                return .pi
+            }
+        }
+
+        return nil
     }
 
     private static func standardizedVaultPath(_ path: String) -> String? {

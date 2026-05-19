@@ -439,19 +439,19 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target not found"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .agentSessionsList, .vaultList:
-            let searchRequest = VaultSearchRequest(rpcValue: request.params)
-            let result = try awaitVault { store in
-                try await store.list(limit: searchRequest.limit, offset: searchRequest.offset)
-            }
-            return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .agentSessionsSearch, .vaultSearch:
+        case .agentSessionsList:
             let searchRequest = VaultSearchRequest(rpcValue: request.params)
             let result = try awaitVault { store in
                 try await store.search(searchRequest)
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .agentSessionsPreview, .vaultPreview:
+        case .agentSessionsSearch:
+            let searchRequest = VaultSearchRequest(rpcValue: request.params)
+            let result = try awaitVault { store in
+                try await store.search(searchRequest)
+            }
+            return JSONRPCResponse(id: request.id, result: result.rpcValue)
+        case .agentSessionsPreview:
             guard let sessionID = request.params?.objectValue?["sessionID"]?.stringValue ?? request.params?.objectValue?["id"]?.stringValue else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing sessionID"))
             }
@@ -459,7 +459,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "agent session not found"))
             }
             return JSONRPCResponse(id: request.id, result: preview.rpcValue)
-        case .agentSessionsResume, .vaultResume:
+        case .agentSessionsResume:
             guard let params = request.params?.objectValue,
                   let sessionID = params["sessionID"]?.stringValue ?? params["id"]?.stringValue
             else {
@@ -476,13 +476,13 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "resume target unavailable"))
             }
             return JSONRPCResponse(id: request.id, result: result.rpcValue)
-        case .agentSessionsReindex, .vaultReindex:
+        case .agentSessionsReindex:
             let agent = request.params?.objectValue?["agent"]?.stringValue.flatMap(VaultAgentKind.init(rawValue:))
             let warnings = try awaitVault { store in
                 try await store.reindex(agent: agent)
             }
             return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true), "warnings": .array(warnings.map(RPCValue.string))]))
-        case .agentSessionsExport, .vaultExport:
+        case .agentSessionsExport:
             guard case .array(let rawIDs)? = request.params?.objectValue?["ids"] else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing ids"))
             }
@@ -491,7 +491,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 try await store.export(ids: ids)
             }
             return JSONRPCResponse(id: request.id, result: .object(["data": .string(data.base64EncodedString())]))
-        case .agentSessionsImport, .vaultImport:
+        case .agentSessionsImport:
             guard let dataString = request.params?.objectValue?["data"]?.stringValue,
                   let data = Data(base64Encoded: dataString)
             else {
@@ -501,10 +501,13 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 try await store.import(data: data)
             }
             return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))
-        case .agentSessionsAgents, .vaultAgents:
+        case .agentSessionsAgents:
+            let agents = try awaitVault { store in
+                try await store.availableAgents()
+            }
             return JSONRPCResponse(
                 id: request.id,
-                result: .array(VaultAgentKind.allCases.filter { $0 != .custom }.map { .string($0.rawValue) })
+                result: .array(agents.map { .string($0.rawValue) })
             )
         case .agentSessionsUI:
             let action = request.params?.objectValue?["action"]?.stringValue ?? "open"

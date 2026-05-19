@@ -356,7 +356,6 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
             self.resumeCommand = resumeCommand
         }
 
-        public typealias OmuxConfigVault = OmuxConfigAgentSessions
     }
 
     public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
@@ -412,7 +411,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
-        vault: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
+        agentSessions: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
@@ -425,7 +424,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
-        self.agentSessions = vault
+        self.agentSessions = agentSessions
         self.plugins = plugins
         self.registries = registries
         self.keyBindings = keyBindings
@@ -440,16 +439,13 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
-        vault: OmuxConfigAgentSessions(),
+        agentSessions: OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
         keyBindings: [],
         ghostty: []
     )
 
-    public var vault: OmuxConfigAgentSessions {
-        agentSessions
-    }
 }
 
 public enum OmuxWorkspacePathResolver {
@@ -951,7 +947,7 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let agentSessionsTableNames = ["vault", "agent-sessions"]
+        let agentSessionsTableNames = ["agent-sessions"]
         let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
         let allowedTables: Set<String> = [
             "theme",
@@ -959,7 +955,6 @@ public struct OmuxConfigLoader {
             "workspace",
             "ui.panes",
             "ui.icons",
-            "vault",
             "agent-sessions",
             "plugins.markdown-preview",
             "plugins.ai-status",
@@ -1050,7 +1045,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
-                vault: config.agentSessions,
+                agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1065,7 +1060,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
-                vault: config.agentSessions,
+                agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1691,7 +1686,7 @@ public struct OmuxConfigLoader {
         }
 
         var agentSessionsAgents = config.agentSessions.agents
-        let orderedAgentTablePrefixes = ["vault.agents.", "agent-sessions.agents."]
+        let orderedAgentTablePrefixes = ["agent-sessions.agents."]
         for tablePrefix in orderedAgentTablePrefixes {
             let tableNames = document.tableNames
                 .filter { $0.hasPrefix(tablePrefix) }
@@ -1849,7 +1844,7 @@ public struct OmuxConfigLoader {
                     colorsEnabled: iconsColorsEnabled
                 )
             ),
-            vault: OmuxConfigAgentSessions(
+            agentSessions: OmuxConfigAgentSessions(
                 enabled: agentSessionsEnabled,
                 previewEnabled: agentSessionsPreviewEnabled,
                 indexOnLaunch: agentSessionsIndexOnLaunch,

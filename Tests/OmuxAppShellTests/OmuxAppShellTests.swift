@@ -3892,6 +3892,7 @@ final class OmuxAppShellTests: XCTestCase {
         runtime.emit(.titleChanged("[ . ] Action Required | omux"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID, "gemini")
 
         runtime.emit(.titleChanged("⠇ omux"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
@@ -3904,10 +3905,12 @@ final class OmuxAppShellTests: XCTestCase {
         runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID)
 
         runtime.emit(.titleChanged("\u{2726} Gemini"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID, "gemini")
 
         runtime.emit(.titleChanged("\u{270B} Gemini"), on: runtimeSurfaceID)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))

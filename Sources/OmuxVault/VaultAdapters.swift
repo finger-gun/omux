@@ -31,13 +31,6 @@ public struct CodexVaultAdapter: VaultAgentAdapter {
     }
 
     public func discoverSessions() async throws -> [VaultIndexedSession] {
-        let jsonl = JSONLDirectoryVaultAdapter(
-            kind: .codex,
-            root: root,
-            sourceKind: "codex_jsonl",
-            globHint: "sessions",
-            configuration: configuration
-        )
         let sqlite = SQLiteBackedVaultAdapter(
             kind: .codex,
             root: root,
@@ -45,9 +38,18 @@ public struct CodexVaultAdapter: VaultAgentAdapter {
             sourceKind: "codex_sqlite",
             configuration: configuration
         )
-        let jsonlSessions = (try? await jsonl.discoverSessions()) ?? []
         let sqliteSessions = (try? await sqlite.discoverSessions()) ?? []
-        return mergePreferNewest(jsonlSessions + sqliteSessions)
+        if sqliteSessions.isEmpty == false {
+            return sqliteSessions
+        }
+        let jsonl = JSONLDirectoryVaultAdapter(
+            kind: .codex,
+            root: root,
+            sourceKind: "codex_jsonl",
+            globHint: "sessions",
+            configuration: configuration
+        )
+        return (try? await jsonl.discoverSessions()) ?? []
     }
 }
 
@@ -79,36 +81,31 @@ public struct JSONLDirectoryVaultAdapter: VaultAgentAdapter {
             return nil
         }
         let modified = attributes[.modificationDate] as? Date ?? Date()
-        let sessionID = sessionID(from: file)
+        let sessionID = normalizedSessionID(from: file, kind: kind)
         let lines = (try? String(contentsOf: file, encoding: .utf8))?.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) ?? []
         var title: String?
         var cwd: String?
         var model: String?
         var branch: String?
-        var turns: [VaultTranscriptTurn] = []
+        var firstUserText: String?
+        var firstMessageText: String?
 
-        for (index, line) in lines.enumerated() {
+        for line in lines {
             guard let object = parseJSONObject(line) else { continue }
             title = title ?? firstString(object, keys: ["title", "summary", "name"])
             cwd = cwd ?? firstString(object, keys: ["cwd", "workingDirectory", "working_directory", "workspace", "projectPath"])
             model = model ?? firstString(object, keys: ["model", "modelName"])
             branch = branch ?? firstString(object, keys: ["git_branch", "gitBranch", "branch"])
             if let text = text(from: object) {
-                let normalizedSessionID = "\(kind.rawValue):\(sessionID)"
                 let role = firstString(object, keys: ["role", "type", "author"]) ?? "message"
-                turns.append(VaultTranscriptTurn(
-                    sessionID: normalizedSessionID,
-                    turnID: firstString(object, keys: ["id", "turnID", "messageID"]) ?? "\(index)",
-                    role: role,
-                    text: text,
-                    ordinal: index,
-                    modifiedAt: modified
-                ))
+                firstMessageText = firstMessageText ?? text
+                if role.lowercased().contains("user") {
+                    firstUserText = firstUserText ?? text
+                }
             }
         }
 
-        let displayTitle = title ?? turns.first(where: { $0.role.lowercased().contains("user") })?.text.firstLine(maxLength: 80) ?? file.deletingPathExtension().lastPathComponent
-        let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
+        let displayTitle = title ?? firstUserText?.firstLine(maxLength: 80) ?? firstMessageText?.firstLine(maxLength: 80) ?? file.deletingPathExtension().lastPathComponent
         let summary = VaultSessionSummary(
             id: "\(kind.rawValue):\(sessionID)",
             agent: kind,
@@ -119,13 +116,13 @@ public struct JSONLDirectoryVaultAdapter: VaultAgentAdapter {
             model: model,
             gitBranch: branch,
             modifiedAt: modified,
-            previewAvailable: turns.isEmpty == false,
-            resumeAvailable: resume != nil
+            previewAvailable: false,
+            resumeAvailable: configuration.resumeCommand(for: kind, sessionID: sessionID) != nil
         )
         return VaultIndexedSession(
             summary: summary,
-            resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: cwd, resumeCommand: resume),
-            turns: turns
+            resumeSnapshot: nil,
+            turns: []
         )
     }
 }
@@ -141,27 +138,15 @@ public struct CopilotVaultAdapter: VaultAgentAdapter {
     }
 
     public func discoverSessions() async throws -> [VaultIndexedSession] {
-        let stateRoot = root.appendingPathComponent("session-state", isDirectory: true)
         let dbURL = root.appendingPathComponent("session-store.db", isDirectory: false)
-        let sqliteSessions = (try? discoverSessionStore(dbURL: dbURL)) ?? []
-        if sqliteSessions.isEmpty == false {
-            return sqliteSessions
-        }
-        let stateSessions = SessionFileScanner.files(under: stateRoot, extensions: ["jsonl", "json"], limit: 250)
-            .compactMap { parseStateFile($0) }
-        return stateSessions
+        return (try? discoverSessionStore(dbURL: dbURL)) ?? []
     }
 
     private func discoverSessionStore(dbURL: URL) throws -> [VaultIndexedSession] {
         guard FileManager.default.fileExists(atPath: dbURL.path) else {
             return []
         }
-        let copyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omux-vault-copilot-\(UUID().uuidString).sqlite")
-        try backupSQLiteDatabase(from: dbURL, to: copyURL)
-        defer { try? FileManager.default.removeItem(at: copyURL) }
-
-        let db = try VaultSQLiteDatabase(url: copyURL)
+        let db = try ExternalSQLiteDatabase(url: dbURL)
         let tables = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'") { sqliteText($0, 0) ?? "" }
         guard tables.contains("sessions") else {
             return []
@@ -200,7 +185,6 @@ public struct CopilotVaultAdapter: VaultAgentAdapter {
             let modifiedAt = parseTimestampDate(rawNumeric: sqliteInt(statement, 5), rawText: rawTimestampText)
                 ?? ((try? FileManager.default.attributesOfItem(atPath: dbURL.path))?[.modificationDate] as? Date)
                 ?? Date()
-            let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
             let summary = VaultSessionSummary(
                 id: "\(kind.rawValue):\(sessionID)",
                 agent: kind,
@@ -212,28 +196,16 @@ public struct CopilotVaultAdapter: VaultAgentAdapter {
                 gitBranch: sqliteText(statement, 4),
                 modifiedAt: modifiedAt,
                 previewAvailable: title.isEmpty == false,
-                resumeAvailable: resume != nil
+                resumeAvailable: configuration.resumeCommand(for: kind, sessionID: sessionID) != nil
             )
             return VaultIndexedSession(
                 summary: summary,
-                resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: summary.workingDirectory, resumeCommand: resume),
-                turns: [
-                    VaultTranscriptTurn(sessionID: summary.id, turnID: "title", role: "summary", text: title, ordinal: 0, modifiedAt: modifiedAt),
-                ]
+                resumeSnapshot: nil,
+                turns: []
             )
         }
     }
 
-    private func parseStateFile(_ file: URL) -> VaultIndexedSession? {
-        JSONLDirectoryVaultAdapter(
-            kind: .copilot,
-            root: file.deletingLastPathComponent(),
-            sourceKind: "copilot_session_state",
-            globHint: nil,
-            configuration: configuration
-        )
-        .parse(file: file)
-    }
 }
 
 public struct GeminiVaultAdapter: VaultAgentAdapter {
@@ -248,9 +220,66 @@ public struct GeminiVaultAdapter: VaultAgentAdapter {
 
     public func discoverSessions() async throws -> [VaultIndexedSession] {
         let tmpRoot = root.appendingPathComponent("tmp", isDirectory: true)
+        let chatFiles = SessionFileScanner.files(under: tmpRoot, extensions: ["jsonl"], limit: 500)
+            .filter { $0.deletingLastPathComponent().lastPathComponent == "chats" }
+        let chatSessions = mergePreferNewest(chatFiles.compactMap { parseChatFile($0) })
+        if chatSessions.isEmpty == false {
+            return chatSessions
+        }
+
         let files = SessionFileScanner.files(under: tmpRoot, extensions: ["json"])
             .filter { $0.lastPathComponent == "logs.json" }
         return mergePreferNewest(files.flatMap { parseLogsFile($0) })
+    }
+
+    private func parseChatFile(_ file: URL) -> VaultIndexedSession? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let content = try? String(contentsOf: file, encoding: .utf8)
+        else {
+            return nil
+        }
+
+        let fallbackModified = attributes[.modificationDate] as? Date ?? Date()
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        var discoveredSessionID: String?
+        var title: String?
+        var latest: Date?
+        var firstUserText: String?
+        var firstMessageText: String?
+
+        for line in lines {
+            guard let object = parseJSONObject(line) else { continue }
+            discoveredSessionID = discoveredSessionID ?? firstString(object, keys: ["sessionId", "session_id", "id"])
+            if let set = object["$set"] as? [String: Any],
+               let updated = firstDate(set, keys: ["lastUpdated", "updatedAt", "updated_at"]) {
+                latest = latest.map { max($0, updated) } ?? updated
+            }
+            if let updated = firstDate(object, keys: ["lastUpdated", "updatedAt", "updated_at", "timestamp", "createdAt", "created_at"]) {
+                latest = latest.map { max($0, updated) } ?? updated
+            }
+            guard let text = text(from: object) else { continue }
+            let role = firstString(object, keys: ["type", "role", "author"]) ?? "message"
+            firstMessageText = firstMessageText ?? text
+            if role.lowercased().contains("user") {
+                firstUserText = firstUserText ?? text
+            }
+        }
+
+        let rawID = discoveredSessionID ?? sessionID(from: file)
+        title = firstUserText?.firstLine(maxLength: 80) ?? firstMessageText?.firstLine(maxLength: 80) ?? rawID
+        let workingDirectory = geminiProjectRoot(forChatFile: file)
+        let summary = VaultSessionSummary(
+            id: "\(kind.rawValue):\(rawID)",
+            agent: kind,
+            sourceKind: "gemini_jsonl",
+            sourcePath: file.path,
+            title: title ?? rawID,
+            workingDirectory: workingDirectory,
+            modifiedAt: latest ?? fallbackModified,
+            previewAvailable: false,
+            resumeAvailable: configuration.resumeCommand(for: kind, sessionID: rawID) != nil
+        )
+        return VaultIndexedSession(summary: summary, resumeSnapshot: nil, turns: [])
     }
 
     private func parseLogsFile(_ file: URL) -> [VaultIndexedSession] {
@@ -278,30 +307,26 @@ public struct GeminiVaultAdapter: VaultAgentAdapter {
 
             var latest: Date?
             let normalizedSessionID = "\(kind.rawValue):\(sessionID)"
-            let turns = sortedRows.enumerated().compactMap { index, row -> VaultTranscriptTurn? in
-                guard let text = text(from: row) else {
-                    return nil
-                }
+            var firstUserText: String?
+            var firstMessageText: String?
+            for row in sortedRows {
+                guard let text = text(from: row) else { continue }
                 let modified = firstDate(row, keys: ["timestamp", "createdAt", "updatedAt"]) ?? fallbackModified
                 latest = latest.map { max($0, modified) } ?? modified
-                return VaultTranscriptTurn(
-                    sessionID: normalizedSessionID,
-                    turnID: firstString(row, keys: ["messageId", "message_id", "id"]) ?? "\(index)",
-                    role: firstString(row, keys: ["type", "role", "author"]) ?? "message",
-                    text: text,
-                    ordinal: index,
-                    modifiedAt: modified
-                )
+                let role = firstString(row, keys: ["type", "role", "author"]) ?? "message"
+                firstMessageText = firstMessageText ?? text
+                if role.lowercased().contains("user") {
+                    firstUserText = firstUserText ?? text
+                }
             }
 
-            guard turns.isEmpty == false else {
+            guard firstMessageText != nil else {
                 return nil
             }
 
-            let title = turns.first(where: { $0.role.lowercased().contains("user") })?.text.firstLine(maxLength: 80)
-                ?? turns.first?.text.firstLine(maxLength: 80)
+            let title = firstUserText?.firstLine(maxLength: 80)
+                ?? firstMessageText?.firstLine(maxLength: 80)
                 ?? sessionID
-            let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
             let summary = VaultSessionSummary(
                 id: normalizedSessionID,
                 agent: kind,
@@ -310,13 +335,13 @@ public struct GeminiVaultAdapter: VaultAgentAdapter {
                 title: title,
                 workingDirectory: workingDirectory,
                 modifiedAt: latest ?? fallbackModified,
-                previewAvailable: true,
-                resumeAvailable: resume != nil
+                previewAvailable: false,
+                resumeAvailable: configuration.resumeCommand(for: kind, sessionID: sessionID) != nil
             )
             return VaultIndexedSession(
                 summary: summary,
-                resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: workingDirectory, resumeCommand: resume),
-                turns: turns
+                resumeSnapshot: nil,
+                turns: []
             )
         }
     }
@@ -329,6 +354,19 @@ public struct GeminiVaultAdapter: VaultAgentAdapter {
             home.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent(projectName, isDirectory: true),
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }?.path
+    }
+
+    private func geminiProjectRoot(forChatFile file: URL) -> String? {
+        let projectDirectory = file
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let projectRootFile = projectDirectory.appendingPathComponent(".project_root")
+        if let path = try? String(contentsOf: projectRootFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           path.isEmpty == false {
+            return NSString(string: path).expandingTildeInPath
+        }
+        return inferredProjectPath(named: projectDirectory.lastPathComponent)
     }
 }
 
@@ -349,14 +387,17 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
 
     public func discoverSessions() async throws -> [VaultIndexedSession] {
         let candidates = databaseNames.map { root.appendingPathComponent($0, isDirectory: false) }
-        guard let dbURL = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-            return []
+        for dbURL in candidates where FileManager.default.fileExists(atPath: dbURL.path) {
+            let sessions = (try? discoverSessions(in: dbURL)) ?? []
+            if sessions.isEmpty == false {
+                return sessions
+            }
         }
-        let copyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omux-vault-\(kind.rawValue)-\(UUID().uuidString).sqlite")
-        try backupSQLiteDatabase(from: dbURL, to: copyURL)
-        defer { try? FileManager.default.removeItem(at: copyURL) }
-        let db = try VaultSQLiteDatabase(url: copyURL)
+        return []
+    }
+
+    private func discoverSessions(in dbURL: URL) throws -> [VaultIndexedSession] {
+        let db = try ExternalSQLiteDatabase(url: dbURL)
         let tables = try db.query("SELECT name FROM sqlite_master WHERE type = 'table'") { sqliteText($0, 0) ?? "" }
         let table = ["threads", "sessions", "session"].first(where: tables.contains)
         guard let table else {
@@ -393,7 +434,6 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
                 let attributes = try? FileManager.default.attributesOfItem(atPath: dbURL.path)
                 modifiedAt = attributes?[.modificationDate] as? Date ?? Date()
             }
-            let resume = configuration.resumeCommand(for: kind, sessionID: sessionID)
             let summary = VaultSessionSummary(
                 id: "\(kind.rawValue):\(sessionID)",
                 agent: kind,
@@ -405,20 +445,12 @@ public struct SQLiteBackedVaultAdapter: VaultAgentAdapter {
                 gitBranch: branch,
                 modifiedAt: modifiedAt,
                 previewAvailable: title.isEmpty == false,
-                resumeAvailable: resume != nil
-            )
-            let turn = VaultTranscriptTurn(
-                sessionID: summary.id,
-                turnID: "title",
-                role: "summary",
-                text: title,
-                ordinal: 0,
-                modifiedAt: modifiedAt
+                resumeAvailable: configuration.resumeCommand(for: kind, sessionID: sessionID) != nil
             )
             return VaultIndexedSession(
                 summary: summary,
-                resumeSnapshot: VaultResumeSnapshot(kind: kind, sessionID: sessionID, workingDirectory: cwd, resumeCommand: resume),
-                turns: [turn]
+                resumeSnapshot: nil,
+                turns: []
             )
         }
     }
@@ -565,6 +597,22 @@ private func sessionID(from file: URL) -> String {
     return name
 }
 
+private func normalizedSessionID(from file: URL, kind: VaultAgentKind) -> String {
+    let rawID = sessionID(from: file)
+    guard kind == .codex else {
+        return rawID
+    }
+    let uuidLength = 36
+    guard rawID.count > uuidLength else {
+        return rawID
+    }
+    let suffix = String(rawID.suffix(uuidLength))
+    guard UUID(uuidString: suffix) != nil else {
+        return rawID
+    }
+    return suffix
+}
+
 private func mergePreferNewest(_ sessions: [VaultIndexedSession]) -> [VaultIndexedSession] {
     var merged: [String: VaultIndexedSession] = [:]
     for session in sessions {
@@ -575,43 +623,6 @@ private func mergePreferNewest(_ sessions: [VaultIndexedSession]) -> [VaultIndex
         merged[session.summary.id] = session
     }
     return Array(merged.values).sorted { $0.summary.modifiedAt > $1.summary.modifiedAt }
-}
-
-private func backupSQLiteDatabase(from sourceURL: URL, to destinationURL: URL) throws {
-    try? FileManager.default.removeItem(at: destinationURL)
-    var source: OpaquePointer?
-    var destination: OpaquePointer?
-    guard sqlite3_open_v2(sourceURL.path, &source, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
-          let source
-    else {
-        let message = source.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open source SQLite database"
-        if let source {
-            sqlite3_close(source)
-        }
-        throw VaultSQLiteError.open(message)
-    }
-    defer { sqlite3_close(source) }
-
-    guard sqlite3_open_v2(destinationURL.path, &destination, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
-          let destination
-    else {
-        let message = destination.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open destination SQLite database"
-        if let destination {
-            sqlite3_close(destination)
-        }
-        throw VaultSQLiteError.open(message)
-    }
-    defer { sqlite3_close(destination) }
-
-    guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
-        throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(destination)))
-    }
-    defer { sqlite3_backup_finish(backup) }
-
-    let result = sqlite3_backup_step(backup, -1)
-    guard result == SQLITE_DONE else {
-        throw VaultSQLiteError.step(String(cString: sqlite3_errmsg(destination)))
-    }
 }
 
 private func preferred(_ candidates: [String], in columns: [String]) -> String? {

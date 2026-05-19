@@ -276,7 +276,7 @@ Agent Sessions indexes local coding-agent history so OpenMUX can search, resume,
 ```toml
 [agent-sessions]
 enabled = true
-preview = true
+preview_enabled = true
 index_on_launch = true
 included_agents = ["copilot", "codex", "gemini"]
 excluded_paths = []
@@ -291,11 +291,11 @@ resume_command = "copilot --resume {session_id}"
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `enabled` | boolean | Shows Agent Sessions UI and enables indexing. Defaults to `true`. |
-| `preview` | boolean | Enables transcript previews where the adapter can read them. Defaults to `true`. |
+| `preview_enabled` | boolean | Reserved for preview-capable Agent Sessions surfaces. Defaults to `true`. |
 | `index_on_launch` | boolean | Rebuilds the local index when OpenMUX starts. Defaults to `true`. |
 | `included_agents` | array of strings | Agents to index. Common values are `copilot`, `codex`, `gemini`, `claude`, `opencode`, `pi`, and `rovodev`. |
 | `excluded_paths` | array of strings | Paths to skip while indexing. |
-| `max_preview_bytes` | integer | Maximum transcript preview bytes per session. |
+| `max_preview_bytes` | integer | Reserved maximum preview payload size. |
 | `sidebar_rows_per_agent` | integer | Number of rows to fetch per agent for each sidebar page. Defaults to `10`. |
 
 Per-agent tables live under `[agent-sessions.agents.<agent>]`:
@@ -305,8 +305,6 @@ Per-agent tables live under `[agent-sessions.agents.<agent>]`:
 | `enabled` | boolean | Include or exclude this agent without replacing the whole `included_agents` list. |
 | `home` | string | Override the agent's local home directory. |
 | `resume_command` | string | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
-
-Legacy `[vault]` and `[vault.agents.*]` keys are still accepted for compatibility. Prefer `[agent-sessions]` for new config; if both are present, `[agent-sessions]` takes precedence.
 
 ## `[plugins]` settings
 

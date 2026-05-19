@@ -445,7 +445,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     private func prioritizedAgentSessionsAgents() -> [VaultAgentKind] {
-        let priority: [VaultAgentKind] = [.copilot, .codex, .gemini]
+        let priority: [VaultAgentKind] = [.codex, .gemini, .copilot]
         let included = vaultConfiguration.includedAgents.filter { $0 != .custom }
         var result = priority.filter { included.contains($0) }
         result += included.filter { result.contains($0) == false }

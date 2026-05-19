@@ -129,83 +129,34 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
               version INTEGER PRIMARY KEY,
               applied_at_ms INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS vault_sessions (
+            DROP TRIGGER IF EXISTS vault_messages_ai;
+            DROP TRIGGER IF EXISTS vault_messages_ad;
+            DROP TRIGGER IF EXISTS vault_messages_au;
+            DROP TABLE IF EXISTS vault_messages_fts;
+            DROP TABLE IF EXISTS vault_messages;
+            DROP TABLE IF EXISTS vault_resume_snapshots;
+            DROP TABLE IF EXISTS vault_source_state;
+            DROP TABLE IF EXISTS vault_section_prefs;
+            DROP TABLE IF EXISTS vault_imported_sessions;
+            DROP TABLE IF EXISTS vault_deleted_sessions;
+            DROP TABLE IF EXISTS vault_sessions;
+            CREATE TABLE IF NOT EXISTS agent_sessions (
               id TEXT PRIMARY KEY,
+              raw_id TEXT NOT NULL,
               agent TEXT NOT NULL,
               source_kind TEXT NOT NULL,
               source_path TEXT,
-              working_directory TEXT,
+              cwd TEXT,
               title TEXT NOT NULL,
-              model TEXT,
-              git_branch TEXT,
-              pr_url TEXT,
-              modified_at_ms INTEGER NOT NULL,
-              preview_available INTEGER NOT NULL,
-              resume_available INTEGER NOT NULL
+              updated_at_ms INTEGER NOT NULL,
+              deleted INTEGER NOT NULL DEFAULT 0,
+              indexed_at_ms INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS vault_resume_snapshots (
-              session_id TEXT PRIMARY KEY,
-              kind TEXT NOT NULL,
-              working_directory TEXT,
-              launch_command_json TEXT,
-              resume_command TEXT,
-              registration_id TEXT,
-              metadata_json TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS vault_messages (
-              rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-              session_id TEXT NOT NULL,
-              turn_id TEXT NOT NULL,
-              role TEXT NOT NULL,
-              text TEXT NOT NULL,
-              ordinal INTEGER NOT NULL,
-              modified_at_ms INTEGER NOT NULL,
-              UNIQUE(session_id, turn_id)
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS vault_messages_fts USING fts5(
-              session_id UNINDEXED,
-              turn_id UNINDEXED,
-              text,
-              content='vault_messages',
-              content_rowid='rowid'
-            );
-            CREATE TABLE IF NOT EXISTS vault_source_state (
-              source_key TEXT PRIMARY KEY,
-              agent TEXT NOT NULL,
-              source_path TEXT NOT NULL,
-              modified_at_ms INTEGER NOT NULL,
-              adapter_version INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS vault_section_prefs (
-              grouping TEXT NOT NULL,
-              section_key TEXT NOT NULL,
-              sort_index INTEGER NOT NULL,
-              PRIMARY KEY (grouping, section_key)
-            );
-            CREATE TABLE IF NOT EXISTS vault_imported_sessions (
-              session_id TEXT PRIMARY KEY,
-              imported_at_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS vault_deleted_sessions (
-              session_id TEXT PRIMARY KEY,
-              deleted_at_ms INTEGER NOT NULL
-            );
-            CREATE TRIGGER IF NOT EXISTS vault_messages_ai AFTER INSERT ON vault_messages BEGIN
-              INSERT INTO vault_messages_fts(rowid, session_id, turn_id, text)
-              VALUES (new.rowid, new.session_id, new.turn_id, new.text);
-            END;
-            CREATE TRIGGER IF NOT EXISTS vault_messages_ad AFTER DELETE ON vault_messages BEGIN
-              INSERT INTO vault_messages_fts(vault_messages_fts, rowid, session_id, turn_id, text)
-              VALUES ('delete', old.rowid, old.session_id, old.turn_id, old.text);
-            END;
-            CREATE TRIGGER IF NOT EXISTS vault_messages_au AFTER UPDATE ON vault_messages BEGIN
-              INSERT INTO vault_messages_fts(vault_messages_fts, rowid, session_id, turn_id, text)
-              VALUES ('delete', old.rowid, old.session_id, old.turn_id, old.text);
-              INSERT INTO vault_messages_fts(rowid, session_id, turn_id, text)
-              VALUES (new.rowid, new.session_id, new.turn_id, new.text);
-            END;
+            CREATE INDEX IF NOT EXISTS agent_sessions_agent_updated_idx ON agent_sessions(agent, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS agent_sessions_cwd_updated_idx ON agent_sessions(cwd, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS agent_sessions_deleted_updated_idx ON agent_sessions(deleted, updated_at_ms DESC);
             INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms)
-            VALUES (1, CAST(strftime('%s','now') AS INTEGER) * 1000);
+            VALUES (2, CAST(strftime('%s','now') AS INTEGER) * 1000);
             """
         )
     }
@@ -214,9 +165,10 @@ final class VaultSQLiteDatabase: @unchecked Sendable {
 final class ExternalSQLiteDatabase: @unchecked Sendable {
     private let db: OpaquePointer
 
-    init(url: URL) throws {
+    init(url: URL, readOnly: Bool = true) throws {
         var pointer: OpaquePointer?
-        guard sqlite3_open_v2(url.path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+        let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(url.path, &pointer, flags, nil) == SQLITE_OK,
               let pointer
         else {
             let message = pointer.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open SQLite database"
@@ -226,6 +178,7 @@ final class ExternalSQLiteDatabase: @unchecked Sendable {
             throw VaultSQLiteError.open(message)
         }
         self.db = pointer
+        sqlite3_busy_timeout(db, 500)
     }
 
     deinit {
