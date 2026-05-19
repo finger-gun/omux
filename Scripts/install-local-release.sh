@@ -75,6 +75,48 @@ is_openmux_running() {
   [ "$(osascript -e "application id \"$BUNDLE_ID\" is running" 2>/dev/null || printf 'false')" = "true" ]
 }
 
+validate_install_target() {
+  [ -n "$TARGET_APP" ] || fail "install target is empty"
+  [ "$TARGET_APP" != "/" ] || fail "refusing to install to filesystem root"
+
+  target_name="$(basename "$TARGET_APP")"
+  target_parent="$(dirname "$TARGET_APP")"
+  case "$target_name" in
+    *.app) ;;
+    *) fail "install target must be a .app bundle: $TARGET_APP" ;;
+  esac
+
+  [ -d "$target_parent" ] || fail "install target parent does not exist: $target_parent"
+  target_parent_real="$(realpath "$target_parent")" || fail "cannot canonicalize install parent: $target_parent"
+  target_canonical="$target_parent_real/$target_name"
+
+  case "$target_canonical" in
+    ""|"/"|"/Applications"|"/Library"|"/System"|"/Users"|"/private"|"/var"|"/tmp")
+      fail "refusing unsafe install target: $target_canonical"
+      ;;
+    *.app) ;;
+    *) fail "canonical install target must be a .app bundle: $target_canonical" ;;
+  esac
+
+  staged_name="$(basename "$STAGED_APP")"
+  case "$staged_name" in
+    *.app) ;;
+    *) fail "staged app must be a .app bundle: $STAGED_APP" ;;
+  esac
+  [ -d "$STAGED_APP/Contents/MacOS" ] || fail "staged app is not a macOS app bundle: $STAGED_APP"
+
+  if [ -e "$TARGET_APP" ]; then
+    target_existing_real="$(realpath "$TARGET_APP")" || fail "cannot canonicalize existing install target: $TARGET_APP"
+    case "$target_existing_real" in
+      ""|"/"|"/Applications"|"/Library"|"/System"|"/Users"|"/private"|"/var"|"/tmp")
+        fail "refusing unsafe existing install target: $target_existing_real"
+        ;;
+      *.app) ;;
+      *) fail "existing install target must resolve to a .app bundle: $target_existing_real" ;;
+    esac
+  fi
+}
+
 log "Starting local OpenMUX install from $APP_ARCHIVE"
 
 if is_openmux_running; then
@@ -91,6 +133,7 @@ if is_openmux_running; then
 fi
 
 log "Installing to $TARGET_APP"
+validate_install_target
 rm -rf "$TARGET_APP"
 ditto "$STAGED_APP" "$TARGET_APP"
 
