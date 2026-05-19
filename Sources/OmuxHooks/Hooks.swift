@@ -1,4 +1,5 @@
 import Foundation
+import OmuxConfig
 import OmuxCore
 
 public enum HookCategory: String, CaseIterable, Codable, Sendable {
@@ -183,6 +184,160 @@ public enum UserHookDirectoryDiscovery {
     }
 }
 
+enum PluginHookSubscriptionDiscovery {
+    static func descriptors(
+        in pluginsDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> [HookDescriptor] {
+        guard isDirectory(pluginsDirectoryURL, fileManager: fileManager) else {
+            return []
+        }
+
+        let pluginDirectories = directoryContents(
+            at: pluginsDirectoryURL,
+            fileManager: fileManager,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+        .filter { isActiveEntry($0) && isDirectory($0, fileManager: fileManager) }
+        .sortedByLastPathComponent()
+
+        return pluginDirectories.flatMap { pluginDirectory in
+            descriptors(
+                forPluginDirectory: pluginDirectory,
+                pluginsDirectoryURL: pluginsDirectoryURL,
+                fileManager: fileManager
+            )
+        }
+    }
+
+    private static func descriptors(
+        forPluginDirectory pluginDirectoryURL: URL,
+        pluginsDirectoryURL: URL,
+        fileManager: FileManager
+    ) -> [HookDescriptor] {
+        let manifestURL = pluginDirectoryURL.appendingPathComponent("omux-plugin.toml", isDirectory: false)
+        guard fileManager.fileExists(atPath: manifestURL.path(percentEncoded: false)) else {
+            return []
+        }
+
+        let parseResult = OmuxTOMLParser.parse(fileAt: manifestURL)
+        guard let document = parseResult.document, parseResult.diagnostics.isEmpty else {
+            return []
+        }
+
+        let pluginID = document.value(for: "id")?.stringValue ?? pluginDirectoryURL.lastPathComponent
+        let commandName = document.value(in: "plugin", for: "command")?.stringValue ?? pluginID
+        let entrypoint = document.value(in: "plugin", for: "entrypoint")?.stringValue ?? "plugin"
+        let executableURL = pluginDirectoryURL.appendingPathComponent(entrypoint, isDirectory: false)
+        guard isExecutableRegularFile(executableURL, fileManager: fileManager) else {
+            return []
+        }
+
+        let hookTables = document.tableNames
+            .filter { $0.hasPrefix("hooks.") }
+            .sorted()
+
+        return hookTables.flatMap { tableName -> [HookDescriptor] in
+            let hookName = String(tableName.dropFirst("hooks.".count))
+            guard hookName.isEmpty == false,
+                  let callback = document.value(in: tableName, for: "callback")?.stringValue,
+                  callback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            else {
+                return []
+            }
+
+            let arguments = [callback] + (stringArray(document.value(in: tableName, for: "arguments")) ?? [])
+            let environment = pluginEnvironment(
+                commandName: commandName,
+                executableURL: executableURL,
+                pluginsDirectoryURL: pluginsDirectoryURL,
+                hookName: hookName
+            )
+
+            return HookCategory.allCases.map { category in
+                HookDescriptor(
+                    category: category,
+                    name: hookName,
+                    executableURL: executableURL,
+                    arguments: arguments,
+                    environment: environment
+                )
+            }
+        }
+    }
+
+    private static func pluginEnvironment(
+        commandName: String,
+        executableURL: URL,
+        pluginsDirectoryURL: URL,
+        hookName: String
+    ) -> [String: String] {
+        var environment: [String: String] = [
+            "OMUX_PLUGIN_COMMAND": commandName,
+            "OMUX_PLUGIN_EXECUTABLE": executableURL.path(percentEncoded: false),
+            "OMUX_PLUGINS_DIR": pluginsDirectoryURL.path(percentEncoded: false),
+            "OMUX_PLUGIN_HOOK_NAME": hookName,
+        ]
+        if let bundledCLIURL = bundledCLIURL() {
+            environment["OMUX_CLI"] = bundledCLIURL.path(percentEncoded: false)
+        }
+        return environment
+    }
+
+    private static func bundledCLIURL() -> URL? {
+        let bundleURL = Bundle.main.bundleURL
+        let candidates = [
+            bundleURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false),
+            URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path(percentEncoded: false)) }
+    }
+
+    private static func stringArray(_ value: OmuxTOMLValue?) -> [String]? {
+        guard case .array(let values) = value else {
+            return nil
+        }
+        return values.compactMap(\.stringValue)
+    }
+
+    private static func directoryContents(
+        at url: URL,
+        fileManager: FileManager,
+        includingPropertiesForKeys keys: [URLResourceKey]
+    ) -> [URL] {
+        (try? fileManager.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: keys,
+            options: []
+        )) ?? []
+    }
+
+    private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path(percentEncoded: false), isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+
+    private static func isExecutableRegularFile(_ url: URL, fileManager: FileManager) -> Bool {
+        isRegularFile(url, fileManager: fileManager)
+            && fileManager.isExecutableFile(atPath: url.path(percentEncoded: false))
+    }
+
+    private static func isRegularFile(_ url: URL, fileManager: FileManager) -> Bool {
+        let path = url.path(percentEncoded: false)
+        guard fileManager.fileExists(atPath: path) else {
+            return false
+        }
+
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        return values?.isRegularFile == true
+    }
+
+    private static func isActiveEntry(_ url: URL) -> Bool {
+        url.lastPathComponent.hasPrefix(".") == false
+    }
+}
+
 private extension Array where Element == URL {
     func sortedByLastPathComponent() -> [URL] {
         sorted { lhs, rhs in
@@ -286,14 +441,18 @@ private enum HookProcessEnvironment {
 
 public final class ExternalHookRunner {
     private let registry: HookRegistry
+    private let pluginsDirectoryURL: URL
     private let launcher: any HookProcessLaunching
     private let warningHandler: @Sendable (String) -> Void
     private let executionMode: HookExecutionMode
     private let executionQueue = DispatchQueue(label: "dev.fingergun.omux.hooks")
     private let encoder = JSONEncoder()
+    private let pluginDescriptorLock = NSLock()
+    private var cachedPluginDescriptors: [HookDescriptor]?
 
     public init(
         registry: HookRegistry = HookRegistry(),
+        pluginsDirectoryURL: URL = OmuxConfigPaths.pluginsDirectoryURL,
         launcher: any HookProcessLaunching = ProcessHookLauncher(),
         executionMode: HookExecutionMode = .synchronous,
         warningHandler: @escaping @Sendable (String) -> Void = { message in
@@ -301,6 +460,7 @@ public final class ExternalHookRunner {
         }
     ) {
         self.registry = registry
+        self.pluginsDirectoryURL = pluginsDirectoryURL
         self.launcher = launcher
         self.warningHandler = warningHandler
         self.executionMode = executionMode
@@ -311,8 +471,23 @@ public final class ExternalHookRunner {
         registry
     }
 
+    public func refreshPluginDescriptors() {
+        let descriptors = PluginHookSubscriptionDiscovery.descriptors(in: pluginsDirectoryURL)
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = descriptors
+        pluginDescriptorLock.unlock()
+    }
+
+    public func invalidatePluginDescriptors() {
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = nil
+        pluginDescriptorLock.unlock()
+    }
+
     public func emit(_ invocation: HookInvocation) throws {
+        let pluginDescriptors = cachedPluginHookDescriptors()
         let descriptors = registry.matchingDescriptors(for: invocation)
+            + pluginDescriptors.filter { $0.matches(invocation) }
         guard descriptors.isEmpty == false else {
             return
         }
@@ -331,6 +506,21 @@ public final class ExternalHookRunner {
                 )
             }
         }
+    }
+
+    private func cachedPluginHookDescriptors() -> [HookDescriptor] {
+        pluginDescriptorLock.lock()
+        if let cachedPluginDescriptors {
+            pluginDescriptorLock.unlock()
+            return cachedPluginDescriptors
+        }
+        pluginDescriptorLock.unlock()
+
+        let descriptors = PluginHookSubscriptionDiscovery.descriptors(in: pluginsDirectoryURL)
+        pluginDescriptorLock.lock()
+        cachedPluginDescriptors = descriptors
+        pluginDescriptorLock.unlock()
+        return descriptors
     }
 
     private func run(descriptors: [HookDescriptor], payload: Data) {

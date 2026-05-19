@@ -228,6 +228,8 @@ omux pane-status --pane "$pane_id" --state clear
 
 Status states are intentionally small: `working` and `indeterminate` show a pulsing orb, `error` shows a red orb, `needs-input` shows a yellow orb for prompts that require user action, `idle` shows a brief blue orb and then clears, and `clear` removes the status immediately. Aliases such as `running`, `active`, `input`, `done`, and `failed` are accepted by the CLI for script ergonomics.
 
+For multi-vendor AI/tool workflows, prefer delegating the matching logic to the bundled `ai-status` plugin host instead of hardcoding vendor-specific title or transcript parsing into every hook script. Plugins can declare their own hook callbacks in `omux-plugin.toml`, and the bundled `ai-status` command can translate Codex title changes into normalized pane status updates.
+
 Use `run` when you want OpenMUX to submit a command, and `send-text` when you only want to insert text:
 
 ```bash

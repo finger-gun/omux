@@ -1,5 +1,6 @@
 import Foundation
 import OmuxCore
+import OmuxVault
 
 public enum ControlPlaneTerminalTarget: Equatable, Sendable {
     case session(SessionID)
@@ -89,6 +90,78 @@ public enum ControlPlaneTerminalTarget: Equatable, Sendable {
         default:
             return nil
         }
+    }
+}
+
+public extension VaultSessionSummary {
+    var rpcValue: RPCValue {
+        .object([
+            "id": .string(id),
+            "agent": .string(agent.rawValue),
+            "sourceKind": .string(sourceKind),
+            "sourcePath": sourcePath.map(RPCValue.string) ?? .null,
+            "title": .string(title),
+            "workingDirectory": workingDirectory.map(RPCValue.string) ?? .null,
+            "model": model.map(RPCValue.string) ?? .null,
+            "gitBranch": gitBranch.map(RPCValue.string) ?? .null,
+            "prURL": prURL.map(RPCValue.string) ?? .null,
+            "modifiedAt": .string(ISO8601DateFormatter().string(from: modifiedAt)),
+            "previewAvailable": .bool(previewAvailable),
+            "resumeAvailable": .bool(resumeAvailable),
+        ])
+    }
+}
+
+public extension VaultTranscriptTurn {
+    var rpcValue: RPCValue {
+        .object([
+            "sessionID": .string(sessionID),
+            "turnID": .string(turnID),
+            "role": .string(role),
+            "text": .string(text),
+            "ordinal": .integer(ordinal),
+            "modifiedAt": .string(ISO8601DateFormatter().string(from: modifiedAt)),
+        ])
+    }
+}
+
+public extension VaultSearchResponse {
+    var rpcValue: RPCValue {
+        .object([
+            "sessions": .array(sessions.map(\.rpcValue)),
+            "totalCount": .integer(totalCount),
+        ])
+    }
+}
+
+public extension VaultPreview {
+    var rpcValue: RPCValue {
+        .object([
+            "session": session.rpcValue,
+            "turns": .array(turns.map(\.rpcValue)),
+            "truncated": .bool(truncated),
+        ])
+    }
+}
+
+public extension VaultSearchRequest {
+    init(rpcValue: RPCValue?) {
+        let object = rpcValue?.objectValue ?? [:]
+        let agents: [VaultAgentKind]?
+        if case .array(let values)? = object["agents"] {
+            agents = values.compactMap { value in value.stringValue.flatMap(VaultAgentKind.init(rawValue:)) }
+        } else if let agent = object["agent"]?.stringValue.flatMap(VaultAgentKind.init(rawValue:)) {
+            agents = [agent]
+        } else {
+            agents = nil
+        }
+        self.init(
+            query: object["query"]?.stringValue ?? "",
+            agents: agents,
+            workingDirectory: object["workingDirectory"]?.stringValue ?? object["cwd"]?.stringValue,
+            offset: max(0, object["offset"]?.integerValue ?? 0),
+            limit: max(0, object["limit"]?.integerValue ?? 50)
+        )
     }
 }
 
@@ -501,6 +574,15 @@ public struct ControlPlaneHistoryClearResponse: Equatable, Sendable {
 }
 
 private extension RPCValue {
+    var objectValue: [String: RPCValue]? {
+        switch self {
+        case .object(let value):
+            return value
+        default:
+            return nil
+        }
+    }
+
     var stringValue: String? {
         switch self {
         case .string(let value):

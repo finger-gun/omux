@@ -1,0 +1,12 @@
+{
+  "id": "action:agent-sessions.toggle",
+  "title": "Toggle Agent Sessions",
+  "subtitle": "Show or hide the Agent Sessions sidebar",
+  "category": "action",
+  "matchText": "Toggle Agent Sessions Show or hide the Agent Sessions sidebar history codex copilot claude gemini",
+  "aliases": ["agent sessions", "sessions sidebar"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No active workspace",
+  "command": { "kind": "action", "target": "agent-sessions.toggle" }
+}

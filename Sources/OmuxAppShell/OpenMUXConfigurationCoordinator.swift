@@ -3,6 +3,7 @@ import OmuxConfig
 import OmuxCore
 import OmuxTerminalBridge
 import OmuxTheme
+import OmuxVault
 
 @MainActor
 struct OpenMUXPreparedConfiguration: Sendable {
@@ -11,6 +12,8 @@ struct OpenMUXPreparedConfiguration: Sendable {
     let panes: OmuxConfigUI.Panes
     let icons: OmuxConfigUI.Icons
     let markdownPreview: OmuxConfigPlugins.MarkdownPreview
+    let aiStatus: OmuxConfigPlugins.AIStatus
+    let agentSessions: VaultConfiguration
     let autoCheckUpdate: Bool
     let defaultWorkspaceRootPath: String
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
@@ -24,6 +27,8 @@ struct OpenMUXPreparedConfiguration: Sendable {
         panes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         icons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
         markdownPreview: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
+        aiStatus: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(),
+        agentSessions: VaultConfiguration = VaultConfiguration(),
         autoCheckUpdate: Bool = true,
         defaultWorkspaceRootPath: String,
         keyBindingRegistry: OpenMUXKeyBindingRegistry,
@@ -36,6 +41,8 @@ struct OpenMUXPreparedConfiguration: Sendable {
         self.panes = panes
         self.icons = icons
         self.markdownPreview = markdownPreview
+        self.aiStatus = aiStatus
+        self.agentSessions = agentSessions
         self.autoCheckUpdate = autoCheckUpdate
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.keyBindingRegistry = keyBindingRegistry
@@ -58,6 +65,8 @@ final class OpenMUXConfigurationCoordinator {
     var onPaneConfigurationChange: ((OmuxConfigUI.Panes) -> Void)?
     var onIconConfigurationChange: ((OmuxConfigUI.Icons) -> Void)?
     var onMarkdownPreviewConfigurationChange: ((OmuxConfigPlugins.MarkdownPreview) -> Void)?
+    var onAIStatusConfigurationChange: ((OmuxConfigPlugins.AIStatus) -> Void)?
+    var onAgentSessionsConfigurationChange: ((VaultConfiguration) -> Void)?
     var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
 
@@ -71,6 +80,8 @@ final class OpenMUXConfigurationCoordinator {
     private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
     private var currentMarkdownPreview: OmuxConfigPlugins.MarkdownPreview
+    private var currentAIStatus: OmuxConfigPlugins.AIStatus
+    private var currentAgentSessions: VaultConfiguration
     private var currentKeyBindingRegistry: OpenMUXKeyBindingRegistry
     private var currentCompiledConfigURL: URL?
     private var currentCompiledHash: String?
@@ -89,6 +100,8 @@ final class OpenMUXConfigurationCoordinator {
         self.currentPanes = initialState.panes
         self.currentIcons = initialState.icons
         self.currentMarkdownPreview = initialState.markdownPreview
+        self.currentAIStatus = initialState.aiStatus
+        self.currentAgentSessions = initialState.agentSessions
         self.currentKeyBindingRegistry = initialState.keyBindingRegistry
         self.currentCompiledConfigURL = initialState.compiledConfigURL
         self.currentCompiledHash = initialState.compiledHash
@@ -109,6 +122,8 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                aiStatus: evaluation.config.plugins.aiStatus,
+                agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
@@ -127,6 +142,8 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                aiStatus: evaluation.config.plugins.aiStatus,
+                agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
@@ -141,6 +158,8 @@ final class OpenMUXConfigurationCoordinator {
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
+                aiStatus: evaluation.config.plugins.aiStatus,
+                agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
                 keyBindingRegistry: keyBindingRegistry,
@@ -309,6 +328,8 @@ final class OpenMUXConfigurationCoordinator {
                     panes: currentPanes,
                     icons: currentIcons,
                     markdownPreview: currentMarkdownPreview,
+                    aiStatus: currentAIStatus,
+                    agentSessions: currentAgentSessions,
                     keyBindingRegistry: currentKeyBindingRegistry
                 )
             }
@@ -318,6 +339,8 @@ final class OpenMUXConfigurationCoordinator {
             let panes = evaluation.config.ui.panes
             let icons = evaluation.config.ui.icons
             let markdownPreview = evaluation.config.plugins.markdownPreview
+            let aiStatus = evaluation.config.plugins.aiStatus
+            let agentSessions = VaultConfiguration(config: evaluation.config.agentSessions)
             let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
             let shouldApply = shouldRefresh
                 || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
@@ -325,6 +348,8 @@ final class OpenMUXConfigurationCoordinator {
                 || previousState.panes != panes
                 || previousState.icons != icons
                 || previousState.markdownPreview != markdownPreview
+                || previousState.aiStatus != aiStatus
+                || previousState.agentSessions != agentSessions
                 || previousState.keyBindingRegistry != keyBindingRegistry
             let fileURL: URL
             var diagnostics = evaluation.diagnostics
@@ -345,6 +370,8 @@ final class OpenMUXConfigurationCoordinator {
                 currentPanes = panes
                 currentIcons = icons
                 currentMarkdownPreview = markdownPreview
+                currentAIStatus = aiStatus
+                currentAgentSessions = agentSessions
                 currentKeyBindingRegistry = keyBindingRegistry
                 currentCompiledConfigURL = fileURL
                 currentCompiledHash = output.hash
@@ -357,6 +384,8 @@ final class OpenMUXConfigurationCoordinator {
                 panes: panes,
                 icons: icons,
                 markdownPreview: markdownPreview,
+                aiStatus: aiStatus,
+                agentSessions: agentSessions,
                 keyBindingRegistry: keyBindingRegistry,
                 diagnostics: diagnostics
             )
@@ -384,6 +413,8 @@ final class OpenMUXConfigurationCoordinator {
             panes: nil,
             icons: nil,
             markdownPreview: nil,
+            aiStatus: nil,
+            agentSessions: nil,
             keyBindingRegistry: nil,
             diagnostics: diagnostics
         )
@@ -396,6 +427,8 @@ final class OpenMUXConfigurationCoordinator {
         panes: OmuxConfigUI.Panes?,
         icons: OmuxConfigUI.Icons?,
         markdownPreview: OmuxConfigPlugins.MarkdownPreview?,
+        aiStatus: OmuxConfigPlugins.AIStatus?,
+        agentSessions: VaultConfiguration?,
         keyBindingRegistry: OpenMUXKeyBindingRegistry?,
         diagnostics: [OmuxConfigDiagnostic]
     ) {
@@ -416,6 +449,12 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let markdownPreview {
             onMarkdownPreviewConfigurationChange?(markdownPreview)
+        }
+        if let aiStatus {
+            onAIStatusConfigurationChange?(aiStatus)
+        }
+        if let agentSessions {
+            onAgentSessionsConfigurationChange?(agentSessions)
         }
         if let keyBindingRegistry {
             OpenMUXShortcutClassifier.updateKeyBindings(keyBindingRegistry)

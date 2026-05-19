@@ -71,6 +71,7 @@ User docs:
 
 - [Getting started](./docs/getting-started.md) - install, first launch, CLI setup, workspaces, panes, themes, hooks, plugins, and the release installer script.
 - [Configuration and themes](./docs/configuration.md) - `~/.omux/config.toml`, themes, terminal settings, keybindings, and plugin config.
+- [Agent Sessions](./docs/agent-sessions.md) - search, resume, monitor, and delete locally indexed coding-agent sessions.
 - [Hooks](./docs/hooks.md) - executable user hooks, registry installs, hook payloads, and automation examples.
 - [Plugins](./docs/plugins/index.md) - bundled plugins, registry installs, and plugin management.
 - [Plugin ecosystem](./docs/plugins.md) - how to create external plugin commands, extension panes, and menu contributions.

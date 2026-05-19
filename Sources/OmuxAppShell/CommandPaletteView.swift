@@ -8,10 +8,22 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     enum SubPaletteMode {
         case none
         case theme(originalTheme: WorkspaceShellTheme)
+        case vaultSessions
 
         var isActive: Bool {
             if case .none = self { return false }
             return true
+        }
+
+        var sectionTitle: String? {
+            switch self {
+            case .none:
+                return nil
+            case .theme:
+                return "Themes"
+            case .vaultSessions:
+                return "Agent Sessions"
+            }
         }
     }
 
@@ -23,6 +35,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     var subPalettePreviewHandler: ((String) -> Void)?
     var subPaletteCommitHandler: ((String) -> Void)?
     var subPaletteRevertHandler: (() -> Void)?
+    var subPaletteQueryChangeHandler: ((String) -> Void)?
 
     private var subPaletteMode: SubPaletteMode = .none
     private var topLevelResultProvider: ((String) -> [CommandPaletteResult])?
@@ -200,8 +213,10 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     }
 
     func present(initialQuery: String, restoring responder: NSResponder?) {
+        resetSubPaletteStateForPresentation()
         focusRestoreResponder = responder
         searchField.stringValue = initialQuery
+        selectedIndex = 0
         isHidden = false
         refreshResults()
         window?.makeFirstResponder(searchField)
@@ -249,7 +264,18 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
             return CommandPaletteSearch.themeResults(query: query, activeIdentifier: self.currentTheme.identifier)
         }
         searchField.stringValue = ""
-        sectionLabel.stringValue = "Themes"
+        selectedIndex = 0
+        sectionLabel.stringValue = subPaletteMode.sectionTitle ?? ""
+        refreshResults()
+    }
+
+    func enterVaultSessionsSubPalette(resultProvider: @escaping (String) -> [CommandPaletteResult]) {
+        subPaletteMode = .vaultSessions
+        topLevelResultProvider = self.resultProvider
+        self.resultProvider = resultProvider
+        searchField.stringValue = ""
+        selectedIndex = 0
+        sectionLabel.stringValue = subPaletteMode.sectionTitle ?? ""
         refreshResults()
     }
 
@@ -258,13 +284,31 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         topLevelResultProvider = nil
         subPaletteMode = .none
         searchField.stringValue = ""
+        selectedIndex = 0
+        subPaletteQueryChangeHandler = nil
         refreshResults()
+    }
+
+    func refreshPresentedResults() {
+        refreshResults()
+    }
+
+    private func resetSubPaletteStateForPresentation() {
+        if let topLevelResultProvider {
+            resultProvider = topLevelResultProvider
+        }
+        topLevelResultProvider = nil
+        subPaletteMode = .none
+        subPaletteQueryChangeHandler = nil
     }
 
     // MARK: - NSTextFieldDelegate
 
     func controlTextDidChange(_ notification: Notification) {
         _ = notification
+        if subPaletteMode.isActive {
+            subPaletteQueryChangeHandler?(searchField.stringValue)
+        }
         refreshResults()
     }
 
@@ -308,7 +352,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         }
 
         if subPaletteMode.isActive {
-            sectionLabel.stringValue = "Themes"
+            sectionLabel.stringValue = subPaletteMode.sectionTitle ?? ""
         } else {
             let parsed = CommandPaletteParsedQuery(rawText: searchField.stringValue)
             switch parsed.mode {
@@ -367,7 +411,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
             new.setSelected(true, theme: currentTheme)
             DispatchQueue.main.async { new.scrollToVisible(new.bounds) }
         }
-        if subPaletteMode.isActive, let result = results[safe: newIndex] {
+        if case .theme = subPaletteMode, let result = results[safe: newIndex] {
             subPalettePreviewHandler?(result.id)
         }
     }
@@ -398,6 +442,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
 
         if subPaletteMode.isActive {
             subPaletteCommitHandler?(result.id)
+            resetSubPaletteStateForPresentation()
             dismissAndRestoreFocus()
             return
         }

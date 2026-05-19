@@ -9,6 +9,7 @@ If you are new to OpenMUX, start with [Getting started](./getting-started.md). I
 | You want to... | Start here | Then read |
 | --- | --- | --- |
 | Use OpenMUX as your daily terminal workspace | [Getting started](./getting-started.md) | [Configuration and themes](./configuration.md) |
+| Search, resume, and monitor coding-agent sessions | [Agent Sessions](./agent-sessions.md) | [Configuration and themes](./configuration.md#agent-sessions-settings), [AI Status plugin](./plugins/ai-status.md) |
 | Customize themes, fonts, scrollback, or Option-key behavior | [Configuration and themes](./configuration.md) | [Getting started](./getting-started.md#customize-the-terminal) |
 | Search and run commands from the keyboard | [Command palette](./command-palette.md) | [Configuration and themes](./configuration.md) |
 | Automate your workspace with scripts | [Hooks](./hooks.md) | [Configuration and themes](./configuration.md#cli) |
@@ -25,6 +26,7 @@ These docs describe OpenMUX from the outside: what you can run, configure, and a
 
 - [Getting started](./getting-started.md) - first launch, CLI setup, workspaces, panes, themes, plugins, and simple automation.
 - [Configuration and themes](./configuration.md) - `~/.omux/config.toml`, built-in themes, custom theme tokens, Settings UI, and config commands.
+- [Agent Sessions](./agent-sessions.md) - search, resume, monitor, and delete locally indexed coding-agent sessions.
 - [Command palette](./command-palette.md) - opening modes, keyboard navigation, and how to add new commands.
 - [Plugin index](./plugins/index.md) - bundled plugins, registry-hosted plugins, and plugin management.
 - [Plugin ecosystem](./plugins.md) - external plugin commands, extension-pane CLI contracts, menu contributions, and plugin events.

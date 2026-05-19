@@ -486,6 +486,26 @@ struct OmuxConfigTests {
         #expect(result.config.plugins.markdownPreview.renderer == "builtin")
         #expect(result.config.plugins.markdownPreview.theme == "auto")
         #expect(result.config.plugins.markdownPreview.presentation == "pane-tab")
+        #expect(result.config.plugins.aiStatus.enabled)
+    }
+
+    @Test
+    func loadsAIStatusPluginSettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [plugins.ai-status]
+            enabled = false
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.plugins.aiStatus.enabled == false)
     }
 
     @Test
@@ -506,6 +526,32 @@ struct OmuxConfigTests {
                 schema = 1
 
                 [plugins.markdown-preview]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
+    func rejectsInvalidAIStatusPluginSettings() throws {
+        let cases = [
+            ("enabled = \"yes\"", "plugins.ai-status.enabled must be a boolean"),
+            ("unknown = true", "Unknown [plugins.ai-status] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [plugins.ai-status]
                 \(entry)
                 """,
                 to: home.appendingPathComponent("config.toml")
@@ -646,6 +692,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))
+        #expect(contents.contains("[agent-sessions]"))
         #expect(contents.contains("[plugins.markdown-preview]"))
         #expect(contents.contains("enabled = true"))
         #expect(contents.contains("renderer = \"builtin\""))
@@ -663,6 +710,46 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(OpenMUXKeyBindingRegistry.effective(overrides: result.config.keyBindings).chord(for: .paneRemove)?.description == "cmd+shift+w")
     }
+
+    @Test
+    func agentSessionsConfigParsesAgentOverride() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent-sessions]
+            enabled = true
+            preview_enabled = false
+            index_on_launch = false
+            included_agents = ["codex", "copilot"]
+            excluded_paths = ["~/secret"]
+            max_preview_bytes = 2048
+            sidebar_rows_per_agent = 12
+
+            [agent-sessions.agents.copilot]
+            enabled = true
+            home = "~/.copilot-test"
+            resume_command = "copilot --resume {session_id}"
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agentSessions.previewEnabled == false)
+        #expect(result.config.agentSessions.indexOnLaunch == false)
+        #expect(result.config.agentSessions.includedAgents == ["codex", "copilot"])
+        #expect(result.config.agentSessions.excludedPaths == ["~/secret"])
+        #expect(result.config.agentSessions.maxPreviewBytes == 2048)
+        #expect(result.config.agentSessions.sidebarRowsPerAgent == 12)
+        #expect(result.config.agentSessions.agents["copilot"]?.enabled == true)
+        #expect(result.config.agentSessions.agents["copilot"]?.home == "~/.copilot-test")
+        #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
+    }
+
 }
 
 private func temporaryMissingConfigURL() -> URL {

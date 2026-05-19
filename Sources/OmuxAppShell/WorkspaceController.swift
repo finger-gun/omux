@@ -4,6 +4,7 @@ import OmuxConfig
 import OmuxControlPlane
 import OmuxCore
 import OmuxHooks
+import OmuxAIStatusPlugin
 import OmuxMarkdownPreviewPlugin
 import OmuxTerminalBridge
 
@@ -58,6 +59,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let hookRunner: ExternalHookRunner
     private var persistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
+    private var aiStatusConfiguration: OmuxConfigPlugins.AIStatus
     private var paneConfiguration: OmuxConfigUI.Panes
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
@@ -72,6 +74,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var commandContextBySession: [SessionID: CommandAutomationContext] = [:]
     private var historyClearSuppressionByPane: [PaneID: String] = [:]
     private var progressIdleClearTokens: [PaneID: UUID] = [:]
+    private var aiStatusManagedAdapterByPaneID: [PaneID: String] = [:]
     private var pendingTerminalStateWorkspaceIDs: Set<WorkspaceID> = []
     private var terminalStateChangeUpdateScheduled = false
     private var deliveredTerminalDisplayTitleByPane: [PaneID: String] = [:]
@@ -111,6 +114,7 @@ public final class WorkspaceController: @unchecked Sendable {
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
         paneConfiguration: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
+        aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
         progressIdleClearDelay: TimeInterval = 3,
@@ -122,6 +126,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.persistedScrollback = persistedScrollback
         self.paneConfiguration = paneConfiguration
         self.markdownPreviewConfiguration = markdownPreviewConfiguration
+        self.aiStatusConfiguration = aiStatusConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
@@ -723,6 +728,15 @@ public final class WorkspaceController: @unchecked Sendable {
     public func updateMarkdownPreviewConfiguration(_ configuration: OmuxConfigPlugins.MarkdownPreview) {
         lock.lock()
         markdownPreviewConfiguration = configuration
+        lock.unlock()
+    }
+
+    public func updateAIStatusConfiguration(_ configuration: OmuxConfigPlugins.AIStatus) {
+        lock.lock()
+        aiStatusConfiguration = configuration
+        if configuration.enabled == false {
+            aiStatusManagedAdapterByPaneID.removeAll()
+        }
         lock.unlock()
     }
 
@@ -1954,6 +1968,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
             _ = workspaces[workspaceIndex].updatePane(context.paneID) { pane in
                 pane.terminalState.progress = progress
+                if request.state == .clear {
+                    pane.terminalState.agentStatusAdapterID = nil
+                }
             }
 
             if request.state == .idle {
@@ -3025,10 +3042,20 @@ public final class WorkspaceController: @unchecked Sendable {
             }
         case .titleChanged(let title):
             var shouldUpdateWorkspace = false
+            var shouldHandleAIStatusIdle = false
             let displayTitle = Self.displayTitle(forReportedTerminalTitle: title)
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                 if pane.terminalState.reportedTitle != title {
                     pane.terminalState.reportedTitle = title
+                }
+                if applyAIStatusTitleObservationLocked(
+                    title: title,
+                    paneID: event.paneID,
+                    workspaceIndex: workspaceIndex,
+                    pane: &pane,
+                    shouldHandleIdle: &shouldHandleAIStatusIdle
+                ) {
+                    shouldUpdateWorkspace = true
                 }
                 guard let displayTitle,
                       deliveredTerminalDisplayTitleByPane[event.paneID] != displayTitle
@@ -3049,6 +3076,10 @@ public final class WorkspaceController: @unchecked Sendable {
                     shouldScheduleTrailingTitleUpdate = true
                 }
             }
+            if shouldHandleAIStatusIdle {
+                handleIdleProgressSetLocked(for: event.paneID, workspaceIndex: workspaceIndex)
+                shouldUpdateWorkspace = true
+            }
             if shouldUpdateWorkspace {
                 updatedWorkspace = workspaces[workspaceIndex]
             }
@@ -3061,10 +3092,12 @@ public final class WorkspaceController: @unchecked Sendable {
         case .progressReported(let state, let progress):
             var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
+                let previousAgentStatusAdapterID = pane.terminalState.agentStatusAdapterID
                 let nextProgress: PaneProgress
                 switch state {
                 case .removed:
                     nextProgress = PaneProgress(state: .paused)
+                    pane.terminalState.agentStatusAdapterID = nil
                 case .active:
                     progressIdleClearTokens.removeValue(forKey: event.paneID)
                     nextProgress = PaneProgress(state: .active, value: progress)
@@ -3080,6 +3113,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 }
                 if pane.terminalState.progress != nextProgress {
                     pane.terminalState.progress = nextProgress
+                    didChange = true
+                }
+                if pane.terminalState.agentStatusAdapterID != previousAgentStatusAdapterID {
                     didChange = true
                 }
             }
@@ -3295,6 +3331,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 return
             }
             pane.terminalState.progress = nil
+            aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
         }
     }
 
@@ -3326,6 +3363,7 @@ public final class WorkspaceController: @unchecked Sendable {
                     return
                 }
                 pane.terminalState.progress = nil
+                aiStatusManagedAdapterByPaneID.removeValue(forKey: paneID)
             }
             progressIdleClearTokens.removeValue(forKey: paneID)
             updatedWorkspaceID = workspaces[workspaceIndex].id
@@ -3352,6 +3390,71 @@ public final class WorkspaceController: @unchecked Sendable {
             "message": message.map(OmuxValue.string) ?? .null,
             "source": .string(source),
         ])
+    }
+
+    private func applyAIStatusTitleObservationLocked(
+        title: String,
+        paneID: PaneID,
+        workspaceIndex: Int,
+        pane: inout Pane,
+        shouldHandleIdle: inout Bool
+    ) -> Bool {
+        _ = workspaceIndex
+        guard aiStatusConfiguration.enabled else {
+            return false
+        }
+
+        if let observation = OmuxAIStatusTitleObserver.observe(
+            title: title,
+            previousAdapterID: aiStatusManagedAdapterByPaneID[paneID]
+        ) {
+            let progress = paneProgress(forAIStatusState: observation.state)
+            guard pane.terminalState.progress != progress || pane.terminalState.agentStatusAdapterID != observation.adapterID else {
+                aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
+                return false
+            }
+            pane.terminalState.progress = progress
+            pane.terminalState.agentStatusAdapterID = observation.adapterID
+            aiStatusManagedAdapterByPaneID[paneID] = observation.adapterID
+            if observation.state == .idle {
+                shouldHandleIdle = true
+            } else {
+                progressIdleClearTokens.removeValue(forKey: paneID)
+            }
+            return true
+        }
+
+        guard aiStatusManagedAdapterByPaneID[paneID] != nil,
+              pane.terminalState.progress != nil
+        else {
+            return false
+        }
+        let idleProgress = PaneProgress(state: .paused)
+        if pane.terminalState.progress == idleProgress,
+           pane.terminalState.agentStatusAdapterID == nil {
+            return false
+        }
+        pane.terminalState.progress = idleProgress
+        pane.terminalState.agentStatusAdapterID = nil
+        shouldHandleIdle = true
+        return true
+    }
+
+    private func paneProgress(forAIStatusState state: ControlPlanePaneStatusState) -> PaneProgress? {
+        switch state {
+        case .working:
+            return PaneProgress(state: .active)
+        case .indeterminate:
+            return PaneProgress(state: .indeterminate)
+        case .error:
+            return PaneProgress(state: .error)
+        case .needsInput:
+            return PaneProgress(state: .needsInput)
+        case .idle:
+            return PaneProgress(state: .paused)
+        case .clear:
+            return nil
+        }
     }
 
     private func uniqueWorkspaceDisplayName(baseName: String, excluding workspaceID: WorkspaceID? = nil) -> String {

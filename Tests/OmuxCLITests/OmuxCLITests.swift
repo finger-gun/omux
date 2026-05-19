@@ -4,6 +4,7 @@ import XCTest
 @testable import OmuxConfig
 @testable import OmuxControlPlane
 @testable import OmuxCore
+@testable import OmuxAIStatusPlugin
 @testable import OmuxMarkdownPreviewPlugin
 @testable import OmuxTheme
 
@@ -544,6 +545,10 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "session"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "panes"]), 0)
         XCTAssertEqual(command.run(arguments: ["omux", "pane"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "agent-sessions", "open"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "as", "toggle"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "agents", "palette"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "as"]), 0)
 
         XCTAssertEqual(output, [
             "\(ControlMethod.createTab.rawValue):none",
@@ -568,6 +573,10 @@ final class OmuxCLITests: XCTestCase {
             "\(ControlMethod.listSessions.rawValue):none",
             "\(ControlMethod.listPanes.rawValue):none",
             "\(ControlMethod.listPanes.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
+            "\(ControlMethod.agentSessionsUI.rawValue):none",
         ])
     }
 
@@ -764,6 +773,346 @@ final class OmuxCLITests: XCTestCase {
             "ok",
             "usage: omux pane-status --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused --state working|indeterminate|error|needs-input|idle|clear [--value <0-100>] [--label <text>] [--message <text>] [--source <name>]",
         ])
+    }
+
+    func testCLIBundledAIStatusPluginSendsPaneStatus() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "ai-status.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "ai-status", "codex", "title",
+                "--pane", "pane-1",
+                "--title", "waiting for approval",
+            ]),
+            0
+        )
+
+        XCTAssertEqual(requests.value.map(\.method), [ControlMethod.paneStatus.rawValue])
+        guard case .object(let params)? = requests.value.first?.params,
+              case .object(let target)? = params["target"],
+              case .string("pane")? = target["type"],
+              case .string("pane-1")? = target["id"],
+              case .string("needs-input")? = params["state"],
+              case .string("Codex")? = params["label"],
+              case .string("waiting for approval")? = params["message"],
+              case .string("plugin.ai-status.codex")? = params["source"] else {
+            return XCTFail("expected ai-status pane-status params")
+        }
+        XCTAssertEqual(output, ["ok"])
+    }
+
+    func testBundledAIStatusHookRelayMapsVendorEvents() throws {
+        let socketPath = "/tmp/omux-ai-status-hook-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let plugin = OmuxAIStatusPlugin(
+            environment: [:],
+            standardInputData: {
+                #"{"message":"Approve shell command?"}"#.data(using: .utf8) ?? Data()
+            }
+        )
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: [
+                    "hook",
+                    "--source", "codex",
+                    "--event", "PermissionRequest",
+                    "--pane", "pane-1",
+                ],
+                client: OmuxControlClient(socketPath: socketPath),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        XCTAssertEqual(requests.value.map(\.method), [ControlMethod.paneStatus.rawValue])
+        guard case .object(let params)? = requests.value.first?.params,
+              case .object(let target)? = params["target"],
+              case .string("pane")? = target["type"],
+              case .string("pane-1")? = target["id"],
+              case .string("needs-input")? = params["state"],
+              case .string("Codex")? = params["label"],
+              case .string("Approve shell command?")? = params["message"],
+              case .string("plugin.ai-status.codex.hook")? = params["source"] else {
+            return XCTFail("expected Codex hook pane-status params")
+        }
+        XCTAssertEqual(output, ["ok"])
+    }
+
+    func testBundledAIStatusHookRelayNoopsWithoutTarget() throws {
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        var output = [String]()
+        let plugin = OmuxAIStatusPlugin(
+            environment: [:],
+            standardInputData: {
+                #"{"message":"Approve shell command?"}"#.data(using: .utf8) ?? Data()
+            }
+        )
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: [
+                    "hook",
+                    "--source", "codex",
+                    "--event", "PermissionRequest",
+                ],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        XCTAssertTrue(requests.value.isEmpty)
+        XCTAssertEqual(output, ["{}"])
+    }
+
+    func testBundledAIStatusHookAdapterMapsFirstWaveVendorEvents() throws {
+        let gemini = OmuxAIStatusHookAdapter.observe(
+            source: "gemini",
+            event: "PreToolUse",
+            payload: #"{"toolName":"shell"}"#.data(using: .utf8) ?? Data()
+        )
+        XCTAssertEqual(gemini?.state, .working)
+        XCTAssertEqual(gemini?.label, "Gemini")
+        XCTAssertEqual(gemini?.source, "plugin.ai-status.gemini.hook")
+
+        let claude = OmuxAIStatusHookAdapter.observe(
+            source: "claude",
+            event: "StopFailure",
+            payload: #"{"error":"rate_limit"}"#.data(using: .utf8) ?? Data()
+        )
+        XCTAssertEqual(claude?.state, .error)
+        XCTAssertEqual(claude?.label, "Claude")
+        XCTAssertEqual(claude?.message, "rate_limit")
+
+        let unsupported = OmuxAIStatusHookAdapter.observe(
+            source: "cursor",
+            event: "PermissionRequest",
+            payload: Data()
+        )
+        XCTAssertNil(unsupported)
+    }
+
+    func testBundledAIStatusHooksSetupAndUninstallPreserveUserEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let codexHome = root.appendingPathComponent("codex", isDirectory: true)
+        let hooksURL = codexHome.appendingPathComponent("hooks.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try """
+        {
+          "hooks": {
+            "PermissionRequest": [
+              {
+                "type": "command",
+                "command": "echo user-owned"
+              }
+            ]
+          }
+        }
+        """.write(to: hooksURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let plugin = OmuxAIStatusPlugin(environment: ["CODEX_HOME": codexHome.path])
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: ["hooks", "setup", "codex"],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        let configured = try JSONObject(at: hooksURL)
+        let hooks = try XCTUnwrap(configured["hooks"] as? [String: Any])
+        let permissionEntries = try XCTUnwrap(hooks["PermissionRequest"] as? [[String: Any]])
+        XCTAssertTrue(permissionEntries.contains { ($0["command"] as? String) == "echo user-owned" })
+        XCTAssertTrue(permissionEntries.contains { ($0["openmux_ai_status"] as? Bool) == true })
+        XCTAssertTrue(
+            try String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)
+                .contains("codex_hooks = true")
+        )
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: ["hooks", "uninstall", "codex"],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        let uninstalled = try JSONObject(at: hooksURL)
+        let remainingHooks = try XCTUnwrap(uninstalled["hooks"] as? [String: Any])
+        let remainingPermissionEntries = try XCTUnwrap(remainingHooks["PermissionRequest"] as? [[String: Any]])
+        XCTAssertEqual(remainingPermissionEntries.count, 1)
+        XCTAssertEqual(remainingPermissionEntries.first?["command"] as? String, "echo user-owned")
+        XCTAssertFalse(
+            try String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)
+                .contains("OpenMUX ai-status managed start")
+        )
+    }
+
+    func testBundledAIStatusHooksRejectUnsupportedVendor() throws {
+        var output = [String]()
+        let plugin = OmuxAIStatusPlugin(environment: [:])
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: ["hooks", "setup", "cursor"],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            1
+        )
+
+        XCTAssertEqual(output.first, "Unsupported ai-status hook vendor: cursor")
+    }
+
+    func testBundledAIStatusHooksSetupAndUninstallGeminiSettings() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let settingsURL = root
+            .appendingPathComponent(".gemini", isDirectory: true)
+            .appendingPathComponent("settings.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "type": "command",
+                "command": "echo gemini-user-owned"
+              }
+            ]
+          }
+        }
+        """.write(to: settingsURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let plugin = OmuxAIStatusPlugin(environment: ["HOME": root.path])
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: ["hooks", "setup", "gemini"],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        let configured = try JSONObject(at: settingsURL)
+        let hooks = try XCTUnwrap(configured["hooks"] as? [String: Any])
+        let preToolUseEntries = try XCTUnwrap(hooks["PreToolUse"] as? [[String: Any]])
+        XCTAssertTrue(preToolUseEntries.contains { ($0["command"] as? String) == "echo gemini-user-owned" })
+        XCTAssertTrue(preToolUseEntries.contains { ($0["openmux_ai_status_vendor"] as? String) == "gemini" })
+
+        XCTAssertEqual(
+            try plugin.run(
+                arguments: ["hooks", "uninstall", "gemini"],
+                client: OmuxControlClient(socketPath: "/tmp/unused-\(UUID().uuidString).sock"),
+                writeLine: { output.append($0) }
+            ),
+            0
+        )
+
+        let uninstalled = try JSONObject(at: settingsURL)
+        let remainingHooks = try XCTUnwrap(uninstalled["hooks"] as? [String: Any])
+        let remainingPreToolUseEntries = try XCTUnwrap(remainingHooks["PreToolUse"] as? [[String: Any]])
+        XCTAssertEqual(remainingPreToolUseEntries.count, 1)
+        XCTAssertEqual(remainingPreToolUseEntries.first?["command"] as? String, "echo gemini-user-owned")
+    }
+
+    func testBundledAIStatusJSONLAdaptersMapFirstWaveVendors() throws {
+        let codexWorking = OmuxAIStatusJSONLAdapter.observe(
+            source: "codex",
+            line: #"{"type":"turn.started"}"#
+        )
+        XCTAssertEqual(codexWorking?.state, .working)
+        XCTAssertEqual(codexWorking?.source, "plugin.ai-status.codex.jsonl")
+
+        let codexFailed = OmuxAIStatusJSONLAdapter.observe(
+            source: "codex",
+            line: #"{"type":"turn.failed","message":"failed"}"#
+        )
+        XCTAssertEqual(codexFailed?.state, .error)
+        XCTAssertEqual(codexFailed?.message, "failed")
+
+        let geminiResult = OmuxAIStatusJSONLAdapter.observe(
+            source: "gemini",
+            line: #"{"type":"result"}"#
+        )
+        XCTAssertEqual(geminiResult?.state, .idle)
+
+        let claudeLimit = OmuxAIStatusJSONLAdapter.observe(
+            source: "claude",
+            line: #"{"type":"result","subtype":"rate_limit","message":"try later"}"#
+        )
+        XCTAssertEqual(claudeLimit?.state, .error)
+        XCTAssertEqual(claudeLimit?.message, "try later")
+
+        XCTAssertNil(OmuxAIStatusJSONLAdapter.observe(source: "codex", line: "not-json"))
+    }
+
+    func testCLIPaneStatusSupportsAliasesAndClampsProgress() throws {
+        let socketPath = "/tmp/omux-pane-status-alias-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "running"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "input"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "completed"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "failed", "--progress", "140"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-status", "--pane", "pane-1", "--state", "remove"]), 0)
+
+        let states = requests.value.compactMap { request -> String? in
+            guard case .object(let params)? = request.params else { return nil }
+            guard case .string(let state)? = params["state"] else { return nil }
+            return state
+        }
+        let clampedValue = requests.value.compactMap { request -> Int? in
+            guard case .object(let params)? = request.params else { return nil }
+            guard case .number(let value)? = params["value"] else { return nil }
+            return Int(value)
+        }.last
+
+        XCTAssertEqual(states, ["working", "needs-input", "idle", "error", "clear"])
+        XCTAssertEqual(clampedValue, 100)
     }
 
     func testCLIMarkdownPreviewCreatesExtensionPaneWhenEnabled() throws {
@@ -1168,6 +1517,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(command.run(arguments: ["omux", "plugin", "list"]), 0)
         XCTAssertEqual(output.first, pluginsDirectory.path)
         XCTAssertEqual(output.dropFirst(), [
+            "\(OmuxAIStatusPlugin.commandName)\t\(OmuxAIStatusPlugin.commandDisplayPath)",
             "alpha\t\(alphaURL.path)",
             "beta\t\(betaURL.path)",
             "\(OmuxMarkdownPreviewPlugin.commandName)\t\(OmuxMarkdownPreviewPlugin.commandDisplayPath)",
@@ -1359,6 +1709,9 @@ final class OmuxCLITests: XCTestCase {
                 let markdownPreview = try XCTUnwrap(items.first { $0.commandName == OmuxMarkdownPreviewPlugin.commandName })
                 XCTAssertTrue(markdownPreview.isEnabled)
                 XCTAssertTrue(markdownPreview.canToggle)
+                let aiStatus = try XCTUnwrap(items.first { $0.commandName == OmuxAIStatusPlugin.commandName })
+                XCTAssertTrue(aiStatus.isEnabled)
+                XCTAssertTrue(aiStatus.canToggle)
                 return markdownPreview
             }
         )
@@ -1389,6 +1742,33 @@ final class OmuxCLITests: XCTestCase {
             PluginPickerSearch.filteredItems(items, query: "external").map(\.commandName),
             ["hello-world", "session-tools"]
         )
+    }
+
+    func testCLIBundledAIStatusPluginCannotBeShadowedByExternalPlugin() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = home.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let markerURL = home.appendingPathComponent("should-not-exist.txt")
+        let executableURL = pluginsDirectory.appendingPathComponent(OmuxAIStatusPlugin.commandName)
+        try """
+        #!/bin/sh
+        echo shadowed > "\(markerURL.path)"
+        exit 42
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", OmuxAIStatusPlugin.commandName]), 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+        XCTAssertEqual(output, [OmuxAIStatusPlugin.usage])
     }
 
     func testCLIBuiltInCommandTakesPrecedenceOverPlugin() throws {
@@ -1671,6 +2051,36 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(output[0].hasPrefix("\u{001B}[H\u{001B}[2J\u{001B}[3J"))
         XCTAssertEqual(output[0].replacingOccurrences(of: "\u{001B}[H\u{001B}[2J\u{001B}[3J", with: ""), "Cleared history for 1 pane.")
         XCTAssertEqual(output[1], "Cleared history for 1 pane.")
+    }
+
+    func testCLIPluginRunnerProvidesOMUXCLIPathToPlugins() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginDirectory = home.appendingPathComponent("plugins/echo-cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        defer {
+            unsetenv("OMUX_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        setenv("OMUX_HOME", home.path, 1)
+
+        let executableURL = pluginDirectory.appendingPathComponent("plugin")
+        let markerURL = home.appendingPathComponent("plugin-cli.txt")
+        try """
+        #!/bin/sh
+        printf "%s\\n" "$OMUX_CLI" "$OMUX_PLUGIN_COMMAND" > "\(markerURL.path)"
+        exit 0
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let command = OmuxCLICommand(writeLine: { _ in })
+        XCTAssertEqual(command.run(arguments: ["omux", "echo-cli"]), 0)
+
+        let marker = try String(contentsOf: markerURL, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(marker.count, 2)
+        XCTAssertTrue(marker[0] == "omux" || marker[0].hasSuffix("/omux"))
+        XCTAssertEqual(marker[1], "echo-cli")
     }
 
     func testCLIHistoryPrintsUnavailablePane() throws {
@@ -2246,6 +2656,68 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["Cancelled."])
     }
 
+    func testCLIAgentSessionsResumeChoiceFallbackWritesSelectedCommand() throws {
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        var output = [String]()
+        let command = OmuxCLICommand(
+            writeLine: { output.append($0) },
+            readInputLine: { "2" }
+        )
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "agent-sessions", "resume-choice", "codex:abc",
+            "--resume-command", "codex resume 'abc'",
+            "--output", outputURL.path,
+            "--session-path", "/Users/example/projects/other",
+            "--current-path", "/Users/example/projects/omux",
+        ]), 0)
+
+        let expectedExecutable: String
+        if let executable = CommandLine.arguments.first, executable.isEmpty == false {
+            expectedExecutable = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        } else {
+            expectedExecutable = "omux"
+        }
+        XCTAssertEqual(
+            try String(contentsOf: outputURL, encoding: .utf8),
+            "\(expectedExecutable) agent-sessions resume 'codex:abc' --workspace"
+        )
+        XCTAssertTrue(output.contains("Agent session path differs."))
+        XCTAssertTrue(output.contains("2. Open Matching Workspace — Open the session path as a workspace and resume there"))
+    }
+
+    func testCLIInteractiveAgentSessionsResumeChoiceWritesSelectedCommand() throws {
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: "/tmp/not-used.sock"),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            isInteractiveVaultResumeChoicePickerAvailable: { true },
+            selectVaultResumeChoiceInteractively: { items, context in
+                XCTAssertEqual(context.sessionPath, "/Users/example/projects/other")
+                XCTAssertEqual(context.currentPaths, ["/Users/example/projects/omux"])
+                return items.first { $0.keyword == "resume" }
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: [
+            "omux", "agent-sessions", "resume-choice", "codex:abc",
+            "--resume-command", "codex resume 'abc'",
+            "--output", outputURL.path,
+            "--session-path", "/Users/example/projects/other",
+            "--current-path", "/Users/example/projects/omux",
+        ]), 0)
+
+        XCTAssertEqual(try String(contentsOf: outputURL, encoding: .utf8), "codex resume 'abc'")
+        XCTAssertEqual(output, ["Selected: Resume Here"])
+    }
+
     func testThemePickerSearchFiltersThemesByNameOrDisplayName() {
         let themes = [
             pickerTheme(name: "catppuccin", displayName: "Catppuccin"),
@@ -2524,4 +2996,9 @@ private final class LockedValue<Value>: @unchecked Sendable {
             lock.unlock()
         }
     }
+}
+
+private func JSONObject(at url: URL) throws -> [String: Any] {
+    let data = try Data(contentsOf: url)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }

@@ -1,8 +1,10 @@
 import Foundation
 import Darwin
+import OmuxAIStatusPlugin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxVault
 import OmuxMarkdownPreviewPlugin
 import OmuxTheme
 
@@ -14,6 +16,8 @@ public struct OmuxCLICommand {
     private let selectThemeInteractively: ([OmuxTheme], String?) throws -> OmuxTheme?
     private let isInteractivePluginPickerAvailable: () -> Bool
     private let selectPluginInteractively: ([PluginPickerItem]) throws -> PluginPickerItem?
+    private let isInteractiveVaultResumeChoicePickerAvailable: () -> Bool
+    private let selectVaultResumeChoiceInteractively: ([VaultResumeChoiceItem], VaultResumeMismatchContext) throws -> VaultResumeChoiceItem?
     private let configLoader: OmuxConfigLoader
     private let themeRegistry: OmuxThemeRegistry
     private let installer: OmuxCLIInstaller
@@ -43,7 +47,9 @@ public struct OmuxCLICommand {
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
             selectThemeInteractively: { try TerminalThemePicker().selectTheme(themes: $0, currentThemeName: $1) },
             isInteractivePluginPickerAvailable: TerminalPluginPicker.isAvailable,
-            selectPluginInteractively: { try TerminalPluginPicker().selectPlugin(items: $0) }
+            selectPluginInteractively: { try TerminalPluginPicker().selectPlugin(items: $0) },
+            isInteractiveVaultResumeChoicePickerAvailable: TerminalVaultResumeChoicePicker.isAvailable,
+            selectVaultResumeChoiceInteractively: { try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1) }
         )
     }
 
@@ -66,6 +72,10 @@ public struct OmuxCLICommand {
         isInteractivePluginPickerAvailable: @escaping () -> Bool = TerminalPluginPicker.isAvailable,
         selectPluginInteractively: @escaping ([PluginPickerItem]) throws -> PluginPickerItem? = {
             try TerminalPluginPicker().selectPlugin(items: $0)
+        },
+        isInteractiveVaultResumeChoicePickerAvailable: @escaping () -> Bool = TerminalVaultResumeChoicePicker.isAvailable,
+        selectVaultResumeChoiceInteractively: @escaping ([VaultResumeChoiceItem], VaultResumeMismatchContext) throws -> VaultResumeChoiceItem? = {
+            try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1)
         }
     ) {
         self.client = client
@@ -75,6 +85,8 @@ public struct OmuxCLICommand {
         self.selectThemeInteractively = selectThemeInteractively
         self.isInteractivePluginPickerAvailable = isInteractivePluginPickerAvailable
         self.selectPluginInteractively = selectPluginInteractively
+        self.isInteractiveVaultResumeChoicePickerAvailable = isInteractiveVaultResumeChoicePickerAvailable
+        self.selectVaultResumeChoiceInteractively = selectVaultResumeChoiceInteractively
         self.configLoader = configLoader
         self.themeRegistry = themeRegistry
         self.installer = installer
@@ -115,6 +127,8 @@ public struct OmuxCLICommand {
                 return runHookRegistryCommand(arguments: Array(commandArguments.dropFirst()))
             case "plugin", "plugins":
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
+            case "agent-sessions", "agent-session", "agents", "as":
+                return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "agent-sessions")
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -644,6 +658,291 @@ public struct OmuxCLICommand {
         }
     }
 
+    private func runVaultCommand(arguments: [String], commandName: String) throws -> Int32 {
+        let usage = "usage: omux \(commandName) list|search|preview|resume|reindex|export|import|agents|open|close|toggle|palette"
+        guard let subcommand = arguments.first else {
+            let response = try client.request(
+                method: .agentSessionsUI,
+                params: .object(["action": .string("open")])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return response.error == nil ? 0 : 1
+        }
+        let rest = Array(arguments.dropFirst())
+        switch subcommand {
+        case "list":
+            guard let params = parseVaultSearchOptions(rest, commandName: commandName, subcommand: "list", requiresQuery: false) else {
+                return 1
+            }
+            let response = try client.request(method: .agentSessionsList, params: params.isEmpty ? nil : .object(params))
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        case "search":
+            guard let params = parseVaultSearchOptions(rest, commandName: commandName, subcommand: "search", requiresQuery: true) else {
+                return 1
+            }
+            let response = try client.request(
+                method: .agentSessionsSearch,
+                params: .object(params)
+            )
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        case "preview":
+            guard let id = rest.first else {
+                writeLine("usage: omux \(commandName) preview <session-id>")
+                return 1
+            }
+            let response = try client.request(method: .agentSessionsPreview, params: .object(["sessionID": .string(id)]))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "resume":
+            guard let id = rest.first else {
+                writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                return 1
+            }
+            let destinationFlags = ["--focused", "--new-tab", "--split", "--workspace"].filter(rest.contains)
+            guard destinationFlags.count <= 1 else {
+                writeLine("error: agent session resume destination flags are mutually exclusive")
+                writeLine("usage: omux \(commandName) resume <session-id> [--focused|--new-tab|--split|--workspace]")
+                return 1
+            }
+            let destination: VaultResumeDestination
+            if rest.contains("--new-tab") {
+                destination = .newPaneTab
+            } else if rest.contains("--split") {
+                destination = .split
+            } else if rest.contains("--workspace") {
+                destination = .workspace
+            } else {
+                destination = .focused
+            }
+            let response = try client.request(
+                method: .agentSessionsResume,
+                params: .object(["sessionID": .string(id), "destination": .string(destination.rawValue)])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "resume-choice":
+            return runVaultResumeChoiceCommand(arguments: rest)
+        case "reindex":
+            var params: [String: RPCValue] = [:]
+            if let agentIndex = rest.firstIndex(of: "--agent") {
+                guard rest.indices.contains(agentIndex + 1), rest[agentIndex + 1].hasPrefix("-") == false else {
+                    writeLine("error: --agent requires an agent name")
+                    writeLine("usage: omux \(commandName) reindex [--agent <agent>]")
+                    return 1
+                }
+                params["agent"] = .string(rest[agentIndex + 1])
+            }
+            let response = try client.request(method: .agentSessionsReindex, params: params.isEmpty ? nil : .object(params))
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "export":
+            guard let outputIndex = rest.firstIndex(of: "--output"),
+                  rest.indices.contains(outputIndex + 1)
+            else {
+                writeLine("usage: omux \(commandName) export <session-id>... --output <path>")
+                return 1
+            }
+            let ids = Array(rest[..<outputIndex])
+            guard ids.isEmpty == false else {
+                writeLine("usage: omux \(commandName) export <session-id>... --output <path>")
+                return 1
+            }
+            let response = try client.request(
+                method: .agentSessionsExport,
+                params: .object(["ids": .array(ids.map(RPCValue.string))])
+            )
+            guard let encoded = response.result?.objectValue?["data"]?.stringValue,
+                  let data = Data(base64Encoded: encoded)
+            else {
+                writeLine(response.result?.prettyPrinted ?? "")
+                return 1
+            }
+            try data.write(to: URL(fileURLWithPath: resolveCLIPath(rest[outputIndex + 1])))
+            return 0
+        case "import":
+            guard let path = rest.first else {
+                writeLine("usage: omux \(commandName) import <path>")
+                return 1
+            }
+            let data = try Data(contentsOf: URL(fileURLWithPath: resolveCLIPath(path)))
+            let response = try client.request(
+                method: .agentSessionsImport,
+                params: .object(["data": .string(data.base64EncodedString())])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "agents":
+            let response = try client.request(method: .agentSessionsAgents)
+            writeLine(response.result?.prettyPrinted ?? "[]")
+            return 0
+        case "open", "show", "close", "hide", "toggle", "palette", "command-palette":
+            let response = try client.request(
+                method: .agentSessionsUI,
+                params: .object(["action": .string(subcommand)])
+            )
+            writeLine(response.result?.prettyPrinted ?? "")
+            return response.error == nil ? 0 : 1
+        default:
+            writeLine(usage)
+            return 1
+        }
+    }
+
+    private func parseVaultSearchOptions(
+        _ arguments: [String],
+        commandName: String,
+        subcommand: String,
+        requiresQuery: Bool
+    ) -> [String: RPCValue]? {
+        var params: [String: RPCValue] = [:]
+        var queryParts: [String] = []
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--agent":
+                guard arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("-") == false else {
+                    writeLine("error: --agent requires an agent name")
+                    writeLine("usage: omux \(commandName) \(subcommand) \(requiresQuery ? "<query> " : "")[--agent <agent>] [--limit <count>] [--offset <count>] [--cwd <path>]")
+                    return nil
+                }
+                params["agent"] = .string(arguments[index + 1])
+                index += 2
+            case "--limit":
+                guard arguments.indices.contains(index + 1), let limit = Int(arguments[index + 1]) else {
+                    writeLine("error: --limit requires a number")
+                    return nil
+                }
+                params["limit"] = .integer(limit)
+                index += 2
+            case "--offset":
+                guard arguments.indices.contains(index + 1), let offset = Int(arguments[index + 1]) else {
+                    writeLine("error: --offset requires a number")
+                    return nil
+                }
+                params["offset"] = .integer(offset)
+                index += 2
+            case "--cwd", "--working-directory":
+                guard arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("-") == false else {
+                    writeLine("error: \(argument) requires a path")
+                    return nil
+                }
+                params["workingDirectory"] = .string(resolveCLIPath(arguments[index + 1]))
+                index += 2
+            default:
+                if argument.hasPrefix("-") {
+                    writeLine("error: unknown option \(argument)")
+                    return nil
+                }
+                queryParts.append(argument)
+                index += 1
+            }
+        }
+        if queryParts.isEmpty == false {
+            params["query"] = .string(queryParts.joined(separator: " "))
+        } else if requiresQuery {
+            writeLine("usage: omux \(commandName) search <query> [--agent <agent>] [--limit <count>] [--offset <count>] [--cwd <path>]")
+            return nil
+        }
+        return params
+    }
+
+    private func runVaultResumeChoiceCommand(arguments: [String]) -> Int32 {
+        guard let request = VaultResumeChoiceRequest(arguments: arguments) else {
+            writeLine("usage: omux agent-sessions resume-choice <session-id> --resume-command <command> --output <path> [--session-path <path>] [--current-path <path>...]")
+            return 1
+        }
+
+        let items = VaultResumeChoiceItem.items(
+            sessionID: request.sessionID,
+            resumeCommand: request.resumeCommand,
+            hasWorkspacePath: request.sessionPath != nil
+        )
+        let context = VaultResumeMismatchContext(sessionPath: request.sessionPath, currentPaths: request.currentPaths)
+
+        let selected: VaultResumeChoiceItem?
+        do {
+            if isInteractiveVaultResumeChoicePickerAvailable() {
+                selected = try selectVaultResumeChoiceInteractively(items, context)
+            } else {
+                selected = selectVaultResumeChoiceByLine(items: items, context: context)
+            }
+        } catch {
+            writeLine("omux error: \(error.localizedDescription)")
+            return 1
+        }
+
+        guard let selected, selected.keyword != "cancel" else {
+            writeLine("Cancelled.")
+            try? "".write(toFile: request.outputPath, atomically: true, encoding: .utf8)
+            return 0
+        }
+
+        if request.execute {
+            return runSelectedVaultResumeCommand(selected.shellCommand)
+        }
+
+        do {
+            try selected.shellCommand.write(toFile: request.outputPath, atomically: true, encoding: .utf8)
+        } catch {
+            writeLine("omux error: failed to write selected command: \(error.localizedDescription)")
+            return 1
+        }
+        writeLine("Selected: \(selected.title)")
+        return 0
+    }
+
+    private func runSelectedVaultResumeCommand(_ command: String) -> Int32 {
+        guard command.isEmpty == false else {
+            return 0
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-lc", command]
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            writeLine("omux error: failed to run selected command: \(error.localizedDescription)")
+            return 1
+        }
+    }
+
+    private func selectVaultResumeChoiceByLine(
+        items: [VaultResumeChoiceItem],
+        context: VaultResumeMismatchContext
+    ) -> VaultResumeChoiceItem? {
+        writeLine("Agent session path differs.")
+        writeLine("Session path: \(context.sessionPath ?? "unknown")")
+        if context.currentPaths.isEmpty == false {
+            writeLine("Current workspace paths: \(context.currentPaths.joined(separator: ", "))")
+        }
+        for (index, item) in items.enumerated() {
+            writeLine("\(index + 1). \(item.title) — \(item.subtitle)")
+        }
+        writeLine("Select action number or name:")
+        guard let input = readInputLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              input.isEmpty == false else {
+            return nil
+        }
+        if ["q", "quit", "exit", "cancel"].contains(input.lowercased()) {
+            return nil
+        }
+        if let index = Int(input), items.indices.contains(index - 1) {
+            return items[index - 1]
+        }
+        return items.first {
+            $0.title.localizedCaseInsensitiveContains(input)
+                || $0.keyword.localizedCaseInsensitiveCompare(input) == .orderedSame
+        }
+    }
+
     private func runHookRegistryCommand(arguments: [String]) -> Int32 {
         guard let subcommand = arguments.first else {
             writeLine("usage: omux hooks discover|install|uninstall|update")
@@ -881,6 +1180,9 @@ public struct OmuxCLICommand {
                 case OmuxMarkdownPreviewPlugin.commandName:
                     isEnabled = config.plugins.markdownPreview.enabled
                     canToggle = true
+                case OmuxAIStatusPlugin.commandName:
+                    isEnabled = config.plugins.aiStatus.enabled
+                    canToggle = true
                 default:
                     isEnabled = true
                     canToggle = false
@@ -928,8 +1230,15 @@ public struct OmuxCLICommand {
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: !markdownPreview.enabled,
                     renderer: markdownPreview.renderer,
-                    theme: markdownPreview.theme
-                )
+                    theme: markdownPreview.theme,
+                    presentation: markdownPreview.presentation
+                ),
+                aiStatus: current.plugins.aiStatus
+            )
+        case OmuxAIStatusPlugin.commandName:
+            plugins = OmuxConfigPlugins(
+                markdownPreview: current.plugins.markdownPreview,
+                aiStatus: OmuxConfigPlugins.AIStatus(enabled: !current.plugins.aiStatus.enabled)
             )
         default:
             writeLine("Plugin \(item.commandName) cannot be toggled from OpenMUX config.")
@@ -967,6 +1276,8 @@ public struct OmuxCLICommand {
             switch bundledPlugin.commandName {
             case OmuxMarkdownPreviewPlugin.commandName:
                 return try runMarkdownPreviewCommand(arguments: arguments)
+            case OmuxAIStatusPlugin.commandName:
+                return try runAIStatusCommand(arguments: arguments)
             default:
                 writeLine("omux error: bundled plugin '\(bundledPlugin.commandName)' is not available")
                 return 1
@@ -1021,6 +1332,24 @@ public struct OmuxCLICommand {
                 axis: request.axis,
                 presentationStyle: presentationStyle
             ),
+            client: client,
+            writeLine: writeLine
+        )
+    }
+
+    private func runAIStatusCommand(arguments: [String]) throws -> Int32 {
+        let configResult = configLoader.load()
+        guard configResult.hasErrors == false else {
+            return printDiagnosticsAndReturnCode(configResult.diagnostics)
+        }
+
+        guard configResult.config.plugins.aiStatus.enabled else {
+            writeLine("AI status plugin is disabled. Enable [plugins.ai-status] enabled = true in ~/.omux/config.toml.")
+            return 1
+        }
+
+        return try OmuxAIStatusPlugin(environment: environment()).run(
+            arguments: arguments,
             client: client,
             writeLine: writeLine
         )
@@ -2148,6 +2477,312 @@ struct ThemePickerSearch {
             }
         }
         return remaining.isEmpty
+    }
+}
+
+struct VaultResumeMismatchContext: Equatable {
+    let sessionPath: String?
+    let currentPaths: [String]
+}
+
+struct VaultResumeChoiceItem: Equatable {
+    let keyword: String
+    let title: String
+    let subtitle: String
+    let shellCommand: String
+
+    static func items(sessionID: String, resumeCommand: String, hasWorkspacePath: Bool) -> [VaultResumeChoiceItem] {
+        var result = [
+            VaultResumeChoiceItem(
+                keyword: "resume",
+                title: "Resume Here",
+                subtitle: "Run this agent session in the current terminal",
+                shellCommand: resumeCommand
+            ),
+        ]
+        if hasWorkspacePath {
+            result.append(
+                VaultResumeChoiceItem(
+                    keyword: "workspace",
+                    title: "Open Matching Workspace",
+                    subtitle: "Open the session path as a workspace and resume there",
+                    shellCommand: "\(currentExecutableCommand()) agent-sessions resume \(sessionID.shellEscaped) --workspace"
+                )
+            )
+        }
+        result.append(
+            VaultResumeChoiceItem(
+                keyword: "cancel",
+                title: "Cancel",
+                subtitle: "Leave the current terminal unchanged",
+                shellCommand: ""
+            )
+        )
+        return result
+    }
+
+    private static func currentExecutableCommand() -> String {
+        let executable = CommandLine.arguments.first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let executable, executable.isEmpty == false else {
+            return "omux"
+        }
+        return executable.shellEscaped
+    }
+}
+
+private struct VaultResumeChoiceRequest {
+    let sessionID: String
+    let resumeCommand: String
+    let outputPath: String
+    let sessionPath: String?
+    let currentPaths: [String]
+    let execute: Bool
+
+    init?(arguments: [String]) {
+        guard let sessionID = arguments.first else {
+            return nil
+        }
+        var resumeCommand: String?
+        var outputPath: String?
+        var sessionPath: String?
+        var currentPaths: [String] = []
+        var execute = false
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument == "--execute" {
+                execute = true
+                index += 1
+                continue
+            }
+            guard index + 1 < arguments.count else {
+                return nil
+            }
+            let value = arguments[index + 1]
+            switch argument {
+            case "--resume-command":
+                resumeCommand = value
+            case "--output":
+                outputPath = value
+            case "--session-path":
+                sessionPath = value
+            case "--current-path":
+                currentPaths.append(value)
+            default:
+                return nil
+            }
+            index += 2
+        }
+        guard let resumeCommand, execute || outputPath != nil else {
+            return nil
+        }
+        self.sessionID = sessionID
+        self.resumeCommand = resumeCommand
+        self.outputPath = outputPath ?? ""
+        self.sessionPath = sessionPath
+        self.currentPaths = currentPaths
+        self.execute = execute
+    }
+}
+
+private struct TerminalVaultResumeChoicePicker {
+    enum PickerError: Error, LocalizedError {
+        case terminalUnavailable
+        case unableToReadTerminalAttributes
+        case unableToEnterRawMode
+        case unableToRestoreTerminalMode
+
+        var errorDescription: String? {
+            switch self {
+            case .terminalUnavailable:
+                return "interactive terminal is not available"
+            case .unableToReadTerminalAttributes:
+                return "unable to read terminal attributes"
+            case .unableToEnterRawMode:
+                return "unable to enter raw terminal mode"
+            case .unableToRestoreTerminalMode:
+                return "unable to restore terminal mode"
+            }
+        }
+    }
+
+    private enum Key {
+        case up
+        case down
+        case enter
+        case cancel
+        case other
+    }
+
+    static func isAvailable() -> Bool {
+        isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+    }
+
+    func selectChoice(items: [VaultResumeChoiceItem], context: VaultResumeMismatchContext) throws -> VaultResumeChoiceItem? {
+        guard Self.isAvailable() else {
+            throw PickerError.terminalUnavailable
+        }
+        guard items.isEmpty == false else {
+            return nil
+        }
+
+        var selectedIndex = 0
+        var renderedLineCount = 0
+        return try withRawTerminalMode {
+            write("\u{1B}[?25l")
+            defer {
+                clearRenderedLines(renderedLineCount)
+                write("\u{1B}[?25h")
+            }
+
+            render(items: items, context: context, selectedIndex: selectedIndex, previousLineCount: &renderedLineCount)
+            while true {
+                switch readKey() {
+                case .up:
+                    selectedIndex = selectedIndex == 0 ? items.count - 1 : selectedIndex - 1
+                    render(items: items, context: context, selectedIndex: selectedIndex, previousLineCount: &renderedLineCount)
+                case .down:
+                    selectedIndex = selectedIndex == items.count - 1 ? 0 : selectedIndex + 1
+                    render(items: items, context: context, selectedIndex: selectedIndex, previousLineCount: &renderedLineCount)
+                case .enter:
+                    let item = items[selectedIndex]
+                    return item.keyword == "cancel" ? nil : item
+                case .cancel:
+                    return nil
+                case .other:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func withRawTerminalMode<Result>(_ body: () throws -> Result) throws -> Result {
+        var original = termios()
+        guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+            throw PickerError.unableToReadTerminalAttributes
+        }
+        var raw = original
+        cfmakeraw(&raw)
+        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
+            throw PickerError.unableToEnterRawMode
+        }
+        do {
+            let result = try body()
+            guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) == 0 else {
+                throw PickerError.unableToRestoreTerminalMode
+            }
+            return result
+        } catch {
+            _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
+            throw error
+        }
+    }
+
+    private func render(
+        items: [VaultResumeChoiceItem],
+        context: VaultResumeMismatchContext,
+        selectedIndex: Int,
+        previousLineCount: inout Int
+    ) {
+        clearRenderedLines(previousLineCount)
+        var lines = [
+            "Agent session path differs (Up/Down, Enter, Esc):",
+            "Session path: \(context.sessionPath ?? "unknown")",
+        ]
+        if context.currentPaths.isEmpty == false {
+            lines.append("Current workspace paths: \(context.currentPaths.joined(separator: ", "))")
+        }
+        for (index, item) in items.enumerated() {
+            let pointer = index == selectedIndex ? ">" : " "
+            let line = "\(pointer) \(item.title) — \(item.subtitle)"
+            lines.append(index == selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
+        }
+        write(lines.map { "\u{1B}[2K\r\($0)" }.joined(separator: "\n") + "\n")
+        previousLineCount = lines.count
+    }
+
+    private func clearRenderedLines(_ lineCount: Int) {
+        guard lineCount > 0 else {
+            return
+        }
+        write("\u{1B}[\(lineCount)A")
+        for index in 0..<lineCount {
+            write("\u{1B}[2K\r")
+            if index < lineCount - 1 {
+                write("\u{1B}[1B")
+            }
+        }
+        write("\u{1B}[\(lineCount - 1)A")
+    }
+
+    private func readKey() -> Key {
+        guard let byte = readByte() else {
+            return .cancel
+        }
+        switch byte {
+        case 0x03:
+            return .cancel
+        case 0x0A, 0x0D:
+            return .enter
+        case 0x6A:
+            return .down
+        case 0x6B:
+            return .up
+        case 0x1B:
+            guard let second = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            guard second == 0x5B, let third = readByte(timeoutMicroseconds: 50_000) else {
+                return .cancel
+            }
+            if third == 0x41 {
+                return .up
+            }
+            if third == 0x42 {
+                return .down
+            }
+            return .cancel
+        default:
+            return .other
+        }
+    }
+
+    private func readByte(timeoutMicroseconds: Int? = nil) -> UInt8? {
+        if let timeoutMicroseconds {
+            let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
+            guard flags >= 0 else {
+                return nil
+            }
+            guard fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+                return nil
+            }
+            defer {
+                _ = fcntl(STDIN_FILENO, F_SETFL, flags)
+            }
+
+            let deadline = Date().addingTimeInterval(Double(timeoutMicroseconds) / 1_000_000)
+            while Date() < deadline {
+                var byte: UInt8 = 0
+                let count = Darwin.read(STDIN_FILENO, &byte, 1)
+                if count == 1 {
+                    return byte
+                }
+                if errno != EAGAIN && errno != EWOULDBLOCK {
+                    return nil
+                }
+                usleep(1_000)
+            }
+            return nil
+        }
+
+        var byte: UInt8 = 0
+        let count = Darwin.read(STDIN_FILENO, &byte, 1)
+        return count == 1 ? byte : nil
+    }
+
+    private func write(_ text: String) {
+        FileHandle.standardOutput.write(Data(text.utf8))
     }
 }
 

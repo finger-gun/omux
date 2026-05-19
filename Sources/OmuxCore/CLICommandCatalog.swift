@@ -169,6 +169,40 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.agent-sessions.list",
+            usage: "omux agent-sessions list",
+            title: "omux: Agent Sessions List",
+            summary: "List indexed agent sessions",
+            aliases: ["omux as list", "sessions history agents"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.agent-sessions.search",
+            usage: "omux agent-sessions search <query>",
+            title: "omux: Agent Sessions Search",
+            summary: "Search indexed agent sessions",
+            aliases: ["omux as search", "session search agent search"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.agent-sessions.reindex",
+            usage: "omux agent-sessions reindex",
+            title: "omux: Agent Sessions Reindex",
+            summary: "Refresh the local agent session index",
+            aliases: ["omux as reindex", "index agent sessions"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.agent-sessions.open",
+            usage: "omux agent-sessions open",
+            title: "omux: Open Agent Sessions",
+            summary: "Show the Agent Sessions sidebar",
+            aliases: ["omux as open", "omux agents open", "show agent sessions"],
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.theme",
             usage: "omux theme",
             title: "omux: Pick Theme",

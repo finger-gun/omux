@@ -129,6 +129,44 @@ When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchan
 
 Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app. Prefer `${OMUX_CLI:-omux}` when launching the CLI so packaged app and Terminal-launched workflows both work.
 
+Installed manifest-based plugin callbacks also receive:
+
+| Variable | Meaning |
+| --- | --- |
+| `OMUX_PLUGIN_HOOK_NAME` | Hook name that caused OpenMUX to invoke the plugin callback. |
+
+Registry-installed plugins can subscribe to hooks directly in `omux-plugin.toml`:
+
+```toml
+[hooks.terminal-title-changed]
+callback = "__omux_hook"
+arguments = ["codex", "title"]
+```
+
+OpenMUX invokes the plugin entrypoint with the callback name and arguments, and writes the normal hook JSON payload to stdin. This lets a plugin stay self-contained instead of asking users to install forwarding scripts under `~/.omux/hooks/`.
+
+## AI status host pattern
+
+The official multi-vendor AI status host is a bundled Swift plugin. It is enabled by default, appears in the plugin picker, and still talks to OpenMUX through the public pane-status surface instead of private terminal state.
+
+The shared `ai-status` host exists so users install one capability and then enable tool-specific adapters behind it, rather than installing one plugin per AI vendor. The host owns debounce, dedupe, target resolution, stale-clear behavior, and manifest-declared hook callbacks. Vendor adapters own their own title rules, hook handling, log reading, and other best-effort detection logic.
+
+Adapters should prefer machine-readable signals when available:
+
+1. wrapper or headless JSON/JSON-RPC streams
+2. vendor hooks
+3. documented observer signals such as title changes or notifications
+4. bounded transcript/history heuristics only as a last resort
+
+Observer adapters must stay read-only with respect to terminal input. They may call public automation such as `omux pane-status`, but they must not intercept or rewrite user keystrokes, IME composition, dead keys, compose sequences, paste, or terminal mouse input.
+
+When a wrapper or observer runs inside an OpenMUX-launched terminal pane, it can rely on terminal session environment identifiers already present in that pane:
+
+- `OMUX_PANE_ID`
+- `OMUX_SESSION_ID`
+
+That lets a wrapper target the current pane without scraping OpenMUX UI or depending on private runtime identifiers.
+
 ## Config read/apply commands
 
 Plugins that need configuration data should use OpenMUX-owned config commands instead of parsing or rewriting `config.toml` directly:

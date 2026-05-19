@@ -100,11 +100,13 @@ final class OmuxAppShellTests: XCTestCase {
         let workspaceMenu = menus.first { $0.title == "Workspace" }
         let paneMenu = menus.first { $0.title == "Pane" }
         let viewMenu = menus.first { $0.title == "View" }
+        let agentSessionsMenu = menus.first { $0.title == "Agents" }
         let configurationMenu = menus.first { $0.title == "Configuration" }
         let resizeSplitMenu = paneMenu?.items.first { $0.title == "Resize Split" }?.submenu
         XCTAssertNotNil(workspaceMenu)
         XCTAssertNotNil(paneMenu)
         XCTAssertNotNil(viewMenu)
+        XCTAssertNotNil(agentSessionsMenu)
         XCTAssertNotNil(configurationMenu)
         XCTAssertNotNil(resizeSplitMenu)
 
@@ -178,7 +180,7 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertTrue(paneMenu?.items.containsShortcut(
             title: "New Worktree Pane Tab…",
-            key: "t",
+            key: "g",
             modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertTrue(paneMenu?.items.containsShortcut(
@@ -213,6 +215,9 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Open" })
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Reload" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Show Agent Sessions" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
@@ -664,6 +669,21 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
         XCTAssertEqual(runtime.executedCommands, ["omux version", "omux config open"])
         XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+
+        let vaultCommand = CommandPaletteCommand(
+            id: "builtin:agent-sessions",
+            title: "Agent Sessions",
+            subtitle: "Resume an indexed agent session",
+            category: .action,
+            matchText: "agent sessions history resume codex copilot",
+            aliases: ["resume session"],
+            invocationTarget: .vaultSessions
+        )
+        let vaultResult = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "codex sessions", commands: commands + [vaultCommand]).first {
+            $0.invocationTarget == .vaultSessions
+        })
+        XCTAssertEqual(vaultResult.title, "Agent Sessions")
+        XCTAssertEqual(controller.invokeCommandPaletteResult(vaultResult), .inert)
     }
 
     func testWorktreePaneTabActionRunsCLICommandWithGeneratedBranch() throws {
@@ -3954,14 +3974,156 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.reportedTitle, "• Codex")
     }
 
+    func testBundledAIStatusMapsVendorTitlesToPaneProgress() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.titleChanged("[ . ] Action Required | omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID, "gemini")
+
+        runtime.emit(.titleChanged("⠇ omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+
+        runtime.emit(.titleChanged("[ ! ] Action Required | omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+
+        runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID)
+
+        runtime.emit(.titleChanged("\u{2726} Gemini"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.agentStatusAdapterID, "gemini")
+
+        runtime.emit(.titleChanged("\u{270B} Gemini"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+    }
+
+    func testBundledAIStatusSharedFallbacksDoNotReplaceNativeProgress() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            progressIdleClearDelay: 60,
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.progressReported(state: .active, progress: 42), on: runtimeSurfaceID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.value, 42)
+
+        runtime.emit(.titleChanged("GitHub Copilot"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.value, 42)
+
+        runtime.emit(.progressReported(state: .removed, progress: nil), on: runtimeSurfaceID)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    func testBundledAIStatusSharedFallbacksCoverCopilotAndClaudeTitles() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            paneConfiguration: OmuxConfigUI.Panes(idleStatusClear: .afterDelay),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            progressIdleClearDelay: 60,
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.titleChanged("GitHub Copilot waiting for approval"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .needsInput)
+
+        runtime.emit(.titleChanged("zsh"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+
+        runtime.emit(.titleChanged("Claude thinking"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .active)
+
+        runtime.emit(.titleChanged("Claude ready"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    func testBundledAIStatusTitleSignalLossBecomesIdleUntilFocus() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            aiStatusConfiguration: OmuxConfigPlugins.AIStatus(enabled: true),
+            terminalStateChangeCoalescingDelay: 0.01
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let agentPane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: agentPane.id)?.runtimeSurfaceID)
+        let otherTab = try XCTUnwrap(controller.createPaneTab())
+        let otherPane = try XCTUnwrap(otherTab.focusedPane)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, otherPane.id)
+
+        runtime.emit(.titleChanged("⠇ omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first { $0.id == agentPane.id }?.terminalState.progress?.state,
+            .active
+        )
+
+        runtime.emit(.titleChanged("omux"), on: runtimeSurfaceID)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first { $0.id == agentPane.id }?.terminalState.progress?.state,
+            .paused
+        )
+
+        controller.focus(paneID: agentPane.id)
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, agentPane.id)
+        XCTAssertNil(controller.activeWorkspace()?.focusedPane?.terminalState.progress)
+    }
+
     func testTerminalTitleDisplayUpdatesAreRateLimited() throws {
+        let titleUpdateMinimumInterval: TimeInterval = 0.5
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
         let controller = WorkspaceController(
             bridge: bridge,
             hookRunner: ExternalHookRunner(),
             terminalStateChangeCoalescingDelay: 0.01,
-            terminalDisplayTitleUpdateMinimumInterval: 0.5
+            terminalDisplayTitleUpdateMinimumInterval: titleUpdateMinimumInterval
         )
 
         let workspace = try controller.openWorkspace(at: "/tmp")
@@ -3993,7 +4155,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(changeCount, 1)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex reading")
 
-        wait(for: [trailingChangeDelivered], timeout: 3)
+        wait(for: [trailingChangeDelivered], timeout: 2)
         XCTAssertEqual(changeCount, 2)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.title, "Codex writing")
         XCTAssertEqual(deliveredTitles, ["Codex reading", "Codex writing"])
@@ -4058,6 +4220,36 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowShowsActiveStatusOrbsForAdapterReportedWorkingState() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(pane.id),
+                state: .working,
+                label: "Codex",
+                source: "plugin.ai-status.codex"
+            )
+        )
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let visibleActiveOrbs = findViews(ofType: PaneProgressOrbView.self, in: rootView)
+            .filter { $0.isHidden == false && $0.progressStateForTesting == .active }
+        XCTAssertGreaterThanOrEqual(visibleActiveOrbs.count, 2)
+    }
+
+    @MainActor
     func testIdleStatusOrbsClearOnFocusByDefault() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -4110,6 +4302,34 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.progress?.state, .paused)
+    }
+
+    @MainActor
+    func testPaneStatusUpdateDoesNotStealFocus() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(updatedWorkspace.focusedPane)
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+
+        controller.setPaneStatus(
+            ControlPlanePaneStatusRequest(
+                target: .pane(firstPane.id),
+                state: .needsInput,
+                source: "plugin.ai-status.codex"
+            )
+        )
+
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.id, secondPane.id)
+        XCTAssertEqual(
+            controller.activeWorkspace()?.tabs.flatMap(\.panes).first(where: { $0.id == firstPane.id })?.terminalState.progress?.state,
+            .needsInput
+        )
     }
 
     @MainActor
@@ -5181,6 +5401,17 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvent?.payload.objectValue?["label"], .string("Codex"))
         XCTAssertEqual(publishedEvent?.payload.objectValue?["message"], .string("tests failed"))
         XCTAssertEqual(publishedEvent?.payload.objectValue?["source"], .string("hook.codex"))
+
+        let missingResponse = try requestControlMethod(
+            .paneStatus,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: ControlPlanePaneStatusRequest(
+                target: .pane(PaneID(rawValue: "missing")),
+                state: .working
+            ).rpcValue
+        )
+
+        XCTAssertEqual(missingResponse.error?.code, 404)
     }
 
     @MainActor

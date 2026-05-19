@@ -56,6 +56,7 @@ final class OmuxHooksTests: XCTestCase {
     func testExternalHookRunnerExecutesProcessWithJSONPayload() throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
 
         let outputURL = tempDirectory.appending(path: "payload.json")
         let scriptURL = tempDirectory.appending(path: "capture.sh")
@@ -80,7 +81,10 @@ final class OmuxHooksTests: XCTestCase {
             )
         )
 
-        let runner = ExternalHookRunner(registry: registry)
+        let runner = ExternalHookRunner(
+            registry: registry,
+            pluginsDirectoryURL: tempDirectory.appending(path: "plugins")
+        )
         try runner.emit(
             HookInvocation(
                 category: .lifecycle,
@@ -134,6 +138,9 @@ final class OmuxHooksTests: XCTestCase {
     }
 
     func testExternalHookRunnerContinuesAfterHookFailure() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
         let registry = HookRegistry(
             descriptors: [
                 HookDescriptor(
@@ -152,6 +159,7 @@ final class OmuxHooksTests: XCTestCase {
         let warnings = WarningRecorder()
         let runner = ExternalHookRunner(
             registry: registry,
+            pluginsDirectoryURL: tempDirectory.appending(path: "plugins"),
             launcher: launcher,
             warningHandler: { warnings.append($0) }
         )
@@ -170,6 +178,9 @@ final class OmuxHooksTests: XCTestCase {
     }
 
     func testExternalHookRunnerCanLaunchHooksAsynchronously() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
         let registry = HookRegistry(
             descriptors: [
                 HookDescriptor(
@@ -182,6 +193,7 @@ final class OmuxHooksTests: XCTestCase {
         let launcher = BlockingHookLauncher()
         let runner = ExternalHookRunner(
             registry: registry,
+            pluginsDirectoryURL: tempDirectory.appending(path: "plugins"),
             launcher: launcher,
             executionMode: .asynchronous
         )
@@ -199,6 +211,168 @@ final class OmuxHooksTests: XCTestCase {
         XCTAssertEqual(launcher.finished.wait(timeout: .now() + 2), .success)
     }
 
+    func testPluginHookSubscriptionDiscoveryLoadsManifestCallbacks() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let pluginsDirectory = tempDirectory.appending(path: "plugins")
+        let pluginDirectory = pluginsDirectory.appending(path: "ai-status")
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+
+        let executableURL = pluginDirectory.appending(path: "plugin")
+        try writeExecutableHook(at: executableURL)
+        try """
+        id = "ai-status"
+
+        [plugin]
+        command = "ai-status"
+        entrypoint = "plugin"
+
+        [hooks.terminal-title-changed]
+        callback = "__omux_hook"
+        arguments = ["codex", "title"]
+        """.write(to: pluginDirectory.appending(path: "omux-plugin.toml"), atomically: true, encoding: .utf8)
+
+        let descriptors = PluginHookSubscriptionDiscovery.descriptors(in: pluginsDirectory)
+        let matches = descriptors.filter {
+            $0.matches(HookInvocation(category: .ui, name: "terminal-title-changed"))
+        }
+        let executablePath = normalizedPath(executableURL)
+        let pluginsPath = normalizedPath(pluginsDirectory)
+
+        XCTAssertNotNil(descriptors.first { $0.name == "terminal-title-changed" })
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches.first?.arguments, ["__omux_hook", "codex", "title"])
+        XCTAssertEqual(matches.first?.environment["OMUX_PLUGIN_COMMAND"], "ai-status")
+        XCTAssertEqual(
+            matches.first?.environment["OMUX_PLUGIN_EXECUTABLE"].map(normalizedPath),
+            executablePath
+        )
+        XCTAssertEqual(matches.first?.environment["OMUX_PLUGINS_DIR"].map(normalizedPath), pluginsPath)
+        XCTAssertEqual(matches.first?.environment["OMUX_PLUGIN_HOOK_NAME"], "terminal-title-changed")
+    }
+
+    func testExternalHookRunnerExecutesPluginHookCallbackFromManifest() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let pluginsDirectory = tempDirectory.appending(path: "plugins")
+        let pluginDirectory = pluginsDirectory.appending(path: "ai-status")
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+
+        let executableURL = pluginDirectory.appending(path: "plugin")
+        try """
+        #!/bin/sh
+        printf '%s\n' "$@" > "$0.args"
+        env | sort > "$0.env"
+        cat > "$0.payload"
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path(percentEncoded: false)
+        )
+        try """
+        id = "ai-status"
+
+        [plugin]
+        command = "ai-status"
+        entrypoint = "plugin"
+
+        [hooks.terminal-title-changed]
+        callback = "__omux_hook"
+        arguments = ["codex", "title"]
+        """.write(to: pluginDirectory.appending(path: "omux-plugin.toml"), atomically: true, encoding: .utf8)
+
+        let runner = ExternalHookRunner(
+            registry: HookRegistry(),
+            pluginsDirectoryURL: pluginsDirectory
+        )
+        try runner.emit(
+            HookInvocation(
+                category: .ui,
+                name: "terminal-title-changed",
+                paneID: PaneID(rawValue: "pane-1"),
+                payload: .object(["title": .string("⠧ omux")])
+            )
+        )
+
+        let args = try String(contentsOf: URL(fileURLWithPath: executableURL.path + ".args"), encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        let environmentLines = try String(contentsOf: URL(fileURLWithPath: executableURL.path + ".env"), encoding: .utf8)
+        let payload = try Data(contentsOf: URL(fileURLWithPath: executableURL.path + ".payload"))
+        let invocation = try JSONDecoder().decode(HookInvocation.self, from: payload)
+        let environment = environmentLines
+            .split(separator: "\n")
+            .reduce(into: [String: String]()) { result, line in
+                guard let separatorIndex = line.firstIndex(of: "=") else {
+                    return
+                }
+                let key = String(line[..<separatorIndex])
+                let valueStart = line.index(separatorIndex, offsetBy: 1)
+                let value = String(line.suffix(from: valueStart))
+                result[key] = value
+            }
+
+        XCTAssertEqual(args, ["__omux_hook", "codex", "title"])
+        XCTAssertEqual(environment["OMUX_PLUGIN_COMMAND"], "ai-status")
+        XCTAssertEqual(environment["OMUX_PLUGIN_EXECUTABLE"].map(normalizedPath), normalizedPath(executableURL))
+        XCTAssertEqual(environment["OMUX_PLUGINS_DIR"].map(normalizedPath), normalizedPath(pluginsDirectory))
+        XCTAssertEqual(environment["OMUX_PLUGIN_HOOK_NAME"], "terminal-title-changed")
+        XCTAssertEqual(invocation.name, "terminal-title-changed")
+        XCTAssertEqual(invocation.paneID, PaneID(rawValue: "pane-1"))
+    }
+
+    func testExternalHookRunnerContinuesAfterPluginHookFailure() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let pluginsDirectory = tempDirectory.appending(path: "plugins")
+        let pluginDirectory = pluginsDirectory.appending(path: "ai-status")
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        try writeExecutableHook(at: pluginDirectory.appending(path: "plugin"))
+        try """
+        id = "ai-status"
+
+        [plugin]
+        command = "ai-status"
+        entrypoint = "plugin"
+
+        [hooks.terminal-title-changed]
+        callback = "__omux_hook"
+        """.write(to: pluginDirectory.appending(path: "omux-plugin.toml"), atomically: true, encoding: .utf8)
+
+        let registry = HookRegistry(
+            descriptors: [
+                HookDescriptor(
+                    category: .ui,
+                    name: "terminal-title-changed",
+                    executableURL: URL(fileURLWithPath: "/tmp/10-success")
+                ),
+            ]
+        )
+        let launcher = OrderedHookLauncher(failingBasenames: ["plugin"])
+        let warnings = WarningRecorder()
+        let runner = ExternalHookRunner(
+            registry: registry,
+            pluginsDirectoryURL: pluginsDirectory,
+            launcher: launcher,
+            warningHandler: { warnings.append($0) }
+        )
+
+        try runner.emit(
+            HookInvocation(
+                category: .ui,
+                name: "terminal-title-changed",
+                payload: .object(["title": .string("⠧ omux")])
+            )
+        )
+
+        XCTAssertEqual(launcher.launchedBasenames, ["10-success", "plugin"])
+        XCTAssertEqual(warnings.values.count, 1)
+        XCTAssertTrue(warnings.values[0].contains("terminal-title-changed"))
+    }
+
     private func writeExecutableHook(at url: URL) throws {
         try writeHook(at: url)
         try FileManager.default.setAttributes(
@@ -212,6 +386,21 @@ final class OmuxHooksTests: XCTestCase {
         #!/bin/sh
         exit 0
         """.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func normalizedPath(_ url: URL) -> String {
+        normalizedPath(url.path(percentEncoded: false))
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        var normalized = URL(fileURLWithPath: path, isDirectory: path.hasSuffix("/"))
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path(percentEncoded: false)
+        while normalized.count > 1, normalized.hasSuffix("/") {
+            normalized.removeLast()
+        }
+        return normalized
     }
 }
 

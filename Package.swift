@@ -10,6 +10,8 @@ guard FileManager.default.fileExists(atPath: ghosttyXCFrameworkPath) else {
 var targets: [Target] = [
     .target(name: "OmuxCore"),
     .target(name: "OmuxConfig", dependencies: ["OmuxCore"]),
+    .systemLibrary(name: "CSQLite"),
+    .target(name: "OmuxVault", dependencies: ["OmuxCore", "OmuxConfig", "CSQLite"]),
     .target(
         name: "OmuxTheme",
         dependencies: ["OmuxConfig"],
@@ -42,11 +44,11 @@ targets.append(
     contentsOf: [
         .target(
             name: "OmuxControlPlane",
-            dependencies: ["OmuxCore"]
+            dependencies: ["OmuxCore", "OmuxVault"]
         ),
         .target(
             name: "OmuxHooks",
-            dependencies: ["OmuxCore"]
+            dependencies: ["OmuxCore", "OmuxConfig"]
         ),
         .target(
             name: "OmuxMarkdownPreviewPlugin",
@@ -59,8 +61,16 @@ targets.append(
             path: "Sources/Plugins/MarkdownPreview"
         ),
         .target(
+            name: "OmuxAIStatusPlugin",
+            dependencies: [
+                "OmuxControlPlane",
+                "OmuxCore",
+            ],
+            path: "Sources/Plugins/AIStatus"
+        ),
+        .target(
             name: "OmuxCLI",
-            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxTheme", "OmuxHooks", "OmuxMarkdownPreviewPlugin"],
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxTheme", "OmuxHooks", "OmuxMarkdownPreviewPlugin", "OmuxAIStatusPlugin"],
             path: "Sources/OmuxCLI"
         ),
         .target(
@@ -68,11 +78,13 @@ targets.append(
             dependencies: [
                 "OmuxCore",
                 "OmuxConfig",
+                "OmuxVault",
                 "OmuxTheme",
                 "OmuxTerminalBridge",
                 "OmuxControlPlane",
                 "OmuxHooks",
                 "OmuxMarkdownPreviewPlugin",
+                "OmuxAIStatusPlugin",
             ],
             resources: [
                 .process("Resources"),
@@ -99,16 +111,20 @@ targets.append(
             dependencies: ["OmuxCore"]
         ),
         .testTarget(
+            name: "OmuxVaultTests",
+            dependencies: ["OmuxVault", "OmuxCore", "OmuxConfig"]
+        ),
+        .testTarget(
             name: "OmuxTerminalBridgeTests",
             dependencies: ["OmuxTerminalBridge", "OmuxCore", "OmuxConfig", "OmuxTheme"]
         ),
         .testTarget(
             name: "OmuxControlPlaneTests",
-            dependencies: ["OmuxControlPlane", "OmuxCore"]
+            dependencies: ["OmuxControlPlane", "OmuxCore", "OmuxVault"]
         ),
         .testTarget(
             name: "OmuxCLITests",
-            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxMarkdownPreviewPlugin"]
+            dependencies: ["OmuxCLI", "OmuxControlPlane", "OmuxCore", "OmuxConfig", "OmuxVault", "OmuxMarkdownPreviewPlugin", "OmuxAIStatusPlugin"]
         ),
         .testTarget(
             name: "OmuxHooksTests",
@@ -116,7 +132,7 @@ targets.append(
         ),
         .testTarget(
             name: "OmuxAppShellTests",
-            dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks", "OmuxConfig", "OmuxTheme"]
+            dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks", "OmuxConfig", "OmuxVault", "OmuxTheme"]
         ),
     ]
 )
@@ -129,6 +145,7 @@ let package = Package(
     products: [
         .library(name: "OmuxCore", targets: ["OmuxCore"]),
         .library(name: "OmuxConfig", targets: ["OmuxConfig"]),
+        .library(name: "OmuxVault", targets: ["OmuxVault"]),
         .library(name: "OmuxTheme", targets: ["OmuxTheme"]),
         .library(name: "OmuxTerminalBridge", targets: ["OmuxTerminalBridge"]),
         .library(name: "OmuxControlPlane", targets: ["OmuxControlPlane"]),

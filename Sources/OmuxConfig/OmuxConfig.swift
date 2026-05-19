@@ -308,10 +308,23 @@ public struct OmuxConfigPlugins: Equatable, Sendable {
         }
     }
 
-    public let markdownPreview: MarkdownPreview
+    public struct AIStatus: Equatable, Sendable {
+        public let enabled: Bool
 
-    public init(markdownPreview: MarkdownPreview = MarkdownPreview()) {
+        public init(enabled: Bool = true) {
+            self.enabled = enabled
+        }
+    }
+
+    public let markdownPreview: MarkdownPreview
+    public let aiStatus: AIStatus
+
+    public init(
+        markdownPreview: MarkdownPreview = MarkdownPreview(),
+        aiStatus: AIStatus = AIStatus()
+    ) {
         self.markdownPreview = markdownPreview
+        self.aiStatus = aiStatus
     }
 }
 
@@ -331,6 +344,52 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigAgentSessions: Equatable, Sendable {
+    public struct Agent: Equatable, Sendable {
+        public let enabled: Bool?
+        public let home: String?
+        public let resumeCommand: String?
+
+        public init(enabled: Bool? = nil, home: String? = nil, resumeCommand: String? = nil) {
+            self.enabled = enabled
+            self.home = home
+            self.resumeCommand = resumeCommand
+        }
+
+    }
+
+    public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+
+    public let enabled: Bool
+    public let previewEnabled: Bool
+    public let indexOnLaunch: Bool
+    public let includedAgents: [String]
+    public let excludedPaths: [String]
+    public let maxPreviewBytes: Int
+    public let sidebarRowsPerAgent: Int
+    public let agents: [String: Agent]
+
+    public init(
+        enabled: Bool = true,
+        previewEnabled: Bool = true,
+        indexOnLaunch: Bool = true,
+        includedAgents: [String] = Self.defaultIncludedAgents,
+        excludedPaths: [String] = [],
+        maxPreviewBytes: Int = 1_048_576,
+        sidebarRowsPerAgent: Int = 10,
+        agents: [String: Agent] = [:]
+    ) {
+        self.enabled = enabled
+        self.previewEnabled = previewEnabled
+        self.indexOnLaunch = indexOnLaunch
+        self.includedAgents = includedAgents
+        self.excludedPaths = excludedPaths
+        self.maxPreviewBytes = maxPreviewBytes
+        self.sidebarRowsPerAgent = sidebarRowsPerAgent
+        self.agents = agents
+    }
+}
+
 public struct OmuxConfig: Equatable, Sendable {
     public let schema: Int
     public let autoCheckUpdate: Bool
@@ -338,6 +397,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
+    public let agentSessions: OmuxConfigAgentSessions
     public let plugins: OmuxConfigPlugins
     public let registries: OmuxConfigRegistries
     public let keyBindings: [OpenMUXKeyBindingOverride]
@@ -351,6 +411,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
+        agentSessions: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
         keyBindings: [OpenMUXKeyBindingOverride] = [],
@@ -363,6 +424,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
+        self.agentSessions = agentSessions
         self.plugins = plugins
         self.registries = registries
         self.keyBindings = keyBindings
@@ -377,11 +439,13 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
+        agentSessions: OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
         keyBindings: [],
         ghostty: []
     )
+
 }
 
 public enum OmuxWorkspacePathResolver {
@@ -463,6 +527,14 @@ public enum OmuxConfigPaths {
     public static var generatedGhosttyDirectoryURL: URL {
         generatedDirectoryURL.appendingPathComponent("ghostty", isDirectory: true)
     }
+
+    public static var agentSessionsDatabaseURL: URL {
+        baseDirectoryURL.appendingPathComponent("agent-sessions.sqlite", isDirectory: false)
+    }
+
+    public static var vaultDatabaseURL: URL {
+        agentSessionsDatabaseURL
+    }
 }
 
 public enum OmuxConfigTemplate {
@@ -496,11 +568,23 @@ public enum OmuxConfigTemplate {
         # colors_enabled = true
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
 
+        [agent-sessions]
+        enabled = true
+        preview_enabled = true
+        index_on_launch = true
+        included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+        excluded_paths = []
+        max_preview_bytes = 1048576
+        sidebar_rows_per_agent = 10
+
         [plugins.markdown-preview]
         enabled = true
         renderer = "builtin"
         theme = "auto"
         presentation = "pane-tab"
+
+        [plugins.ai-status]
+        enabled = true
 
         [registries]
         hooks = ["https://github.com/finger-gun/omux-hooks"]
@@ -863,8 +947,23 @@ public struct OmuxConfigLoader {
             )
         }
 
-        let allowedTables: Set<String> = ["theme", "terminal", "workspace", "ui.panes", "ui.icons", "plugins.markdown-preview", "registries", "keys", "ghostty"]
-        for tableName in document.tableNames where allowedTables.contains(tableName) == false {
+        let agentSessionsTableNames = ["agent-sessions"]
+        let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
+        let allowedTables: Set<String> = [
+            "theme",
+            "terminal",
+            "workspace",
+            "ui.panes",
+            "ui.icons",
+            "agent-sessions",
+            "plugins.markdown-preview",
+            "plugins.ai-status",
+            "registries",
+            "keys",
+            "ghostty",
+        ]
+        for tableName in document.tableNames
+        where allowedTables.contains(tableName) == false && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
                     severity: .error,
@@ -946,6 +1045,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -960,6 +1060,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
                 keyBindings: config.keyBindings,
@@ -1419,6 +1520,40 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let aiStatusAllowedKeys: Set<String> = ["enabled"]
+        var aiStatusEnabled = config.plugins.aiStatus.enabled
+        for entry in document.entries(in: "plugins.ai-status") {
+            guard aiStatusAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [plugins.ai-status] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "plugins.ai-status.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                aiStatusEnabled = value
+            default:
+                break
+            }
+        }
+
         let registriesAllowedKeys: Set<String> = ["hooks", "plugins"]
         var hookRegistries = config.registries.hooks
         var pluginRegistries = config.registries.plugins
@@ -1465,6 +1600,157 @@ public struct OmuxConfigLoader {
                 pluginRegistries = values
             default:
                 break
+            }
+        }
+
+        let supportedAgentSessionAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+        let agentSessionsAllowedKeys: Set<String> = [
+            "enabled",
+            "preview_enabled",
+            "index_on_launch",
+            "included_agents",
+            "excluded_paths",
+            "max_preview_bytes",
+            "sidebar_rows_per_agent",
+        ]
+        var agentSessionsEnabled = config.agentSessions.enabled
+        var agentSessionsPreviewEnabled = config.agentSessions.previewEnabled
+        var agentSessionsIndexOnLaunch = config.agentSessions.indexOnLaunch
+        var agentSessionsIncludedAgents = config.agentSessions.includedAgents
+        var agentSessionsExcludedPaths = config.agentSessions.excludedPaths
+        var agentSessionsMaxPreviewBytes = config.agentSessions.maxPreviewBytes
+        var agentSessionsSidebarRowsPerAgent = config.agentSessions.sidebarRowsPerAgent
+        for tableName in agentSessionsTableNames {
+            for entry in document.entries(in: tableName) {
+                guard agentSessionsAllowedKeys.contains(entry.key) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+
+                switch entry.key {
+                case "enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsEnabled = value
+                case "preview_enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).preview_enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsPreviewEnabled = value
+                case "index_on_launch":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).index_on_launch must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsIndexOnLaunch = value
+                case "included_agents":
+                    guard let values = stringArray(from: entry.value),
+                          values.allSatisfy(supportedAgentSessionAgents.contains)
+                    else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).included_agents must contain supported agent names.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsIncludedAgents = values
+                case "excluded_paths":
+                    guard let values = stringArray(from: entry.value) else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).excluded_paths must be an array of strings.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsExcludedPaths = values
+                case "max_preview_bytes":
+                    guard let value = entry.value.intValue, value >= 1024 else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).max_preview_bytes must be an integer greater than or equal to 1024.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsMaxPreviewBytes = value
+                case "sidebar_rows_per_agent":
+                    guard let value = entry.value.intValue, value >= 1 else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).sidebar_rows_per_agent must be an integer greater than or equal to 1.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsSidebarRowsPerAgent = value
+                default:
+                    break
+                }
+            }
+        }
+
+        var agentSessionsAgents = config.agentSessions.agents
+        let orderedAgentTablePrefixes = ["agent-sessions.agents."]
+        for tablePrefix in orderedAgentTablePrefixes {
+            let tableNames = document.tableNames
+                .filter { $0.hasPrefix(tablePrefix) }
+                .sorted()
+            for tableName in tableNames {
+            let agentName = String(tableName.dropFirst(tablePrefix.count))
+            guard supportedAgentSessionAgents.contains(agentName) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unsupported Agent Sessions agent '\(agentName)'.",
+                        filePath: sourceURL.path
+                    )
+                )
+                continue
+            }
+            let allowedAgentKeys: Set<String> = ["enabled", "home", "resume_command"]
+            var enabled: Bool?
+            var home: String?
+            var resumeCommand: String?
+            for entry in document.entries(in: tableName) {
+                guard allowedAgentKeys.contains(entry.key) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                switch entry.key {
+                case "enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    enabled = value
+                case "home":
+                    guard let value = entry.value.stringValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).home must be a string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    guard value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).home must be a non-empty string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    home = value
+                case "resume_command":
+                    guard let value = entry.value.stringValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    guard value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a non-empty string.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    resumeCommand = value
+                default:
+                    break
+                }
+            }
+            agentSessionsAgents[agentName] = OmuxConfigAgentSessions.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
             }
         }
 
@@ -1558,13 +1844,24 @@ public struct OmuxConfigLoader {
                     colorsEnabled: iconsColorsEnabled
                 )
             ),
+            agentSessions: OmuxConfigAgentSessions(
+                enabled: agentSessionsEnabled,
+                previewEnabled: agentSessionsPreviewEnabled,
+                indexOnLaunch: agentSessionsIndexOnLaunch,
+                includedAgents: agentSessionsIncludedAgents,
+                excludedPaths: agentSessionsExcludedPaths,
+                maxPreviewBytes: agentSessionsMaxPreviewBytes,
+                sidebarRowsPerAgent: agentSessionsSidebarRowsPerAgent,
+                agents: agentSessionsAgents
+            ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
                     enabled: markdownPreviewEnabled,
                     renderer: markdownPreviewRenderer,
                     theme: markdownPreviewTheme,
                     presentation: markdownPreviewPresentation
-                )
+                ),
+                aiStatus: OmuxConfigPlugins.AIStatus(enabled: aiStatusEnabled)
             ),
             registries: OmuxConfigRegistries(
                 hooks: hookRegistries,
@@ -1592,6 +1889,10 @@ public struct OmuxConfigLoader {
     }
 
     private func registryURLStrings(from value: OmuxTOMLValue) -> [String]? {
+        stringArray(from: value)
+    }
+
+    private func stringArray(from value: OmuxTOMLValue) -> [String]? {
         guard case .array(let values) = value else {
             return nil
         }

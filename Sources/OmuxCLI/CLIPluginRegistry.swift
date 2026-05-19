@@ -1,4 +1,5 @@
 import Foundation
+import OmuxAIStatusPlugin
 import OmuxConfig
 import OmuxMarkdownPreviewPlugin
 
@@ -47,6 +48,10 @@ struct OmuxCLIPluginRegistry {
             OmuxBundledCLIPlugin(
                 commandName: OmuxMarkdownPreviewPlugin.commandName,
                 displayPath: OmuxMarkdownPreviewPlugin.commandDisplayPath
+            ),
+            OmuxBundledCLIPlugin(
+                commandName: OmuxAIStatusPlugin.commandName,
+                displayPath: OmuxAIStatusPlugin.commandDisplayPath
             ),
         ]
     ) {
@@ -148,7 +153,7 @@ struct OmuxCLIPluginRunner {
         if pluginEnvironment["OMUX_CLI"] == nil,
            let executableURL = Bundle.main.executableURL,
            FileManager.default.isExecutableFile(atPath: executableURL.path) {
-            pluginEnvironment["OMUX_CLI"] = executableURL.path
+            pluginEnvironment["OMUX_CLI"] = executableURL.lastPathComponent == "omux" ? executableURL.path : "omux"
         }
         process.environment = pluginEnvironment
 
