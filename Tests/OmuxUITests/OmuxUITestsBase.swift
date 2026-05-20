@@ -39,6 +39,21 @@ class OmuxUITestsBase: XCTestCase {
             let mainWindow = a.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
             let appeared = mainWindow.waitForExistence(timeout: 15)
             XCTAssertTrue(appeared, "Main window must appear before any test interactions")
+
+            // Ensure the app is front-most and the window is key before any test
+            // interacts with on-screen elements. On headless CI runners the app may
+            // exist in the a11y tree but its elements report isHittable == false
+            // unless the app is explicitly activated and given a moment to become
+            // the active application. Menu-bar interactions work without this, but
+            // direct element clicks/drags (pane tabs, text fields) require it.
+            a.activate()
+
+            // Wait for the main window to become hittable (proxy for "window is key").
+            let hittable = NSPredicate(format: "isHittable == true")
+            _ = XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: hittable, object: mainWindow)],
+                timeout: 5
+            )
         }
     }
 
