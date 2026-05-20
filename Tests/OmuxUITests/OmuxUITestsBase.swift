@@ -11,7 +11,7 @@ import XCTest
 // 14+ app restarts while still providing a clean state between test classes.
 //
 // Note: XCTest always calls setUp/tearDown on the main thread, so
-// nonisolated(unsafe) is safe here — no concurrent access occurs.
+// MainActor.assumeIsolated is safe here — no concurrent access occurs.
 
 @MainActor
 class OmuxUITestsBase: XCTestCase {
@@ -22,28 +22,34 @@ class OmuxUITestsBase: XCTestCase {
     var app: XCUIApplication { OmuxUITestsBase.sharedApp }
 
     // Called once before the first test method in the class runs.
-    override class func setUp() {
+    // XCTest guarantees class setUp/tearDown run on the main thread, so
+    // MainActor.assumeIsolated is safe here.
+    nonisolated override class func setUp() {
         super.setUp()
 
-        let a = XCUIApplication(bundleIdentifier: "dev.fingergun.omux.debug")
-        a.launchEnvironment["OMUX_UI_TEST"] = "1"
-        // Prevent the app from loading persisted workspace state during tests.
-        a.launchEnvironment["OMUX_RESET_WORKSPACE"] = "1"
-        sharedApp = a
-        a.launch()
+        MainActor.assumeIsolated {
+            let a = XCUIApplication(bundleIdentifier: "dev.fingergun.omux.debug")
+            a.launchEnvironment["OMUX_UI_TEST"] = "1"
+            // Prevent the app from loading persisted workspace state during tests.
+            a.launchEnvironment["OMUX_RESET_WORKSPACE"] = "1"
+            sharedApp = a
+            a.launch()
 
-        // Wait for the main window to confirm the app is ready.
-        let mainWindow = a.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
-        let appeared = mainWindow.waitForExistence(timeout: 15)
-        assert(appeared, "Main window must appear before any test interactions")
+            // Wait for the main window to confirm the app is ready.
+            let mainWindow = a.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+            let appeared = mainWindow.waitForExistence(timeout: 15)
+            XCTAssertTrue(appeared, "Main window must appear before any test interactions")
+        }
     }
 
     // Called once after the last test method in the class finishes.
-    override class func tearDown() {
-        if sharedApp?.state != .notRunning {
-            sharedApp.terminate()
+    nonisolated override class func tearDown() {
+        MainActor.assumeIsolated {
+            if sharedApp?.state != .notRunning {
+                sharedApp.terminate()
+            }
+            sharedApp = nil
         }
-        sharedApp = nil
         super.tearDown()
     }
 
