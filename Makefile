@@ -1,4 +1,4 @@
-.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help generate-xcodeproj ui-test
+.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help check-xcodegen generate-xcodeproj ui-test
 
 help:
 	@printf "OpenMUX development commands\n\n"
@@ -70,7 +70,14 @@ app: dev
 cli-help:
 	swift run omux help
 
-generate-xcodeproj:
+check-xcodegen:
+	@command -v xcodegen >/dev/null 2>&1 || { \
+		printf "xcodegen is required to generate OpenMUX.xcodeproj.\n"; \
+		printf "Install it with: brew install xcodegen\n"; \
+		exit 1; \
+	}
+
+generate-xcodeproj: check-xcodegen
 	xcodegen generate --spec project.yml
 
 ui-test: generate-xcodeproj build

@@ -12,6 +12,12 @@ make setup
 
 `make setup` runs `Scripts/build-ghostty.sh` and produces the local `GhosttyKit.xcframework` used by app launches and tests.
 
+The UI test workflow also needs XcodeGen to regenerate `OpenMUX.xcodeproj` from `project.yml`:
+
+```bash
+brew install xcodegen
+```
+
 ## Daily development loop
 
 Use the Makefile entrypoints first:

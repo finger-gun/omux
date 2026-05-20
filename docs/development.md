@@ -264,6 +264,12 @@ OpenMUX has an XCUIAutomation GUI test suite that launches a sandboxed debug bui
 
 ### Running the tests
 
+Install XcodeGen before running the UI test target:
+
+```bash
+brew install xcodegen
+```
+
 ```bash
 # Full suite
 make ui-test
