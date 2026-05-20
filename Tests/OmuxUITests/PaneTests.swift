@@ -52,8 +52,9 @@ final class PaneTests: OmuxUITestsBase {
                 break
             }
             closeItem.click()
+            let priorCount = paneTabButtons().count
             _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "count <= 1"),
+                predicate: NSPredicate(format: "count <= %d", priorCount - 1),
                 object: paneTabButtons()
             )], timeout: 2)
         }
