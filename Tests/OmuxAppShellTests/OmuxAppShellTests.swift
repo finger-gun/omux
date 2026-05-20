@@ -7012,6 +7012,36 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(captured.contains("\"paneID\":\"\(result.pane.id.rawValue)\""))
     }
 
+    @MainActor
+    func testShellOverlayDoesNotBlockHitTestingWhenNoModalIsPresented() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: controller.activeWorkspace()!, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let overlayHost = try XCTUnwrap(findView(ofType: ShellOverlayHostView.self, in: rootView))
+        let terminalView = try XCTUnwrap(findView(ofType: HostedTerminalPaneView.self, in: rootView))
+
+        // The overlay sits on top of the terminal area.  When no modal is
+        // shown, hitTest at a point inside the terminal should pass through
+        // the overlay and reach the terminal (or a descendant), not the
+        // overlay itself or any of its empty child views.
+        let terminalMid = terminalView.convert(
+            NSPoint(x: terminalView.bounds.midX, y: terminalView.bounds.midY),
+            to: rootView
+        )
+
+        let hitView = rootView.hitTest(terminalMid)
+        // hitView should be inside the terminal, not inside the overlay.
+        XCTAssertNotNil(hitView, "hitTest should find a view at the terminal center")
+        XCTAssertFalse(hitView!.isDescendant(of: overlayHost),
+                       "hitTest should not land inside the shell overlay when no modal is presented")
+    }
+
     private func runGit(_ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")

@@ -4314,6 +4314,18 @@ final class ShellOverlayHostView: NSView {
 
     private final class BlockingOverlayView: NSView {
         override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            // When no modal content is shown, pass events through to views
+            // below the overlay so terminal interaction (including drag and
+            // drop) is not blocked.  When a modal IS shown the subview
+            // captures the hit inside its frame; clicks outside the modal
+            // still hit self, which keeps them from reaching the terminal.
+            guard subviews.isEmpty == false else {
+                return nil
+            }
+            return super.hitTest(point)
+        }
     }
 
     private let paletteHostView = PassthroughOverlayView()
