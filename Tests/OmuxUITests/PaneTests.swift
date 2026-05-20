@@ -204,7 +204,6 @@ final class PaneTests: OmuxUITestsBase {
 
         // Teardown: collapse the split by removing the active pane, restoring a single-pane layout
         // so subsequent tests in this class start from a known state.
-        let menuBar = app.menuBars.firstMatch
         menuBar.menuBarItems["Pane"].click()
         menuBar.menuBarItems["Pane"].menuItems["Remove Active Pane"].click()
         _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(

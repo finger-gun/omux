@@ -31,7 +31,7 @@ build:
 	swift build
 
 test:
-	swift test --skip OmuxUITests
+	swift test
 
 verify: build test
 

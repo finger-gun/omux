@@ -134,11 +134,11 @@ targets.append(
             name: "OmuxAppShellTests",
             dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks", "OmuxConfig", "OmuxVault", "OmuxTheme"]
         ),
-        .testTarget(
-            name: "OmuxUITests",
-            dependencies: [],
-            path: "Tests/OmuxUITests"
-        ),
+        // OmuxUITests is an XCUIAutomation bundle built and run exclusively via
+        // xcodebuild (make ui-test / ui-tests.yml). It is not a Swift Package
+        // Manager target; keeping it here caused `swift test` to compile
+        // XCTest UI-testing APIs and required an --skip workaround.
+        // See Tests/OmuxUITests/ and project.yml for the xcodebuild target.
     ]
 )
 
