@@ -39,6 +39,38 @@ struct WorkspaceShellEnvironment {
         )
     }
 
+    func launchSession(
+        from session: SessionDescriptor,
+        workspaceID: WorkspaceID,
+        workspaceRootPath: String
+    ) -> SessionDescriptor {
+        let workspaceSession = applyingWorkspaceContext(
+            to: session,
+            workspaceID: workspaceID,
+            workspaceRootPath: workspaceRootPath
+        )
+
+        guard isolateShellHistory,
+              workspaceSession.shellURL?.lastPathComponent == "zsh",
+              installZshHistoryIsolationFiles()
+        else {
+            return workspaceSession
+        }
+
+        var environment = workspaceSession.environment
+        environment["OMUX_ORIGINAL_ZDOTDIR"] = environment["ZDOTDIR"]
+            ?? ProcessInfo.processInfo.environment["ZDOTDIR"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+        environment["ZDOTDIR"] = zshDirectoryURL.path
+        return SessionDescriptor(
+            id: workspaceSession.id,
+            shell: workspaceSession.shell,
+            workingDirectory: workspaceSession.workingDirectory,
+            environment: environment
+        )
+    }
+
     func prepareHistoryStorage(for workspaceID: WorkspaceID) {
         guard isolateShellHistory else {
             return
@@ -56,6 +88,49 @@ struct WorkspaceShellEnvironment {
             .appendingPathComponent("shell-history", isDirectory: false)
     }
 
+    private var shellIntegrationDirectoryURL: URL {
+        stateDirectoryURL.appendingPathComponent("shell-integration", isDirectory: true)
+    }
+
+    private var zshDirectoryURL: URL {
+        shellIntegrationDirectoryURL.appendingPathComponent("zsh", isDirectory: true)
+    }
+
+    private func installZshHistoryIsolationFiles() -> Bool {
+        do {
+            try fileManager.createDirectory(
+                at: zshDirectoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            for fileName in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
+                try Self.zshStartupScript(fileName: fileName).write(
+                    to: zshDirectoryURL.appendingPathComponent(fileName, isDirectory: false),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+            return true
+        } catch {
+            fputs("warning: failed to prepare workspace zsh history isolation: \(error)\n", stderr)
+            return false
+        }
+    }
+
+    private static func zshStartupScript(fileName: String) -> String {
+        let enforceHistory = fileName == ".zshrc" || fileName == ".zlogin"
+            ? "\nif [[ -n \"${OMUX_WORKSPACE_HISTORY:-}\" ]]; then\n  export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\"\nfi\n"
+            : ""
+        return """
+        if [[ -n "${OMUX_ORIGINAL_ZDOTDIR:-}" && -r "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)" ]]; then
+          source "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)"
+        elif [[ -r "$HOME/\(fileName)" ]]; then
+          source "$HOME/\(fileName)"
+        fi
+        \(enforceHistory)
+        """
+    }
+
     private func safePathComponent(_ value: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let scalars = value.unicodeScalars.map { scalar in
@@ -63,5 +138,16 @@ struct WorkspaceShellEnvironment {
         }
         let component = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return component.isEmpty ? "workspace" : component
+    }
+
+}
+
+private extension SessionDescriptor {
+    var shellURL: URL? {
+        let trimmed = shell.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else {
+            return nil
+        }
+        return URL(fileURLWithPath: trimmed)
     }
 }

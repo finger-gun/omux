@@ -25,3 +25,10 @@ OpenMUX-created terminal sessions SHALL receive OpenMUX-native workspace context
 #### Scenario: Context follows target workspace
 - **WHEN** OpenMUX creates a terminal session through a split, pane-tab creation, or workspace restore
 - **THEN** the workspace context values correspond to the workspace that owns the session
+
+### Requirement: Zsh sessions SHALL preserve workspace history after startup files
+When shell history isolation is enabled for a zsh session, OpenMUX SHALL ensure normal zsh startup files can run while still reapplying the workspace shell history file after those startup files have had a chance to assign `HISTFILE`.
+
+#### Scenario: Zsh startup overrides do not leak history across workspaces
+- **WHEN** OpenMUX launches or restores a zsh-backed terminal session with shell history isolation enabled
+- **THEN** the launched zsh session has startup context that reapplies `HISTFILE` to `OMUX_WORKSPACE_HISTORY` after normal zsh startup files are sourced

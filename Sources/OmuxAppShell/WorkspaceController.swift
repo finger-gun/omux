@@ -162,7 +162,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: pane.session, to: pane)
+        _ = try bridge.attach(session: launchSession(for: pane, workspace: workspace), to: pane)
 
         lock.lock()
         workspaces.append(workspace)
@@ -401,16 +401,16 @@ public final class WorkspaceController: @unchecked Sendable {
         return workspace
     }
 
+    private func launchSession(for pane: Pane, workspace: Workspace) -> SessionDescriptor {
+        launchSession(forRestoredPane: pane, workspaceID: workspace.id, workspaceRootPath: workspace.rootPath)
+    }
+
     private func launchSession(forRestoredPane pane: Pane, workspaceID: WorkspaceID, workspaceRootPath: String) -> SessionDescriptor {
         guard let session = pane.terminalSession else {
             preconditionFailure("Cannot launch a terminal session for extension pane \(pane.id.rawValue)")
         }
         workspaceShellEnvironment.prepareHistoryStorage(for: workspaceID)
-        let workspaceSession = workspaceShellEnvironment.applyingWorkspaceContext(
-            to: session,
-            workspaceID: workspaceID,
-            workspaceRootPath: workspaceRootPath
-        )
+        let workspaceSession = workspaceShellEnvironment.launchSession(from: session, workspaceID: workspaceID, workspaceRootPath: workspaceRootPath)
 
         let persistedScrollback = currentPersistedScrollback()
         guard persistedScrollback.enabled,
@@ -926,7 +926,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: pane.session, to: pane)
+        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
 
         try hookRunner.emit(
             HookInvocation(
@@ -981,7 +981,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: pane.session, to: pane)
+        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
 
         try hookRunner.emit(
             HookInvocation(
@@ -1467,7 +1467,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: pane.session, to: pane)
+        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
 
         try hookRunner.emit(
             HookInvocation(

@@ -469,6 +469,34 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(environment[OpenMUXWorkspaceEnvironment.workspaceIDKey], workspace.id.rawValue)
     }
 
+    func testRestoredZshSessionReappliesWorkspaceHistoryAfterStartupFiles() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(title: "project", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+        let zshDirectory = try XCTUnwrap(launchEnvironment["ZDOTDIR"])
+        let zshrc = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zshrc").path, encoding: .utf8)
+        let zlogin = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zlogin").path, encoding: .utf8)
+
+        XCTAssertEqual(launchEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey], launchEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        XCTAssertTrue(zshrc.contains("export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\""))
+        XCTAssertTrue(zlogin.contains("export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\""))
+    }
+
     func testExtensionPaneActionDispatchInvokesOwningPlugin() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -2774,11 +2802,16 @@ final class OmuxAppShellTests: XCTestCase {
         let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
         var expectedEnvironment = session.environment
-        let historyPath = try XCTUnwrap(runtime.session(for: surfaceID)?.environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+        let historyPath = try XCTUnwrap(launchEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
         expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey] = workspace.id.rawValue
         expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey] = workspace.rootPath
         expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey] = historyPath
         expectedEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey] = historyPath
+        if session.shell.hasSuffix("/zsh") {
+            expectedEnvironment["ZDOTDIR"] = launchEnvironment["ZDOTDIR"]
+            expectedEnvironment["OMUX_ORIGINAL_ZDOTDIR"] = launchEnvironment["OMUX_ORIGINAL_ZDOTDIR"]
+        }
         expectedEnvironment[OpenMUXTerminalEnvironment.paneIDKey] = pane.id.rawValue
         expectedEnvironment[OpenMUXTerminalEnvironment.sessionIDKey] = session.id.rawValue
         XCTAssertEqual(

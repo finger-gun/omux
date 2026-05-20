@@ -384,6 +384,8 @@ The path must resolve to an existing directory. `~` and `~/...` expand to the cu
 
 `isolate_shell_history` controls whether OpenMUX sets `HISTFILE` for launched terminal sessions. It defaults to `true`, so each workspace gets its own shell command history while panes and pane tabs inside the same workspace share that workspace history file.
 
+For zsh, OpenMUX also installs a small OpenMUX-owned `ZDOTDIR` shim for launched sessions. The shim sources your normal zsh startup files and then reapplies the workspace history file, which prevents common `.zshrc` assignments from sending OpenMUX sessions back to the global `~/.zsh_history`.
+
 OpenMUX also exposes workspace context variables to launched sessions:
 
 ```text
@@ -399,7 +401,7 @@ Set the option to `false` to leave shell history file selection entirely to your
 isolate_shell_history = false
 ```
 
-Shell startup files remain authoritative. If your `.zshrc`, `.bashrc`, or equivalent startup file resets `HISTFILE` or changes history sharing behavior, those shell settings can override OpenMUX's launch environment.
+Shell startup files can still affect history behavior. For non-zsh shells, or for zsh setups that change history after normal startup files run, those shell settings can override OpenMUX's launch environment.
 
 ## `[ui.panes]` settings
 

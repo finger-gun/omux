@@ -55,12 +55,12 @@ All terminal panes and pane tabs in a workspace will use the same history file. 
 **Alternative considered:** per-pane history files.  
 **Why not chosen:** splits and pane tabs in one workspace usually represent one project/context; per-pane history would make normal project workflows feel disconnected.
 
-### 4) Keep shell startup files authoritative
+### 4) Reapply zsh history isolation after user startup files
 
-OpenMUX will provide launch variables, but it will not fight shell startup files that reset `HISTFILE` or enable shell-specific shared history options. Documentation will call this out.
+OpenMUX will provide launch variables for every shell. For zsh, OpenMUX will also install an OpenMUX-owned `ZDOTDIR` shim that sources the user's original zsh startup files and then reapplies `HISTFILE="$OMUX_WORKSPACE_HISTORY"` from `.zshrc` and `.zlogin`. This keeps Ghostty's normal zsh shell integration path intact because libghostty can still preserve the OpenMUX `ZDOTDIR` through `GHOSTTY_ZSH_ZDOTDIR`.
 
 **Alternative considered:** launching shells through wrapper scripts that force history behavior after rc files run.  
-**Why not chosen:** wrappers are harder to inspect, more shell-specific, and risk surprising users.
+**Why not chosen:** command wrappers interfere with libghostty's shell integration and can make the persisted session shell look like the wrapper instead of the user's shell.
 
 ### 5) Add an OpenMUX config opt-out
 
@@ -71,7 +71,7 @@ Add `[workspace] isolate_shell_history = true` with a default of `true`. Setting
 
 ## Risks / Trade-offs
 
-- **[Risk] Shell rc files override `HISTFILE`** -> **Mitigation:** document the behavior and test that OpenMUX provides the expected launch environment.
+- **[Risk] Shell rc files override `HISTFILE`** -> **Mitigation:** zsh sessions use an OpenMUX `ZDOTDIR` shim that reapplies history after normal startup files; other shells retain documented environment-based behavior.
 - **[Risk] zsh `share_history` or equivalent options still make history feel shared inside one workspace** -> **Mitigation:** this is acceptable for workspace-level sharing; cross-workspace leakage is prevented when the shell honors `HISTFILE`.
 - **[Risk] Existing restored workspaces need a workspace ID before session attachment** -> **Mitigation:** build session descriptors from workspace context at attach time, including restored panes.
 - **[Risk] History files accumulate over time** -> **Mitigation:** store under a predictable OpenMUX state path so cleanup can be added later without changing the launch contract.
