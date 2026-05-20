@@ -438,8 +438,10 @@ final class OmuxAppShellTests: XCTestCase {
         let splitPane = try XCTUnwrap(splitWorkspace.focusedPane)
         let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
         let paneTab = try XCTUnwrap(paneTabWorkspace.focusedPane)
+        let tabWorkspace = try XCTUnwrap(controller.createTab())
+        let tabPane = try XCTUnwrap(tabWorkspace.focusedPane)
 
-        let historyValues = try [firstPane, splitPane, paneTab].map { pane in
+        let historyValues = try [firstPane, splitPane, paneTab, tabPane].map { pane in
             let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
             return try XCTUnwrap(runtime.session(for: surfaceID)?.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
         }
@@ -2825,6 +2827,21 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    func testWorkspaceOpenFailsWhenShellHistoryStorageCannotBePrepared() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blockedStateURL = root.appendingPathComponent("state-file", isDirectory: false)
+        try Data("blocked".utf8).write(to: blockedStateURL)
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: blockedStateURL
+        )
+
+        XCTAssertThrowsError(try controller.openWorkspace(at: "/tmp/project"))
+        XCTAssertTrue(controller.allWorkspaces().isEmpty)
+    }
+
     func testWorkspacePersistenceDropsRestoredScrollbackWhenFreshRuntimeCaptureIsAvailableEmpty() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3406,6 +3423,58 @@ final class OmuxAppShellTests: XCTestCase {
         let result = coordinator.reload()
 
         XCTAssertTrue(result.applied)
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
+    func testConfigurationCoordinatorReloadPublishesShellHistoryIsolationChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        let expectation = expectation(description: "shell history isolation changed")
+        coordinator.onShellHistoryIsolationChange = { isolateShellHistory in
+            if isolateShellHistory == false {
+                expectation.fulfill()
+            }
+        }
+
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [workspace]
+        isolate_shell_history = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let result = coordinator.reload()
+
+        XCTAssertTrue(result.applied)
+        XCTAssertFalse(coordinator.isolateShellHistory())
         waitForExpectations(timeout: 2)
     }
 

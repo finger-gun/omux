@@ -71,11 +71,11 @@ struct WorkspaceShellEnvironment {
         )
     }
 
-    func prepareHistoryStorage(for workspaceID: WorkspaceID) {
+    func prepareHistoryStorage(for workspaceID: WorkspaceID) throws {
         guard isolateShellHistory else {
             return
         }
-        try? fileManager.createDirectory(
+        try fileManager.createDirectory(
             at: historyFileURL(for: workspaceID).deletingLastPathComponent(),
             withIntermediateDirectories: true
         )

@@ -394,7 +394,7 @@ OMUX_WORKSPACE_ROOT
 OMUX_WORKSPACE_HISTORY
 ```
 
-Set the option to `false` to leave shell history file selection entirely to your shell configuration:
+When `isolate_shell_history` is enabled, OpenMUX also sets `HISTFILE` to a workspace-specific history file. When `isolate_shell_history = false`, OpenMUX still provides `OMUX_WORKSPACE_HISTORY`, but leaves `HISTFILE` selection entirely to your shell configuration:
 
 ```toml
 [workspace]
