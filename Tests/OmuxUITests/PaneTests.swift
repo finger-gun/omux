@@ -301,9 +301,14 @@ final class PaneTests: OmuxUITestsBase {
         // so the test does not false-fail when both tabs carry the same default name.
         if labelBefore0 != labelBefore1 {
             let labelAfter0 = paneTabButtons().element(boundBy: 0).label
+            let labelAfter1 = paneTabButtons().element(boundBy: 1).label
             XCTAssertEqual(
                 labelAfter0, labelBefore1,
                 "After drag-to-reorder the first tab should carry the label that was second before"
+            )
+            XCTAssertEqual(
+                labelAfter1, labelBefore0,
+                "After drag-to-reorder the second tab should carry the label that was first before"
             )
         }
     }
