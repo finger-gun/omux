@@ -3,13 +3,32 @@
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
 
+## 0.18.0
 
+### Added
 
+- Added Agent Sessions, a local-first sidebar and CLI workflow for indexing, searching, previewing, resuming, and deleting coding-agent sessions from supported local agent stores.
+- Added the bundled `ai-status` plugin for mapping Codex, Gemini, Claude, and hook/wrapper signals into normalized OpenMUX pane status updates.
+- Added `omux agent-sessions` commands for listing, searching, previewing, resuming, reindexing, importing, exporting, and opening the Agent Sessions UI.
+- Added `omux worktree <branch> [path]` and a matching command-palette action for creating a Git worktree and opening it in a new pane tab.
+- Added inline pane-tab aliases, including double-click rename behavior in the VS Code-style tab bar.
+- Added plugin-declared hook callbacks from installed plugin manifests.
+- Added Agent Sessions and AI Status configuration under `[agent-sessions]`, `[agent-sessions.agents.<agent>]`, and `[plugins.ai-status]`.
+- Added local release install support through `make install-local-release` and `Scripts/install-local-release.sh`.
 
+### Changed
 
+- Changed pane-tab creation through the control plane so callers can provide a working directory, title, and pane stack target.
+- Changed workspace and pane metadata to expose pane aliases and Agent Sessions state through the control plane.
+- Updated docs for Agent Sessions, AI Status, command palette usage, configuration, hooks, plugins, development workflows, and related OpenSpec changes.
 
+### Fixed
 
+- Fixed terminal font sizing so OpenMUX no longer hardcodes libghostty to 12pt and instead lets the configured terminal font size take effect.
 
+### Thanks
+
+- Thanks to [@mrosnerr](https://github.com/mrosnerr) for their first contribution to OpenMUX.
 
 ## 0.17.0
 

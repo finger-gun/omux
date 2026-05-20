@@ -403,7 +403,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         config.platform.macos.nsview = Unmanaged.passUnretained(state.hostView).toOpaque()
         config.userdata = Unmanaged.passUnretained(state.hostView).toOpaque()
         config.scale_factor = scale
-        config.font_size = 12
+        // 0 tells libghostty to use the user's configured font-size rather than overriding it.
+        config.font_size = 0
         config.working_directory = UnsafePointer(state.retainCString(session.workingDirectory))
         config.command = UnsafePointer(state.retainCString(session.shell))
         config.env_vars = state.retainEnvironment(session.environment)
