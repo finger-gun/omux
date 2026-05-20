@@ -6,36 +6,50 @@ import XCTest
 // OpenMUX instance (dev.fingergun.omux).
 // The OMUX_UI_TEST flag bypasses GPU/Metal initialisation on headless runners.
 //
+// The app is launched once per test class (via the class-level setUp/tearDown
+// overrides) rather than once per test method. This avoids the overhead of
+// 14+ app restarts while still providing a clean state between test classes.
+//
 // Note: XCTest always calls setUp/tearDown on the main thread, so
 // nonisolated(unsafe) is safe here — no concurrent access occurs.
 
 class OmuxUITestsBase: XCTestCase {
-    nonisolated(unsafe) var app: XCUIApplication!
+    // Shared across all tests in the same class.
+    nonisolated(unsafe) static var sharedApp: XCUIApplication!
 
-    override func setUp() {
+    // Per-test convenience accessor.
+    var app: XCUIApplication { OmuxUITestsBase.sharedApp }
+
+    // Called once before the first test method in the class runs.
+    override class func setUp() {
         super.setUp()
-        continueAfterFailure = false
 
-        // nonisolated context but XCTest guarantees main-thread execution.
         let a = XCUIApplication(bundleIdentifier: "dev.fingergun.omux.debug")
         a.launchEnvironment["OMUX_UI_TEST"] = "1"
         // Prevent the app from loading persisted workspace state during tests.
         a.launchEnvironment["OMUX_RESET_WORKSPACE"] = "1"
-        app = a
-        app.launch()
-        // Wait for the main window before any test interaction.
-        // This also confirms the app is ready and frontmost.
-        let mainWindow = app.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+        sharedApp = a
+        a.launch()
+
+        // Wait for the main window to confirm the app is ready.
+        let mainWindow = a.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
         let appeared = mainWindow.waitForExistence(timeout: 15)
-        XCTAssertTrue(appeared, "Main window must appear before test interactions")
+        assert(appeared, "Main window must appear before any test interactions")
     }
 
-    override func tearDown() {
-        // Terminate only if the app is still running to avoid double-terminate crashes.
-        if app?.state == .runningForeground || app?.state == .runningBackground {
-            app.terminate()
+    // Called once after the last test method in the class finishes.
+    override class func tearDown() {
+        if sharedApp?.state == .runningForeground || sharedApp?.state == .runningBackground {
+            sharedApp.terminate()
         }
-        app = nil
+        sharedApp = nil
         super.tearDown()
+    }
+
+    // Per-test setUp: stop the test run on the first failure so that a broken
+    // state doesn't cascade through remaining tests in the session.
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
     }
 }
