@@ -133,8 +133,6 @@ struct WorkspaceShellEnvironment {
         return """
         if [[ -n "${OMUX_ORIGINAL_ZDOTDIR:-}" && "${OMUX_ORIGINAL_ZDOTDIR}" != "${OMUX_WORKSPACE_ZDOTDIR:-}" && -r "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)" ]]; then
           source "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)"
-        elif [[ -r "$HOME/\(fileName)" ]]; then
-          source "$HOME/\(fileName)"
         fi
         \(reassertZDOTDIR)
         \(enforceHistory)
@@ -160,7 +158,8 @@ struct WorkspaceShellEnvironment {
             return candidate
         }
 
-        return ProcessInfo.processInfo.environment["HOME"]
+        return environment["HOME"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
             ?? FileManager.default.homeDirectoryForCurrentUser.path
     }
 
