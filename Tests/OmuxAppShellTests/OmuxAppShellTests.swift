@@ -449,6 +449,47 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(Set(historyValues).count, 1)
     }
 
+    func testWorkspaceShellHistorySnapshotIsSharedByPaneAndLaunchSession() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        runtime.onCreateSurface = { _ in
+            controller.updateShellHistoryIsolation(false)
+        }
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let initialPane = try XCTUnwrap(workspace.focusedPane)
+
+        func assertLaunchMatchesPane(_ pane: Pane) throws {
+            let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+            let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+            XCTAssertEqual(
+                launchEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey],
+                pane.session.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey]
+            )
+        }
+
+        try assertLaunchMatchesPane(initialPane)
+
+        controller.updateShellHistoryIsolation(true)
+        let tabWorkspace = try XCTUnwrap(controller.createTab())
+        try assertLaunchMatchesPane(try XCTUnwrap(tabWorkspace.focusedPane))
+
+        controller.updateShellHistoryIsolation(true)
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane())
+        try assertLaunchMatchesPane(try XCTUnwrap(splitWorkspace.focusedPane))
+
+        controller.updateShellHistoryIsolation(true)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        try assertLaunchMatchesPane(try XCTUnwrap(paneTabWorkspace.focusedPane))
+    }
+
     func testWorkspaceShellHistoryIsolationCanBeDisabled() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -6979,6 +7020,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private var transcriptBySurface: [String: String] = [:]
     private var inputBySurface: [String: String] = [:]
     private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    var onCreateSurface: ((PaneID) -> Void)?
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
@@ -6989,7 +7031,8 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
-        "action:\(paneID.rawValue)"
+        onCreateSurface?(paneID)
+        return "action:\(paneID.rawValue)"
     }
 
     func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {

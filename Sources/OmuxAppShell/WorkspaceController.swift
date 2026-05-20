@@ -158,12 +158,13 @@ public final class WorkspaceController: @unchecked Sendable {
 
         let workspaceID = WorkspaceID()
         let paneTitle = Self.basePaneTitle(for: path)
+        let shellEnvironment = workspaceShellEnvironmentSnapshot()
         let pane = try makePane(
             title: paneTitle,
             workingDirectory: path,
             workspaceID: workspaceID,
             workspaceRootPath: path,
-            shellEnvironment: workspaceShellEnvironmentSnapshot()
+            shellEnvironment: shellEnvironment
         )
         let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
 
@@ -176,7 +177,10 @@ public final class WorkspaceController: @unchecked Sendable {
         )
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: launchSession(for: pane, workspace: workspace), to: pane)
+        _ = try bridge.attach(
+            session: launchSession(for: pane, workspace: workspace, shellEnvironment: shellEnvironment),
+            to: pane
+        )
 
         lock.lock()
         workspaces.append(workspace)
@@ -421,6 +425,19 @@ public final class WorkspaceController: @unchecked Sendable {
             workspaceID: workspace.id,
             workspaceRootPath: workspace.rootPath,
             shellEnvironment: workspaceShellEnvironmentSnapshot()
+        )
+    }
+
+    private func launchSession(
+        for pane: Pane,
+        workspace: Workspace,
+        shellEnvironment: WorkspaceShellEnvironment
+    ) throws -> SessionDescriptor {
+        try launchSession(
+            forRestoredPane: pane,
+            workspaceID: workspace.id,
+            workspaceRootPath: workspace.rootPath,
+            shellEnvironment: shellEnvironment
         )
     }
 
@@ -940,22 +957,23 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func createTab() throws -> Workspace? {
-        let creation = try withControllerLock { () -> (pane: Pane, tab: Tab, workspace: Workspace)? in
+        let creation = try withControllerLock { () -> (pane: Pane, tab: Tab, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
             guard let index = activeWorkspaceIndex else {
                 return nil
             }
 
             let workingDirectory = workspaces[index].rootPath
+            let shellEnvironment = workspaceShellEnvironment
             let pane = try makePane(
                 title: "Shell",
                 workingDirectory: workingDirectory,
                 workspaceID: workspaces[index].id,
                 workspaceRootPath: workspaces[index].rootPath,
-                shellEnvironment: workspaceShellEnvironment
+                shellEnvironment: shellEnvironment
             )
             let tab = Tab(title: "Tab \(workspaces[index].tabs.count + 1)", panes: [pane], focusedPaneID: pane.id)
             workspaces[index].appendTab(tab)
-            return (pane, tab, workspaces[index])
+            return (pane, tab, workspaces[index], shellEnvironment)
         }
 
         guard let creation else {
@@ -964,9 +982,13 @@ public final class WorkspaceController: @unchecked Sendable {
         let pane = creation.pane
         let tab = creation.tab
         let updatedWorkspace = creation.workspace
+        let shellEnvironment = creation.shellEnvironment
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
+        _ = try bridge.attach(
+            session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
+            to: pane
+        )
 
         try hookRunner.emit(
             HookInvocation(
@@ -995,13 +1017,14 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func splitFocusedPane(axis: PaneSplitAxis = .columns) throws -> Workspace? {
-        let split = try withControllerLock { () -> (pane: Pane, workspace: Workspace)? in
+        let split = try withControllerLock { () -> (pane: Pane, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
             guard let index = activeWorkspaceIndex,
                   let focusedPane = workspaces[index].focusedPane
             else {
                 return nil
             }
 
+            let shellEnvironment = workspaceShellEnvironment
             let sourceWorkingDirectory = focusedPane.terminalState.reportedWorkingDirectory
                 ?? focusedPane.terminalSession?.workingDirectory
                 ?? workspaces[index].rootPath
@@ -1010,10 +1033,10 @@ public final class WorkspaceController: @unchecked Sendable {
                 workingDirectory: sourceWorkingDirectory,
                 workspaceID: workspaces[index].id,
                 workspaceRootPath: workspaces[index].rootPath,
-                shellEnvironment: workspaceShellEnvironment
+                shellEnvironment: shellEnvironment
             )
             let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
-            return success ? (pane, workspaces[index]) : nil
+            return success ? (pane, workspaces[index], shellEnvironment) : nil
         }
 
         guard let split else {
@@ -1021,9 +1044,13 @@ public final class WorkspaceController: @unchecked Sendable {
         }
         let pane = split.pane
         let updatedWorkspace = split.workspace
+        let shellEnvironment = split.shellEnvironment
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
+        _ = try bridge.attach(
+            session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
+            to: pane
+        )
 
         try hookRunner.emit(
             HookInvocation(
@@ -1466,7 +1493,7 @@ public final class WorkspaceController: @unchecked Sendable {
         workingDirectory explicitWorkingDirectory: String? = nil,
         title explicitTitle: String? = nil
     ) throws -> Workspace? {
-        let creation = try withControllerLock { () -> (pane: Pane, stackID: PaneStackID, workspace: Workspace)? in
+        let creation = try withControllerLock { () -> (pane: Pane, stackID: PaneStackID, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
             guard let index = activeWorkspaceIndex else {
                 return nil
             }
@@ -1487,12 +1514,13 @@ public final class WorkspaceController: @unchecked Sendable {
                 ?? workspaces[index].rootPath
             let workingDirectory = explicitWorkingDirectory ?? sourceWorkingDirectory
             let title = explicitTitle ?? Self.basePaneTitle(for: workingDirectory)
+            let shellEnvironment = workspaceShellEnvironment
             let pane = try makePane(
                 title: title,
                 workingDirectory: workingDirectory,
                 workspaceID: workspaces[index].id,
                 workspaceRootPath: workspaces[index].rootPath,
-                shellEnvironment: workspaceShellEnvironment
+                shellEnvironment: shellEnvironment
             )
             let success: Bool
             if let paneStackID {
@@ -1500,7 +1528,7 @@ public final class WorkspaceController: @unchecked Sendable {
             } else {
                 success = workspaces[index].createPaneInFocusedStack(pane)
             }
-            return success ? (pane, targetStack.id, workspaces[index]) : nil
+            return success ? (pane, targetStack.id, workspaces[index], shellEnvironment) : nil
         }
 
         guard let creation else {
@@ -1509,9 +1537,13 @@ public final class WorkspaceController: @unchecked Sendable {
         let pane = creation.pane
         let targetStackID = creation.stackID
         let updatedWorkspace = creation.workspace
+        let shellEnvironment = creation.shellEnvironment
 
         _ = try bridge.createSurface(for: pane)
-        _ = try bridge.attach(session: launchSession(for: pane, workspace: updatedWorkspace), to: pane)
+        _ = try bridge.attach(
+            session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
+            to: pane
+        )
 
         try hookRunner.emit(
             HookInvocation(
