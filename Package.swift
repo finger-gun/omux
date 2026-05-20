@@ -134,6 +134,11 @@ targets.append(
             name: "OmuxAppShellTests",
             dependencies: ["OmuxAppShell", "OmuxTerminalBridge", "OmuxCore", "OmuxHooks", "OmuxConfig", "OmuxVault", "OmuxTheme"]
         ),
+        .testTarget(
+            name: "OmuxUITests",
+            dependencies: [],
+            path: "Tests/OmuxUITests"
+        ),
     ]
 )
 

@@ -1,0 +1,82 @@
+name: UI Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ui-test:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Detect UI-relevant path changes
+        id: paths
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ui:
+              - 'Sources/OpenMUXApp/**'
+              - 'Sources/OmuxAppShell/**'
+              - 'Tests/OmuxUITests/**'
+
+      - name: Cache Ghostty build state
+        if: steps.paths.outputs.ui == 'true'
+        id: ghostty-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/tools
+            Vendor/ghostty/macos/GhosttyKit.xcframework
+            Vendor/ghostty/macos/GhosttyKit.xcframework.omux-build-stamp
+            Vendor/ghostty/.zig-cache
+            Vendor/ghostty/zig-out
+          key: ${{ runner.os }}-ghostty-${{ hashFiles('Vendor/ghostty/PINNED_REF', 'Scripts/build-ghostty.sh') }}
+
+      - name: Cache Homebrew downloads
+        if: steps.paths.outputs.ui == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-brew-zig15
+          restore-keys: |
+            ${{ runner.os }}-brew-
+
+      - name: Ensure Metal tools are available
+        if: steps.paths.outputs.ui == 'true' && steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: |
+          if ! xcrun -f metal >/dev/null 2>&1; then
+            sudo xcodebuild -downloadComponent MetalToolchain
+          fi
+
+      - name: Install Zig 0.15
+        if: steps.paths.outputs.ui == 'true' && steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: brew install zig@0.15
+
+      - name: Build vendored Ghostty runtime
+        if: steps.paths.outputs.ui == 'true'
+        run: make setup
+
+      - name: Install xcodegen
+        if: steps.paths.outputs.ui == 'true'
+        run: brew install xcodegen
+
+      - name: Regenerate Xcode project
+        if: steps.paths.outputs.ui == 'true'
+        run: make generate-xcodeproj
+
+      - name: Run UI test suite
+        if: steps.paths.outputs.ui == 'true'
+        run: make ui-test
+
+      - name: Upload UI test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results
+          path: .build/ui-test-results.xcresult

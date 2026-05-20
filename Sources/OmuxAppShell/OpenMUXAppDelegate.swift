@@ -69,7 +69,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             fputs("\(prefix): \(diagnostic.message)\n", stderr)
         }
 
-        let bridge = GhosttyTerminalBridge(compiledConfigPath: preparedConfiguration.compiledConfigURL)
+        let bridge = GhosttyTerminalBridge(
+            runtime: OpenMUXApplication.isUITestMode ? NullGhosttyRuntime() : nil,
+            compiledConfigPath: preparedConfiguration.compiledConfigURL
+        )
         let hookRunner = ExternalHookRunner(
             registry: UserHookDirectoryDiscovery.registry(in: OmuxConfigPaths.hooksDirectoryURL),
             executionMode: .asynchronous

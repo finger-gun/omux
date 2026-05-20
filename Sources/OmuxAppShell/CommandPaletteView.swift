@@ -70,6 +70,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityRole(.group)
+        setAccessibilityElement(true)
 
         panel.wantsLayer = true
         panel.layer?.cornerRadius = Layout.cornerRadius
@@ -124,6 +126,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = resultStack
+        scrollView.setAccessibilityElement(false)
 
         // Assemble search row
         searchRow.addSubview(searchIcon)
@@ -555,7 +558,11 @@ final class CommandPaletteResultRow: NSView {
 
     var clickHandler: ((CommandPaletteResultRow) -> Void)?
     var hoverHandler: ((CommandPaletteResultRow) -> Void)?
-    var rowIndex: Int = 0
+    var rowIndex: Int = 0 {
+        didSet {
+            setAccessibilityIdentifier("\(A11yID.commandPaletteRowPrefix)\(rowIndex)")
+        }
+    }
 
     init(result: CommandPaletteResult, isSelected: Bool, theme: WorkspaceShellTheme, iconProvider: ((String) -> NSImage?)?) {
         self.result = result
@@ -563,6 +570,9 @@ final class CommandPaletteResultRow: NSView {
         self.theme = theme
         self.iconProvider = iconProvider
         super.init(frame: .zero)
+
+        setAccessibilityRole(.button)
+        setAccessibilityElement(true)
 
         wantsLayer = true
         layer?.cornerRadius = Self.cornerRadius

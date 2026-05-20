@@ -1,0 +1,34 @@
+name: OpenMUX
+options:
+  bundleIdPrefix: dev.fingergun.omux
+  deploymentTarget:
+    macOS: "14.0"
+  generateEmptyDirectories: true
+  useBaseInternationalization: false
+
+# No dependency on the local SPM package — the app is built separately via
+# `swift build` and the built binary path is passed in TEST_HOST.
+
+targets:
+  OmuxUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/OmuxUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.fingergun.omux.uitests
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: "NO"
+        GENERATE_INFOPLIST_FILE: "YES"
+        SWIFT_VERSION: "5"
+        SWIFT_STRICT_CONCURRENCY: minimal
+
+schemes:
+  OmuxUITests:
+    build:
+      targets:
+        OmuxUITests: [testing]
+    test:
+      targets:
+        - OmuxUITests

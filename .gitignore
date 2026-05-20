@@ -10,6 +10,9 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 
+# Generated Xcode project (regenerated via `make generate-xcodeproj` using xcodegen)
+OpenMUX.xcodeproj/
+
 # Generated release output
 /dist/
 

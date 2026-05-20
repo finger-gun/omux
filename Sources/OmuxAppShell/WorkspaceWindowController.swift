@@ -103,6 +103,7 @@ final class WorkspaceWindowController: NSWindowController {
         window.title = workspace.name
         window.contentViewController = rootViewController
         window.setContentSize(NSSize(width: 1220, height: 780))
+        window.setAccessibilityIdentifier(A11yID.mainWindow)
         super.init(window: window)
         update(workspace: workspace)
     }
@@ -315,6 +316,8 @@ final class WorkspaceShellViewController: NSViewController {
         vaultToggleButton.action = #selector(toggleVaultSidebarPressed)
         vaultToggleButton.translatesAutoresizingMaskIntoConstraints = false
 
+        sidebarView.setAccessibilityIdentifier(A11yID.workspaceList)
+        canvasView.setAccessibilityIdentifier(A11yID.paneContainer)
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
         if vaultConfiguration.enabled {
@@ -1499,6 +1502,7 @@ final class WorkspaceShellViewController: NSViewController {
             paletteView = existing
         } else {
             paletteView = CommandPaletteView()
+            paletteView.setAccessibilityIdentifier(A11yID.commandPalette)
             commandPaletteView = paletteView
             shellOverlayHostView.present(commandPaletteView: paletteView)
         }
@@ -3108,6 +3112,8 @@ final class WorkspaceSidebarView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        setAccessibilityRole(.group)
+        setAccessibilityElement(true)
 
         container.orientation = .vertical
         container.alignment = .leading
@@ -4889,6 +4895,8 @@ final class WorkspaceCanvasView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        setAccessibilityRole(.group)
+        setAccessibilityElement(true)
     }
 
     @available(*, unavailable)
@@ -6131,6 +6139,9 @@ final class PaneHeaderView: NSView {
         tabScrollView.borderType = .noBorder
         tabScrollView.horizontalScrollElasticity = .allowed
         tabScrollView.verticalScrollElasticity = .none
+        // Allow XCUITest to reach PaneTabButton children directly without the scroll view
+        // intercepting the hit test.
+        tabScrollView.setAccessibilityElement(false)
         tabScrollView.documentView = tabStrip
         tabScrollView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         tabScrollView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -6416,6 +6427,9 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         topBorderLayer.zPosition = 1
         layer?.addSublayer(topBorderLayer)
         identifier = NSUserInterfaceItemIdentifier("pane-tab-\(pane.id.rawValue)")
+        setAccessibilityIdentifier("\(A11yID.paneTabPrefix)\(pane.id.rawValue)")
+        setAccessibilityRole(.button)
+        setAccessibilityElement(true)
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(fullDisplayTitle)" } ?? fullDisplayTitle)
         toolTip = fullDisplayTitle
         setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -7000,6 +7014,11 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         iconImageView.isHidden = iconSymbolImage == nil
         iconImageView.toolTip = item.icon?.accessibilityLabel
         setAccessibilityLabel(item.icon.map { "\($0.accessibilityLabel), \(item.title)" } ?? item.title)
+        if item.kind == .workspace {
+            setAccessibilityIdentifier("\(A11yID.workspaceItemPrefix)\(item.identifier)")
+            setAccessibilityRole(.button)
+            setAccessibilityElement(true)
+        }
         titleField.textColor = item.kind == .terminal
             ? theme.shell.textMuted
             : (item.isActive ? theme.shell.selectedText : theme.shell.textSecondary)

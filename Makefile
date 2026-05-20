@@ -1,4 +1,4 @@
-.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help
+.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help generate-xcodeproj ui-test
 
 help:
 	@printf "OpenMUX development commands\n\n"
@@ -19,6 +19,8 @@ help:
 	@printf "  make dev           Launch OpenMUXApp\n"
 	@printf "  make app           Launch OpenMUXApp\n"
 	@printf "  make cli-help      Show omux CLI help\n"
+	@printf "  make generate-xcodeproj Regenerate OpenMUX.xcodeproj from project.yml (requires xcodegen)\n"
+	@printf "  make ui-test       Run the XCUIAutomation GUI test suite via xcodebuild\n"
 
 setup: build-ghostty
 
@@ -67,3 +69,16 @@ app: dev
 
 cli-help:
 	swift run omux help
+
+generate-xcodeproj:
+	xcodegen generate --spec project.yml
+
+ui-test: build
+	rm -rf .build/ui-test-results.xcresult .build/UITestApp
+	./Scripts/wrap-app-for-uitest.sh
+	xcodebuild test \
+		-project OpenMUX.xcodeproj \
+		-scheme OmuxUITests \
+		-destination "platform=macOS" \
+		-resultBundlePath .build/ui-test-results.xcresult \
+		$(if $(UI_TEST),-only-testing OmuxUITests/$(UI_TEST))
