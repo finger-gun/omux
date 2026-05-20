@@ -5,7 +5,7 @@ import XCTest
 extension WorkspaceTests {
     /// Returns all workspace sidebar item buttons using the "omux.workspaceItem." identifier prefix.
     func workspaceItemButtons() -> XCUIElementQuery {
-        nonisolated(unsafe) let prefix = A11yID.workspaceItemPrefix
+        let prefix = A11yID.workspaceItemPrefix
         return app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", prefix)
         )
@@ -14,7 +14,7 @@ extension WorkspaceTests {
     /// Waits for at least `count` workspace item buttons to exist.
     @discardableResult
     func waitForWorkspaceItems(atLeast count: Int, timeout: TimeInterval = 5) -> Bool {
-        nonisolated(unsafe) let predicate = NSPredicate(format: "count >= \(count)")
+        let predicate = NSPredicate(format: "count >= \(count)")
         let result = XCTWaiter.wait(for: [
             XCTNSPredicateExpectation(predicate: predicate, object: workspaceItemButtons())
         ], timeout: timeout)

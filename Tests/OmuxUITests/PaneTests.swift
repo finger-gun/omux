@@ -86,8 +86,6 @@ final class PaneTests: OmuxUITestsBase {
     // MARK: - Rename via context menu
 
     func testRenamePaneTabViaContextMenu() {
-        let menuBar = app.menuBars.firstMatch
-
         // Ensure at least one pane tab is visible.
         XCTAssertTrue(
             waitForPaneTabs(atLeast: 1),

@@ -32,6 +32,14 @@ final class WorkspaceRootView: NSView {
             return
         }
 
+        // If the click lands on an interactive subview (e.g. a pane tab button),
+        // let the normal responder chain handle it rather than initiating a window drag.
+        let point = convert(event.locationInWindow, from: nil)
+        if let hit = hitTest(point), hit !== self, hit.acceptsFirstResponder || hit is NSButton {
+            super.mouseDown(with: event)
+            return
+        }
+
         guard let window else {
             return
         }

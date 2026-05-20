@@ -45,7 +45,7 @@ final class CommandPaletteTests: OmuxUITestsBase {
             .completed,
             "Palette search field should become hittable within 3 seconds"
         )
-        searchField.tap()
+        searchField.click()
 
         // Verify row 0 appears in the accessibility tree (unfiltered state).
         nonisolated(unsafe) let rowPredicate = NSPredicate(format: "identifier == %@", "\(A11yID.commandPaletteRowPrefix)0")

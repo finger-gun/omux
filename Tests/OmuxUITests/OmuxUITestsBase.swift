@@ -13,6 +13,7 @@ import XCTest
 // Note: XCTest always calls setUp/tearDown on the main thread, so
 // nonisolated(unsafe) is safe here — no concurrent access occurs.
 
+@MainActor
 class OmuxUITestsBase: XCTestCase {
     // Shared across all tests in the same class.
     nonisolated(unsafe) static var sharedApp: XCUIApplication!
