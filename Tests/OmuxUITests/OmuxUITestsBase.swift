@@ -67,8 +67,8 @@ class OmuxUITestsBase: XCTestCase {
     // Called once after the last test method in the class finishes.
     nonisolated override class func tearDown() {
         MainActor.assumeIsolated {
-            if sharedApp?.state != .notRunning {
-                sharedApp.terminate()
+            if let app = sharedApp, app.state != .notRunning {
+                app.terminate()
             }
             sharedApp = nil
         }

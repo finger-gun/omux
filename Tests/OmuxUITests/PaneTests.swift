@@ -276,6 +276,10 @@ final class PaneTests: OmuxUITestsBase {
         XCTAssertTrue(sourceTab.waitForExistence(timeout: 5), "Source pane tab should exist")
         XCTAssertTrue(targetTab.waitForExistence(timeout: 5), "Target pane tab should exist")
 
+        // Capture labels before drag so we can verify order changed after.
+        let labelBefore0 = paneTabButtons().element(boundBy: 0).label
+        let labelBefore1 = paneTabButtons().element(boundBy: 1).label
+
         // Use coordinate-based drag to bypass XCUITest's hittability gate.
         // element.press(forDuration:thenDragTo:) checks hittability on the source element
         // before injecting; coordinate-based synthesis skips that check.
@@ -289,5 +293,17 @@ final class PaneTests: OmuxUITestsBase {
         )], timeout: 5)
         XCTAssertEqual(postDragResult, .completed, "Both pane tabs should still exist after drag")
         XCTAssertTrue(app.state == .runningForeground, "App should still be running after pane tab drag")
+
+        // Verify tab order changed: the element at index 0 after drag should carry the
+        // label that was at index 1 before drag (and vice-versa). If the labels are
+        // identical the reorder is unobservable via the a11y tree — skip that assertion
+        // so the test does not false-fail when both tabs carry the same default name.
+        if labelBefore0 != labelBefore1 {
+            let labelAfter0 = paneTabButtons().element(boundBy: 0).label
+            XCTAssertEqual(
+                labelAfter0, labelBefore1,
+                "After drag-to-reorder the first tab should carry the label that was second before"
+            )
+        }
     }
 }

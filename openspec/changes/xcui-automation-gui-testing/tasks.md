@@ -52,8 +52,8 @@
 
 ## 8. Validation
 
-- [ ] 8.1 Run `make ui-test` locally; confirm all test cases pass (the implementation includes 14 individual test methods across five test suite files: AppLaunchTests, WorkspaceTests, PaneTests, CommandPaletteTests, SettingsTests)
-- [ ] 8.2 Open a draft pull request and confirm the `ui-test` GitHub Actions job runs and passes
-- [ ] 8.3 Introduce a deliberate test failure, confirm the job fails and the `.xcresult` artifact is uploaded
-- [ ] 8.4 Revert the deliberate failure and confirm the job returns to green
-- [ ] 8.5 Run `make smoke` and `make verify` to confirm existing test layers are unaffected
+- [x] 8.1 Run `make ui-test` locally; confirm all test cases pass (the implementation includes 14 individual test methods across five test suite files: AppLaunchTests, WorkspaceTests, PaneTests, CommandPaletteTests, SettingsTests)
+- [x] 8.2 Open a draft pull request and confirm the `ui-test` GitHub Actions job runs and passes
+- [x] 8.3 Introduce a deliberate test failure, confirm the job fails and the `.xcresult` artifact is uploaded
+- [x] 8.4 Revert the deliberate failure and confirm the job returns to green
+- [x] 8.5 Run `make smoke` and `make verify` to confirm existing test layers are unaffected
