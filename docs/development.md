@@ -257,3 +257,66 @@ The current shell is usable, but it is still intentionally narrow:
 
 - Workspace layout persistence in `OpenMUXAppDelegate` must be scheduled through `WorkspaceLayoutPersistenceCoordinator` so bursty `onChange` updates are coalesced. Lifecycle boundaries that need durability (quit, power-off, full-state writes) should call the coordinator flush path.
 - `WorkspaceController` pane/session/tab/workspace target resolution should prefer the internal lookup indexes and keep index invalidation hooks aligned with every state mutation. If new mutations are added, update index dirtiness/rebuild wiring in the same change.
+
+## UI tests
+
+OpenMUX has an XCUIAutomation GUI test suite that launches a sandboxed debug build of the app and drives it through the accessibility tree.
+
+### Running the tests
+
+```bash
+# Full suite
+make ui-test
+
+# Single test class
+make ui-test UI_TEST=PaneTests
+
+# Single test method
+make ui-test UI_TEST=PaneTests/testDragPaneTabToCreateSplit
+```
+
+`make ui-test` builds the app, wraps it into `.build/UITestApp/OpenMUX.app` with bundle ID `dev.fingergun.omux.debug`, registers it with `lsregister`, regenerates the Xcode project, and runs `xcodebuild test`.
+
+Results land in `.build/ui-test-results.xcresult`. On CI the suite runs as a separate workflow (`.github/workflows/ui-tests.yml`) and only triggers when `Sources/OmuxAppShell`, `Sources/OpenMUXApp`, or `Tests/OmuxUITests` change.
+
+### Structure
+
+| File | Purpose |
+| --- | --- |
+| `Tests/OmuxUITests/OmuxUITestsBase.swift` | Base class — launches the debug app, waits for `omux.mainWindow`, tears down |
+| `Tests/OmuxUITests/A11yID+UITests.swift` | Mirror of `A11yID` constants for use in test targets |
+| `Tests/OmuxUITests/*Tests.swift` | One file per feature area |
+
+Each test class inherits `OmuxUITestsBase`. The `app` property is the running `XCUIApplication`.
+
+### Accessibility identifiers
+
+UI-testable elements get stable identifiers via `A11yID` in `Sources/OmuxAppShell/A11yID.swift`. Fixed identifiers are `static let` string constants; dynamic ones use a prefix constant (e.g. `A11yID.paneTabPrefix`) combined with a stable ID.
+
+Set identifiers on `NSView` subclasses with:
+
+```swift
+setAccessibilityIdentifier(A11yID.myElement)
+setAccessibilityRole(.button)   // or .group for containers
+setAccessibilityElement(true)
+```
+
+Mirror every constant added to `A11yID.swift` in `A11yID+UITests.swift` so the test target can reference them without importing `OmuxAppShell`.
+
+### Querying elements
+
+Use `app.descendants(matching: .any).matching(predicate)` for elements with dynamic identifiers (role-based queries like `app.buttons` are unreliable for custom `NSView` subclasses):
+
+```swift
+nonisolated(unsafe) let pred = NSPredicate(format: "identifier BEGINSWITH %@", A11yID.paneTabPrefix)
+let tabs = app.descendants(matching: .any).matching(pred)
+```
+
+For fixed identifiers use `app.groups[A11yID.commandPalette.rawValue]` directly.
+
+### Adding a new test
+
+1. Add accessibility identifiers to `A11yID.swift` for any new elements, and mirror them in `A11yID+UITests.swift`.
+2. Add `setAccessibilityRole`, `setAccessibilityElement(true)`, and `setAccessibilityIdentifier` calls to the relevant `NSView` subclass.
+3. Add a method to an existing `*Tests.swift` file, or create a new one that subclasses `OmuxUITestsBase`.
+4. Verify locally with `make ui-test UI_TEST=MyTests/testMyNewTest` before pushing.
