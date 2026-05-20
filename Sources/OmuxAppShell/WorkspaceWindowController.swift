@@ -6500,6 +6500,18 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
     override var acceptsFirstResponder: Bool { false }
     override var mouseDownCanMoveWindow: Bool { false }
 
+    // XCUITest determines isHittable for custom NSControl subclasses by checking
+    // whether accessibilityPerformPress() is implemented. Without this override,
+    // the button exists in the a11y tree but is not considered hittable by the
+    // test framework — especially on headless CI runners where there is no key
+    // window guarantee. Implementing this makes the element interactable for both
+    // XCUITest and assistive technologies without changing first-responder behaviour.
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        onPress?()
+        return true
+    }
+
     override var isEnabled: Bool {
         didSet {
             updateVisualState()

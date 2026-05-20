@@ -172,6 +172,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             if let window = windowController.window {
                 window.center()
                 window.makeKeyAndOrderFront(self)
+                // On headless CI runners, makeKeyAndOrderFront alone is not enough
+                // because the window server may not grant key-window status without
+                // an active user session. orderFrontRegardless bypasses that check
+                // and ensures the window is interactive for XCUITest.
+                if OpenMUXApplication.isUITestMode {
+                    window.orderFrontRegardless()
+                }
             }
             NSApplication.shared.activate(ignoringOtherApps: true)
             configurationCoordinator.onThemeChange = { [weak self] theme in
