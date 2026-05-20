@@ -201,6 +201,16 @@ final class PaneTests: OmuxUITestsBase {
             object: paneContainer.children(matching: .any)
         )], timeout: 5)
         XCTAssertEqual(splitResult, .completed, "Pane container should contain at least two children after drag-to-split")
+
+        // Teardown: collapse the split by removing the active pane, restoring a single-pane layout
+        // so subsequent tests in this class start from a known state.
+        let menuBar = app.menuBars.firstMatch
+        menuBar.menuBarItems["Pane"].click()
+        menuBar.menuBarItems["Pane"].menuItems["Remove Active Pane"].click()
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count < 2"),
+            object: paneContainer.children(matching: .any)
+        )], timeout: 5)
     }
 
     // MARK: - Drag/drop: pane tab reorder
