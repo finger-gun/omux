@@ -19,6 +19,18 @@ extension PaneTests {
         ], timeout: timeout)
         return result == .completed
     }
+
+    /// Performs a right-click at the centre of an element using coordinate-based synthesis.
+    /// Bypasses XCUITest's hittability gate, which can refuse element-level rightClick()
+    /// on headless CI runners where the window is not the key window.
+    func rightClickCenter(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+    }
+
+    /// Performs a double-click at the centre of an element using coordinate-based synthesis.
+    func doubleClickCenter(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleClick()
+    }
 }
 
 final class PaneTests: OmuxUITestsBase {
@@ -121,8 +133,12 @@ final class PaneTests: OmuxUITestsBase {
         let tab = paneTabButtons().firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "First pane tab should exist")
 
-        // Right-click to open context menu, then choose "Rename…".
-        tab.rightClick()
+        // Use coordinate-based right-click to bypass XCUITest's hittability gate.
+        // On headless CI runners, element-level rightClick() fails with "not hittable"
+        // when the window is not the key window, even though the element exists in the
+        // a11y tree. Coordinate-based synthesis injects the event at the screen position
+        // directly, bypassing the gate.
+        rightClickCenter(tab)
         let renameItem = app.menuItems["Rename…"]
         XCTAssertTrue(renameItem.waitForExistence(timeout: 3), "Rename… menu item should appear in context menu")
         renameItem.click()
@@ -136,7 +152,7 @@ final class PaneTests: OmuxUITestsBase {
 
         let nameField = sheet.textFields.firstMatch
         XCTAssertTrue(nameField.waitForExistence(timeout: 3), "Name text field should exist in the sheet")
-        nameField.click()
+        nameField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText("My Renamed Tab")
 
@@ -164,8 +180,8 @@ final class PaneTests: OmuxUITestsBase {
         let tab = paneTabButtons().firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "First pane tab should exist")
 
-        // Double-click triggers inline rename on the tab's title label.
-        tab.doubleClick()
+        // Use coordinate-based double-click to bypass the hittability gate.
+        doubleClickCenter(tab)
 
         // The inline editor is a text field that becomes first responder.
         // We target it via the window's focused element (typeText goes to first responder).
@@ -209,6 +225,7 @@ final class PaneTests: OmuxUITestsBase {
             withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
         )
 
+        // Coordinate-based drag — bypasses hittability gate.
         sourceTab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.3, thenDragTo: targetCoord)
 
@@ -259,12 +276,13 @@ final class PaneTests: OmuxUITestsBase {
         XCTAssertTrue(sourceTab.waitForExistence(timeout: 5), "Source pane tab should exist")
         XCTAssertTrue(targetTab.waitForExistence(timeout: 5), "Target pane tab should exist")
 
-        // Drag first tab onto second tab.
-        sourceTab.press(forDuration: 0.1, thenDragTo: targetTab)
+        // Use coordinate-based drag to bypass XCUITest's hittability gate.
+        // element.press(forDuration:thenDragTo:) checks hittability on the source element
+        // before injecting; coordinate-based synthesis skips that check.
+        sourceTab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.3, thenDragTo: targetTab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
 
         // After drag the app must still be alive with two tabs.
-        // Also verify the tabs collection still reports at least 2 entries —
-        // if the reorder collapsed a tab the count would drop.
         let postDragResult = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "count >= 2"),
             object: paneTabButtons()
