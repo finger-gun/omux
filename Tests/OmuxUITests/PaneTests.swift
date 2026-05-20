@@ -22,6 +22,32 @@ extension PaneTests {
 }
 
 final class PaneTests: OmuxUITestsBase {
+
+    // After each test, close any extra pane tabs so the next test starts
+    // from a known single-tab state. This prevents alphabetical test ordering
+    // from leaking state (e.g. testDragPaneTabToCreateSplit leaving extra tabs
+    // that make subsequent tab interactions fail).
+    override func tearDown() {
+        let menuBar = app.menuBars.firstMatch
+        // Close tabs until only one remains. Guard against infinite loops with a
+        // fixed iteration cap — there are never more than ~10 tabs in any test.
+        for _ in 0..<10 {
+            guard paneTabButtons().count > 1 else { break }
+            menuBar.menuBarItems["Pane"].click()
+            let closeItem = menuBar.menuBarItems["Pane"].menuItems["Close Pane Tab"]
+            guard closeItem.exists else {
+                menuBar.typeKey(.escape, modifierFlags: [])
+                break
+            }
+            closeItem.click()
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "count <= 1"),
+                object: paneTabButtons()
+            )], timeout: 2)
+        }
+        super.tearDown()
+    }
+
     func testPaneSplitAndClose() {
         let paneContainer = app.groups[A11yID.paneContainer.rawValue]
         let menuBar = app.menuBars.firstMatch

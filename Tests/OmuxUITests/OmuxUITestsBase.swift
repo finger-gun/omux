@@ -42,13 +42,20 @@ class OmuxUITestsBase: XCTestCase {
 
             // Ensure the app is front-most and the window is key before any test
             // interacts with on-screen elements. On headless CI runners the app may
-            // exist in the a11y tree but its elements report isHittable == false
-            // unless the app is explicitly activated and given a moment to become
-            // the active application. Menu-bar interactions work without this, but
-            // direct element clicks/drags (pane tabs, text fields) require it.
+            // exist in the a11y tree but coordinate-based gestures (rightClick,
+            // doubleClick, press:thenDragTo:) fail unless the window is the key
+            // window. We use two steps:
+            // 1. activate() makes the app frontmost.
+            // 2. Click the window's content area (below the titlebar) to force the
+            //    window server to grant key-window status — this works even on
+            //    headless runners where makeKeyAndOrderFront can be ignored.
             a.activate()
+            // Click centre of the window content area. The window titlebar is ~28pt
+            // tall; clicking at (0.5, 0.6) lands safely in the terminal content and
+            // makes the window key without triggering any UI action.
+            mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).click()
 
-            // Wait for the main window to become hittable (proxy for "window is key").
+            // Wait for the main window to become hittable (confirms window is key).
             let hittable = NSPredicate(format: "isHittable == true")
             _ = XCTWaiter.wait(
                 for: [XCTNSPredicateExpectation(predicate: hittable, object: mainWindow)],
