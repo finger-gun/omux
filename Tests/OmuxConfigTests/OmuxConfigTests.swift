@@ -279,6 +279,63 @@ struct OmuxConfigTests {
         let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
         #expect(result.hasErrors == false)
         #expect(result.config.workspace.defaultRootPath == projectRoot.standardizedFileURL.path)
+        #expect(result.config.workspace.isolateShellHistory == true)
+    }
+
+    @Test
+    func loadsWorkspaceShellHistoryIsolationSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [workspace]
+            isolate_shell_history = false
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.workspace.defaultRootPath == OmuxConfig.defaults.workspace.defaultRootPath)
+        #expect(result.config.workspace.isolateShellHistory == false)
+    }
+
+    @Test
+    func defaultsWorkspaceShellHistoryIsolationToEnabled() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.workspace.isolateShellHistory == true)
+    }
+
+    @Test
+    func rejectsInvalidWorkspaceShellHistoryIsolationSetting() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [workspace]
+            isolate_shell_history = "sometimes"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains(where: { $0.message.contains("workspace.isolate_shell_history must be a boolean") }))
+        #expect(result.config.workspace == OmuxConfig.defaults.workspace)
     }
 
     @Test
@@ -686,6 +743,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("# persist_scrollback_bytes = 1048576"))
         #expect(contents.contains("# auto_check_update = true"))
         #expect(contents.contains("default_root_path = \"~\""))
+        #expect(contents.contains("isolate_shell_history = true"))
         #expect(contents.contains("[ui.panes]"))
         #expect(contents.contains("# inactive_opacity = 0.5"))
         #expect(contents.contains("# idle_status_clear = \"on-focus\""))

@@ -41,6 +41,7 @@ name = "monokai-soda"
 
 [workspace]
 default_root_path = "~"
+isolate_shell_history = true
 
 [ui.panes]
 # inactive_opacity = 0.5
@@ -364,6 +365,7 @@ OpenMUX currently models these workspace settings directly:
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `default_root_path` | string | Default workspace root used when OpenMUX opens a workspace without an explicit path. |
+| `isolate_shell_history` | boolean | Use a workspace-scoped shell history file for OpenMUX-launched terminal sessions. Defaults to `true`. |
 
 ### `workspace.default_root_path`
 
@@ -377,6 +379,27 @@ default_root_path = "~/projects"
 ```
 
 The path must resolve to an existing directory. `~` and `~/...` expand to the current user's home directory. If unset, OpenMUX uses the current user's home directory.
+
+### `workspace.isolate_shell_history`
+
+`isolate_shell_history` controls whether OpenMUX sets `HISTFILE` for launched terminal sessions. It defaults to `true`, so each workspace gets its own shell command history while panes and pane tabs inside the same workspace share that workspace history file.
+
+OpenMUX also exposes workspace context variables to launched sessions:
+
+```text
+OMUX_WORKSPACE_ID
+OMUX_WORKSPACE_ROOT
+OMUX_WORKSPACE_HISTORY
+```
+
+Set the option to `false` to leave shell history file selection entirely to your shell configuration:
+
+```toml
+[workspace]
+isolate_shell_history = false
+```
+
+Shell startup files remain authoritative. If your `.zshrc`, `.bashrc`, or equivalent startup file resets `HISTFILE` or changes history sharing behavior, those shell settings can override OpenMUX's launch environment.
 
 ## `[ui.panes]` settings
 

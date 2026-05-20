@@ -203,7 +203,14 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         let session = SessionDescriptor(
             shell: "/bin/sh",
             workingDirectory: "/tmp",
-            environment: ["OMUX_RESTORE_SCROLLBACK_FILE": "/tmp/replay.ansi", "SHELL": "/bin/zsh"]
+            environment: [
+                "OMUX_RESTORE_SCROLLBACK_FILE": "/tmp/replay.ansi",
+                "SHELL": "/bin/zsh",
+                OpenMUXWorkspaceEnvironment.workspaceIDKey: "workspace-test",
+                OpenMUXWorkspaceEnvironment.workspaceRootKey: "/tmp/project",
+                OpenMUXWorkspaceEnvironment.workspaceHistoryKey: "/tmp/history",
+                OpenMUXWorkspaceEnvironment.shellHistoryFileKey: "/tmp/history",
+            ]
         )
         let pane = Pane(title: "Main", session: session)
 

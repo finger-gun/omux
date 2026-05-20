@@ -7,6 +7,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let autoCheckUpdate: Bool
         public let themeName: String
         public let workspaceDefaultRootPath: String
+        public let workspaceIsolateShellHistory: Bool
         public let inactivePaneOpacity: Double
         public let idleStatusClear: String
         public let iconsEnabled: Bool
@@ -51,6 +52,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
 
     public struct Workspace: Codable, Equatable, Sendable {
         public let defaultRootPath: String
+        public let isolateShellHistory: Bool
     }
 
     public struct UI: Codable, Equatable, Sendable {
@@ -114,6 +116,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
 
     public struct Workspace: Codable, Equatable, Sendable {
         public var defaultRootPath: String?
+        public var isolateShellHistory: Bool?
     }
 
     public struct UI: Codable, Equatable, Sendable {
@@ -317,7 +320,8 @@ public struct OmuxConfigEditor {
                 persistedScrollback: persistedScrollback
             ),
             workspace: OmuxConfigWorkspace(
-                defaultRootPath: payload.workspace?.defaultRootPath ?? current.workspace.defaultRootPath
+                defaultRootPath: payload.workspace?.defaultRootPath ?? current.workspace.defaultRootPath,
+                isolateShellHistory: payload.workspace?.isolateShellHistory ?? current.workspace.isolateShellHistory
             ),
             ui: OmuxConfigUI(
                 panes: OmuxConfigUI.Panes(
@@ -412,7 +416,7 @@ public struct OmuxConfigEditor {
                     "maxBytes": true,
                 ],
             ],
-            "workspace": ["defaultRootPath": true],
+            "workspace": ["defaultRootPath": true, "isolateShellHistory": true],
             "ui": [
                 "panes": [
                     "inactiveOpacity": true,
@@ -491,6 +495,7 @@ public enum OmuxConfigRenderer {
         lines.append("")
         lines.append("[workspace]")
         lines.append("default_root_path = \(render(.string(config.workspace.defaultRootPath)))")
+        lines.append("isolate_shell_history = \(config.workspace.isolateShellHistory ? "true" : "false")")
         lines.append("")
         lines.append("[ui.icons]")
         lines.append("enabled = \(config.ui.icons.enabled ? "true" : "false")")
@@ -570,7 +575,10 @@ private extension OmuxConfigExport.Values {
             autoCheckUpdate: config.autoCheckUpdate,
             themeName: config.theme.name,
             terminal: .init(config: config.terminal),
-            workspace: .init(defaultRootPath: config.workspace.defaultRootPath),
+            workspace: .init(
+                defaultRootPath: config.workspace.defaultRootPath,
+                isolateShellHistory: config.workspace.isolateShellHistory
+            ),
             ui: .init(config: config.ui),
             plugins: .init(config: config.plugins),
             registries: .init(hooks: config.registries.hooks, plugins: config.registries.plugins)
@@ -585,6 +593,7 @@ private extension OmuxConfigExport.Defaults {
             autoCheckUpdate: config.autoCheckUpdate,
             themeName: config.theme.name,
             workspaceDefaultRootPath: config.workspace.defaultRootPath,
+            workspaceIsolateShellHistory: config.workspace.isolateShellHistory,
             inactivePaneOpacity: config.ui.panes.inactiveOpacity,
             idleStatusClear: config.ui.panes.idleStatusClear.rawValue,
             iconsEnabled: config.ui.icons.enabled,

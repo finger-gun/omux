@@ -61,6 +61,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview
     private var aiStatusConfiguration: OmuxConfigPlugins.AIStatus
     private var paneConfiguration: OmuxConfigUI.Panes
+    private var workspaceShellEnvironment: WorkspaceShellEnvironment
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
     private var defaultWorkspaceRootPath: String
@@ -112,6 +113,8 @@ public final class WorkspaceController: @unchecked Sendable {
         hookRunner: ExternalHookRunner,
         defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        isolateShellHistory: Bool = OmuxConfigWorkspace.defaultIsolateShellHistory,
+        workspaceShellStateDirectoryURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("OpenMUX-WorkspaceShellHistory", isDirectory: true),
         paneConfiguration: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
@@ -124,6 +127,10 @@ public final class WorkspaceController: @unchecked Sendable {
         self.bridge = bridge
         self.hookRunner = hookRunner
         self.persistedScrollback = persistedScrollback
+        self.workspaceShellEnvironment = WorkspaceShellEnvironment(
+            isolateShellHistory: isolateShellHistory,
+            stateDirectoryURL: workspaceShellStateDirectoryURL
+        )
         self.paneConfiguration = paneConfiguration
         self.markdownPreviewConfiguration = markdownPreviewConfiguration
         self.aiStatusConfiguration = aiStatusConfiguration
@@ -137,15 +144,17 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     public func openWorkspace(at path: String) throws -> Workspace {
-        let paneTitle = Self.basePaneTitle(for: path)
-        let pane = makePane(title: paneTitle, workingDirectory: path)
-        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
-
         lock.lock()
         let generatedWorkspaceName = nextGeneratedWorkspaceName()
         lock.unlock()
 
+        let workspaceID = WorkspaceID()
+        let paneTitle = Self.basePaneTitle(for: path)
+        let pane = makePane(title: paneTitle, workingDirectory: path, workspaceID: workspaceID, workspaceRootPath: path)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+
         let workspace = Workspace(
+            id: workspaceID,
             generatedName: generatedWorkspaceName,
             rootPath: path,
             tabs: [tab],
@@ -358,7 +367,7 @@ public final class WorkspaceController: @unchecked Sendable {
         if let restoredActiveWorkspace = restoredActiveWorkspaceID.flatMap({ activeID in
             restoredWorkspaces.first(where: { $0.id == activeID })
         }) {
-            try ensureTerminalSurfaces(for: Self.visibleTerminalPanes(in: restoredActiveWorkspace))
+            try ensureTerminalSurfaces(in: restoredActiveWorkspace)
         }
 
         lock.lock()
@@ -386,17 +395,22 @@ public final class WorkspaceController: @unchecked Sendable {
             lock.unlock()
             return nil
         }
-        let visiblePanes = Self.visibleTerminalPanes(in: workspace)
         lock.unlock()
 
-        try ensureTerminalSurfaces(for: visiblePanes)
+        try ensureTerminalSurfaces(in: workspace)
         return workspace
     }
 
-    private func launchSession(forRestoredPane pane: Pane) -> SessionDescriptor {
+    private func launchSession(forRestoredPane pane: Pane, workspaceID: WorkspaceID, workspaceRootPath: String) -> SessionDescriptor {
         guard let session = pane.terminalSession else {
             preconditionFailure("Cannot launch a terminal session for extension pane \(pane.id.rawValue)")
         }
+        workspaceShellEnvironment.prepareHistoryStorage(for: workspaceID)
+        let workspaceSession = workspaceShellEnvironment.applyingWorkspaceContext(
+            to: session,
+            workspaceID: workspaceID,
+            workspaceRootPath: workspaceRootPath
+        )
 
         let persistedScrollback = currentPersistedScrollback()
         guard persistedScrollback.enabled,
@@ -407,22 +421,30 @@ public final class WorkspaceController: @unchecked Sendable {
                   maxBytes: persistedScrollback.maxBytes,
                   maxLines: persistedScrollback.maxLines
               ),
-              let launch = scrollbackReplayWrapperStore.prepareLaunch(baseSession: session, replay: replay)
+              let launch = scrollbackReplayWrapperStore.prepareLaunch(baseSession: workspaceSession, replay: replay)
         else {
-            return session
+            return workspaceSession
         }
 
         return launch.session
     }
 
-    private func ensureTerminalSurfaces(for panes: [Pane]) throws {
-        for pane in panes {
-            try ensureTerminalSurface(for: pane)
+    private func ensureTerminalSurfaces(in workspace: Workspace) throws {
+        for pane in Self.visibleTerminalPanes(in: workspace) {
+            try ensureTerminalSurface(
+                for: pane,
+                workspaceID: workspace.id,
+                workspaceRootPath: workspace.rootPath
+            )
         }
     }
 
     @discardableResult
-    private func ensureTerminalSurface(for pane: Pane) throws -> Bool {
+    private func ensureTerminalSurface(
+        for pane: Pane,
+        workspaceID: WorkspaceID,
+        workspaceRootPath: String
+    ) throws -> Bool {
         guard pane.isTerminal else {
             return false
         }
@@ -430,7 +452,10 @@ public final class WorkspaceController: @unchecked Sendable {
             return false
         }
 
-        _ = try bridge.attach(session: launchSession(forRestoredPane: pane), to: pane)
+        _ = try bridge.attach(
+            session: launchSession(forRestoredPane: pane, workspaceID: workspaceID, workspaceRootPath: workspaceRootPath),
+            to: pane
+        )
         return true
     }
 
@@ -438,14 +463,16 @@ public final class WorkspaceController: @unchecked Sendable {
     private func ensureTerminalSurface(for paneID: PaneID) throws -> Bool {
         lock.lock()
         guard let location = paneLocationLocked(for: paneID),
-              let pane = workspacePaneLocked(at: location)?.pane
+              let resolution = workspacePaneLocked(at: location)
         else {
             lock.unlock()
             return false
         }
+        let workspace = resolution.workspace
+        let pane = resolution.pane
         lock.unlock()
 
-        return try ensureTerminalSurface(for: pane)
+        return try ensureTerminalSurface(for: pane, workspaceID: workspace.id, workspaceRootPath: workspace.rootPath)
     }
 
     private static func visibleTerminalPanes(in workspace: Workspace) -> [Pane] {
@@ -725,6 +752,12 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func updateShellHistoryIsolation(_ isolateShellHistory: Bool) {
+        lock.lock()
+        workspaceShellEnvironment.isolateShellHistory = isolateShellHistory
+        lock.unlock()
+    }
+
     public func updateMarkdownPreviewConfiguration(_ configuration: OmuxConfigPlugins.MarkdownPreview) {
         lock.lock()
         markdownPreviewConfiguration = configuration
@@ -881,7 +914,12 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         let workingDirectory = workspaces[index].rootPath
-        let pane = makePane(title: "Shell", workingDirectory: workingDirectory)
+        let pane = makePane(
+            title: "Shell",
+            workingDirectory: workingDirectory,
+            workspaceID: workspaces[index].id,
+            workspaceRootPath: workspaces[index].rootPath
+        )
         let tab = Tab(title: "Tab \(workspaces[index].tabs.count + 1)", panes: [pane], focusedPaneID: pane.id)
         workspaces[index].appendTab(tab)
         let updatedWorkspace = workspaces[index]
@@ -930,7 +968,9 @@ public final class WorkspaceController: @unchecked Sendable {
             ?? workspaces[index].rootPath
         let pane = makePane(
             title: Self.basePaneTitle(for: sourceWorkingDirectory),
-            workingDirectory: sourceWorkingDirectory
+            workingDirectory: sourceWorkingDirectory,
+            workspaceID: workspaces[index].id,
+            workspaceRootPath: workspaces[index].rootPath
         )
         let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
         let updatedWorkspace = success ? workspaces[index] : nil
@@ -1409,7 +1449,9 @@ public final class WorkspaceController: @unchecked Sendable {
         let title = explicitTitle ?? Self.basePaneTitle(for: workingDirectory)
         let pane = makePane(
             title: title,
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            workspaceID: workspaces[index].id,
+            workspaceRootPath: workspaces[index].rootPath
         )
         let success: Bool
         if let paneStackID {
@@ -3575,9 +3617,20 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
-    private func makePane(title: String, workingDirectory: String) -> Pane {
+    private func makePane(
+        title: String,
+        workingDirectory: String,
+        workspaceID: WorkspaceID,
+        workspaceRootPath: String
+    ) -> Pane {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let session = SessionDescriptor(shell: shell, workingDirectory: workingDirectory)
+        let baseSession = SessionDescriptor(shell: shell, workingDirectory: workingDirectory)
+        workspaceShellEnvironment.prepareHistoryStorage(for: workspaceID)
+        let session = workspaceShellEnvironment.applyingWorkspaceContext(
+            to: baseSession,
+            workspaceID: workspaceID,
+            workspaceRootPath: workspaceRootPath
+        )
         return Pane(title: title, session: session)
     }
 

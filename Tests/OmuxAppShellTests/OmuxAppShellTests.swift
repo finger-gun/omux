@@ -392,6 +392,83 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
     }
 
+    func testWorkspaceShellHistoryIsIsolatedAcrossWorkspaces() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let first = try controller.openWorkspace(at: "/tmp/first")
+        let second = try controller.openWorkspace(at: "/tmp/second")
+        let firstPane = try XCTUnwrap(first.focusedPane)
+        let secondPane = try XCTUnwrap(second.focusedPane)
+        let firstSurfaceID = try XCTUnwrap(bridge.surface(for: firstPane.id)?.runtimeSurfaceID)
+        let secondSurfaceID = try XCTUnwrap(bridge.surface(for: secondPane.id)?.runtimeSurfaceID)
+        let firstEnvironment = try XCTUnwrap(runtime.session(for: firstSurfaceID)?.environment)
+        let secondEnvironment = try XCTUnwrap(runtime.session(for: secondSurfaceID)?.environment)
+
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey], first.id.rawValue)
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey], "/tmp/first")
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey], second.id.rawValue)
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey], "/tmp/second")
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey], firstEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey], secondEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertNotEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey], secondEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+    }
+
+    func testWorkspaceShellHistoryIsSharedWithinWorkspace() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane())
+        let splitPane = try XCTUnwrap(splitWorkspace.focusedPane)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let paneTab = try XCTUnwrap(paneTabWorkspace.focusedPane)
+
+        let historyValues = try [firstPane, splitPane, paneTab].map { pane in
+            let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+            return try XCTUnwrap(runtime.session(for: surfaceID)?.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        }
+
+        XCTAssertEqual(Set(historyValues).count, 1)
+    }
+
+    func testWorkspaceShellHistoryIsolationCanBeDisabled() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            isolateShellHistory: false,
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let environment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+
+        XCTAssertNil(environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertNotNil(environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        XCTAssertEqual(environment[OpenMUXWorkspaceEnvironment.workspaceIDKey], workspace.id.rawValue)
+    }
+
     func testExtensionPaneActionDispatchInvokesOwningPlugin() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -2587,6 +2664,12 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(launchSession.shell.hasPrefix("/bin/sh '"))
         XCTAssertFalse(launchSession.shell.contains("direct:"))
         XCTAssertEqual(launchSession.environment["SHELL"], "/bin/zsh")
+        XCTAssertEqual(launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceIDKey], workspace.id.rawValue)
+        XCTAssertEqual(launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceRootKey], workspace.rootPath)
+        XCTAssertEqual(
+            launchSession.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey],
+            launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey]
+        )
         let replayPath = try XCTUnwrap(launchSession.environment[ScrollbackReplayStore.environmentKey])
         XCTAssertEqual(try String(contentsOfFile: replayPath, encoding: .utf8), scrollback.text)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.shell, "/bin/zsh")
@@ -2691,6 +2774,11 @@ final class OmuxAppShellTests: XCTestCase {
         let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
         var expectedEnvironment = session.environment
+        let historyPath = try XCTUnwrap(runtime.session(for: surfaceID)?.environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey] = workspace.id.rawValue
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey] = workspace.rootPath
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey] = historyPath
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey] = historyPath
         expectedEnvironment[OpenMUXTerminalEnvironment.paneIDKey] = pane.id.rawValue
         expectedEnvironment[OpenMUXTerminalEnvironment.sessionIDKey] = session.id.rawValue
         XCTAssertEqual(

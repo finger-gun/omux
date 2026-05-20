@@ -212,10 +212,17 @@ public struct OmuxConfigTerminal: Equatable, Sendable {
 }
 
 public struct OmuxConfigWorkspace: Equatable, Sendable {
-    public let defaultRootPath: String
+    public static let defaultIsolateShellHistory = true
 
-    public init(defaultRootPath: String = OmuxWorkspacePathResolver.defaultRootPath) {
+    public let defaultRootPath: String
+    public let isolateShellHistory: Bool
+
+    public init(
+        defaultRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
+        isolateShellHistory: Bool = Self.defaultIsolateShellHistory
+    ) {
         self.defaultRootPath = defaultRootPath
+        self.isolateShellHistory = isolateShellHistory
     }
 }
 
@@ -560,6 +567,7 @@ public enum OmuxConfigTemplate {
 
         [workspace]
         default_root_path = "~"
+        isolate_shell_history = true
 
         [ui.panes]
         # inactive_opacity = 0.5
@@ -1252,8 +1260,9 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let workspaceAllowedKeys: Set<String> = ["default_root_path"]
+        let workspaceAllowedKeys: Set<String> = ["default_root_path", "isolate_shell_history"]
         var defaultRootPath = config.workspace.defaultRootPath
+        var isolateShellHistory = config.workspace.isolateShellHistory
         for entry in document.entries(in: "workspace") {
             guard workspaceAllowedKeys.contains(entry.key) else {
                 diagnostics.append(
@@ -1304,6 +1313,19 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 defaultRootPath = resolvedPath
+            case "isolate_shell_history":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "workspace.isolate_shell_history must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                isolateShellHistory = value
             default:
                 break
             }
@@ -1843,7 +1865,10 @@ public struct OmuxConfigLoader {
                     maxBytes: persistedScrollbackMaxBytes
                 )
             ),
-            workspace: OmuxConfigWorkspace(defaultRootPath: defaultRootPath),
+            workspace: OmuxConfigWorkspace(
+                defaultRootPath: defaultRootPath,
+                isolateShellHistory: isolateShellHistory
+            ),
             ui: OmuxConfigUI(
                 panes: OmuxConfigUI.Panes(
                     inactiveOpacity: paneInactiveOpacity,
