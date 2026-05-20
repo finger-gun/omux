@@ -65,7 +65,7 @@ final class CommandPaletteTests: OmuxUITestsBase {
         )
 
         // Click it to enter the theme sub-palette.
-        switchThemeRow.click()
+        switchThemeRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // Now type a known built-in theme name to narrow the results.
         app.typeKey("a", modifierFlags: .command) // clear any existing query
@@ -79,7 +79,7 @@ final class CommandPaletteTests: OmuxUITestsBase {
         )
 
         // Click it to commit the theme switch.
-        themeRow.click()
+        themeRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // The palette should close (theme is applied and palette dismissed).
         let dismissed = NSPredicate(format: "exists == false")

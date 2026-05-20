@@ -736,6 +736,13 @@ final class CommandPaletteResultRow: NSView {
         clickHandler?(self)
     }
 
+    // Enables XCUITest coordinate-synthesis and assistive technologies to
+    // activate this row without requiring a real mouse event.
+    override func accessibilityPerformPress() -> Bool {
+        clickHandler?(self)
+        return true
+    }
+
     private func applyPresentation() {
         let colors = theme.shell
         layer?.backgroundColor = selected

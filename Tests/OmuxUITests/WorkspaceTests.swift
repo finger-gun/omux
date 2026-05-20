@@ -56,7 +56,7 @@ final class WorkspaceTests: OmuxUITestsBase {
         // Clear the existing name and type a new one.
         let nameField = sheet.textFields.firstMatch
         XCTAssertTrue(nameField.waitForExistence(timeout: 3), "Name text field should exist in the sheet")
-        nameField.click()
+        nameField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText("My Renamed Workspace")
 
@@ -132,7 +132,9 @@ final class WorkspaceTests: OmuxUITestsBase {
         XCTAssertTrue(targetItem.waitForExistence(timeout: 5), "Target workspace item should exist")
 
         // Drag the first workspace onto the second to reorder.
-        sourceItem.press(forDuration: 0.1, thenDragTo: targetItem)
+        // Use coordinate-based drag to bypass the hittability gate on headless runners.
+        sourceItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.3, thenDragTo: targetItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
 
         // App should still be alive with at least one workspace showing.
         XCTAssertTrue(
