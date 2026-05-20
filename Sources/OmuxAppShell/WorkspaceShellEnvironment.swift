@@ -29,6 +29,8 @@ struct WorkspaceShellEnvironment {
         environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey] = historyPath
         if isolateShellHistory {
             environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey] = historyPath
+        } else {
+            environment.removeValue(forKey: OpenMUXWorkspaceEnvironment.shellHistoryFileKey)
         }
 
         return SessionDescriptor(
@@ -58,11 +60,13 @@ struct WorkspaceShellEnvironment {
         }
 
         var environment = workspaceSession.environment
-        environment["OMUX_ORIGINAL_ZDOTDIR"] = environment["ZDOTDIR"]
-            ?? ProcessInfo.processInfo.environment["ZDOTDIR"]
-            ?? ProcessInfo.processInfo.environment["HOME"]
-            ?? FileManager.default.homeDirectoryForCurrentUser.path
-        environment["ZDOTDIR"] = zshDirectoryURL.path
+        let workspaceZDOTDIR = zshDirectoryURL.path
+        environment["OMUX_ORIGINAL_ZDOTDIR"] = originalZDOTDIR(
+            from: environment,
+            workspaceZDOTDIR: workspaceZDOTDIR
+        )
+        environment["OMUX_WORKSPACE_ZDOTDIR"] = workspaceZDOTDIR
+        environment["ZDOTDIR"] = workspaceZDOTDIR
         return SessionDescriptor(
             id: workspaceSession.id,
             shell: workspaceSession.shell,
@@ -118,17 +122,46 @@ struct WorkspaceShellEnvironment {
     }
 
     private static func zshStartupScript(fileName: String) -> String {
+        let reassertZDOTDIR = """
+        if [[ -n "${OMUX_WORKSPACE_ZDOTDIR:-}" ]]; then
+          export ZDOTDIR="$OMUX_WORKSPACE_ZDOTDIR"
+        fi
+        """
         let enforceHistory = fileName == ".zshrc" || fileName == ".zlogin"
             ? "\nif [[ -n \"${OMUX_WORKSPACE_HISTORY:-}\" ]]; then\n  export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\"\nfi\n"
             : ""
         return """
-        if [[ -n "${OMUX_ORIGINAL_ZDOTDIR:-}" && -r "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)" ]]; then
+        if [[ -n "${OMUX_ORIGINAL_ZDOTDIR:-}" && "${OMUX_ORIGINAL_ZDOTDIR}" != "${OMUX_WORKSPACE_ZDOTDIR:-}" && -r "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)" ]]; then
           source "${OMUX_ORIGINAL_ZDOTDIR}/\(fileName)"
         elif [[ -r "$HOME/\(fileName)" ]]; then
           source "$HOME/\(fileName)"
         fi
+        \(reassertZDOTDIR)
         \(enforceHistory)
         """
+    }
+
+    private func originalZDOTDIR(
+        from environment: [String: String],
+        workspaceZDOTDIR: String
+    ) -> String {
+        if let originalZDOTDIR = environment["OMUX_ORIGINAL_ZDOTDIR"], originalZDOTDIR.isEmpty == false {
+            return originalZDOTDIR
+        }
+
+        let candidate = environment["ZDOTDIR"]
+            ?? ProcessInfo.processInfo.environment["ZDOTDIR"]
+        let inheritedWorkspaceZDOTDIR = environment["OMUX_WORKSPACE_ZDOTDIR"]
+            ?? ProcessInfo.processInfo.environment["OMUX_WORKSPACE_ZDOTDIR"]
+        if let candidate,
+           candidate.isEmpty == false,
+           candidate != workspaceZDOTDIR,
+           candidate != inheritedWorkspaceZDOTDIR {
+            return candidate
+        }
+
+        return ProcessInfo.processInfo.environment["HOME"]
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
     }
 
     private func safePathComponent(_ value: String) -> String {
