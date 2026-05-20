@@ -36,21 +36,24 @@ final class CommandPaletteTests: OmuxUITestsBase {
         let palette = app.groups[A11yID.commandPalette.rawValue]
         XCTAssertTrue(palette.waitForExistence(timeout: 3), "Command palette should appear")
 
-        // Give the palette's search field time to become first responder.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Wait deterministically for the search field to become hittable before interacting.
+        let searchField = palette.textFields.firstMatch
+        XCTAssertTrue(searchField.waitForExistence(timeout: 3), "Palette search field should be accessible")
+        let hittablePredicate = NSPredicate(format: "isHittable == true")
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittablePredicate, object: searchField)], timeout: 3),
+            .completed,
+            "Palette search field should become hittable within 3 seconds"
+        )
+        searchField.tap()
 
-        // Verify that result rows are visible in the accessibility tree on open (unfiltered state).
+        // Verify row 0 appears in the accessibility tree (unfiltered state).
         nonisolated(unsafe) let rowPredicate = NSPredicate(format: "identifier == %@", "\(A11yID.commandPaletteRowPrefix)0")
         let initialRow = app.descendants(matching: .any).matching(rowPredicate).firstMatch
         XCTAssertTrue(
             initialRow.waitForExistence(timeout: 5),
             "Row 0 should be visible in accessibility tree when palette opens with all commands"
         )
-
-        // Click the search field so XCUITest tracks it as the focused element.
-        let searchField = palette.textFields.firstMatch
-        XCTAssertTrue(searchField.waitForExistence(timeout: 3), "Palette search field should be accessible")
-        searchField.click()
 
         // Type ">Switch Theme" — the ">" prefix activates command mode.
         searchField.typeText(">Switch Theme")

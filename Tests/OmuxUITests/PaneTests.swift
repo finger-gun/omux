@@ -197,6 +197,12 @@ final class PaneTests: OmuxUITestsBase {
             app.state == .runningForeground,
             "App should still be running after drag-to-split"
         )
+        // The split should produce at least two child elements in the pane container.
+        let splitResult = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count >= 2"),
+            object: paneContainer.children(matching: .any)
+        )], timeout: 5)
+        XCTAssertEqual(splitResult, .completed, "Pane container should contain at least two children after drag-to-split")
     }
 
     // MARK: - Drag/drop: pane tab reorder
@@ -224,10 +230,13 @@ final class PaneTests: OmuxUITestsBase {
         sourceTab.press(forDuration: 0.1, thenDragTo: targetTab)
 
         // After drag the app must still be alive with two tabs.
-        XCTAssertTrue(
-            waitForPaneTabs(atLeast: 2),
-            "Both pane tabs should still exist after drag"
-        )
+        // Also verify the tabs collection still reports at least 2 entries —
+        // if the reorder collapsed a tab the count would drop.
+        let postDragResult = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count >= 2"),
+            object: paneTabButtons()
+        )], timeout: 5)
+        XCTAssertEqual(postDragResult, .completed, "Both pane tabs should still exist after drag")
         XCTAssertTrue(app.state == .runningForeground, "App should still be running after pane tab drag")
     }
 }

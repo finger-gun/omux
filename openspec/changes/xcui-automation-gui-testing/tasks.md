@@ -5,14 +5,14 @@
 - [x] 1.3 Set `.accessibilityIdentifier(A11yID.workspaceList)` on the workspace list view
 - [x] 1.4 Set `.accessibilityIdentifier(A11yID.paneContainer)` on the pane container view
 - [x] 1.5 Set `.accessibilityIdentifier(A11yID.commandPalette)` on the command palette view
-- [ ] 1.6 Set `.accessibilityIdentifier(A11yID.settingsWindow)` on the settings window or its root view
-- [ ] 1.7 Verify identifiers resolve correctly in Accessibility Inspector on a local build
+- [ ] 1.6 Set `.accessibilityIdentifier(A11yID.settingsWindow)` on the settings window or its root view — **follow-up**: no dedicated settings window exists yet; `SettingsTests` exercises the sidebar toggle instead
+- [ ] 1.7 Verify identifiers resolve correctly in Accessibility Inspector on a local build — **follow-up**: manual verification required
 
 ## 2. OMUX_UI_TEST Environment Flag
 
 - [x] 2.1 Read `OMUX_UI_TEST` from `ProcessInfo.processInfo.environment` at app startup in `Sources/OpenMUXApp/main.swift`
 - [x] 2.2 When `OMUX_UI_TEST=1`, bypass or stub Metal/GPU-dependent initialisation in the terminal bridge (e.g. skip `libghostty` surface creation)
-- [ ] 2.3 Confirm the app reaches its main window without crashing when launched with the flag set and no GPU available
+- [ ] 2.3 Confirm the app reaches its main window without crashing when launched with the flag set and no GPU available — **follow-up**: requires headless CI environment to confirm
 
 ## 3. OmuxUITests SPM Target
 
@@ -32,7 +32,7 @@
 - [x] 5.2 Write `WorkspaceTests.swift`: test that triggering new-workspace produces an entry in `A11yID.workspaceList` within 5 s
 - [x] 5.3 Write `PaneTests.swift`: test that split-pane produces two pane elements in `A11yID.paneContainer`, then close-pane reduces count to one
 - [x] 5.4 Write `CommandPaletteTests.swift`: test that the palette opens (element exists within 3 s) and closes on Escape (element gone within 2 s)
-- [x] 5.5 Write `SettingsTests.swift`: test that settings window opens (element exists within 5 s) and closes via close button (element gone within 3 s)
+- [x] 5.5 Write `SettingsTests.swift`: test that the workspace sidebar toggles off (element hidden within 3 s) and back on (element visible within 3 s) via View → Toggle Workspace Column
 - [x] 5.6 Ensure all tests use `waitForExistence(timeout:)` or `XCTNSPredicateExpectation`; remove any `Thread.sleep` calls
 - [x] 5.7 Set `app.launchEnvironment["OMUX_UI_TEST"] = "1"` in a shared `setUp()` base class used by all test files
 
@@ -52,7 +52,7 @@
 
 ## 8. Validation
 
-- [ ] 8.1 Run `make ui-test` locally; confirm all 6 test cases pass
+- [ ] 8.1 Run `make ui-test` locally; confirm all test cases pass (the implementation includes 14 individual test methods across five test suite files: AppLaunchTests, WorkspaceTests, PaneTests, CommandPaletteTests, SettingsTests)
 - [ ] 8.2 Open a draft pull request and confirm the `ui-test` GitHub Actions job runs and passes
 - [ ] 8.3 Introduce a deliberate test failure, confirm the job fails and the `.xcresult` artifact is uploaded
 - [ ] 8.4 Revert the deliberate failure and confirm the job returns to green

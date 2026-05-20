@@ -73,7 +73,7 @@ cli-help:
 generate-xcodeproj:
 	xcodegen generate --spec project.yml
 
-ui-test: build
+ui-test: generate-xcodeproj build
 	rm -rf .build/ui-test-results.xcresult .build/UITestApp
 	./Scripts/wrap-app-for-uitest.sh
 	xcodebuild test \

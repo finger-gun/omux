@@ -8,7 +8,7 @@ The repository SHALL contain an `OmuxUITests` test target that uses `XCTest` and
 - **THEN** a `.testTarget(name: "OmuxUITests", ...)` entry is present with its sources under `Tests/OmuxUITests/`
 
 #### Scenario: Target builds without errors
-- **WHEN** `xcodebuild build-for-testing -scheme OpenMUXApp` is executed
+- **WHEN** `xcodebuild build-for-testing -scheme OmuxUITests` is executed
 - **THEN** the build succeeds and the `OmuxUITests` bundle is produced with no compile errors
 
 ### Requirement: Accessibility identifiers are stable and centralised
@@ -69,16 +69,16 @@ The test suite SHALL contain a test that opens and dismisses the command palette
 - **WHEN** the Escape key is sent while the command palette is open
 - **THEN** the element identified by `A11yID.commandPalette` no longer exists within 2 seconds
 
-### Requirement: Settings open/close test passes
-The test suite SHALL contain a test that opens and closes the settings window.
+### Requirement: Sidebar toggle test passes
+The test suite SHALL contain a test that toggles the workspace sidebar (via View → Toggle Workspace Column) and asserts visibility changes.
 
-#### Scenario: Settings window opens
-- **WHEN** the settings action is triggered (menu or keyboard shortcut)
-- **THEN** a window identified by `A11yID.settingsWindow` exists and is hittable within 5 seconds
+#### Scenario: Sidebar hides after toggle
+- **WHEN** the toggle-sidebar action is triggered (View → Toggle Workspace Column)
+- **THEN** the element identified by `A11yID.workspaceList` no longer exists within 3 seconds
 
-#### Scenario: Settings window closes
-- **WHEN** the settings window close button is clicked
-- **THEN** the element identified by `A11yID.settingsWindow` no longer exists within 3 seconds
+#### Scenario: Sidebar reappears after second toggle
+- **WHEN** the toggle-sidebar action is triggered again
+- **THEN** the element identified by `A11yID.workspaceList` exists and is visible within 3 seconds
 
 ### Requirement: Tests use explicit waits, not fixed sleeps
 Every XCUITest assertion that depends on asynchronous UI state SHALL use `XCTNSPredicateExpectation` or `waitForExistence(timeout:)` rather than `Thread.sleep` or `sleep()`.

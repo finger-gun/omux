@@ -39,7 +39,7 @@ class OmuxUITestsBase: XCTestCase {
 
     // Called once after the last test method in the class finishes.
     override class func tearDown() {
-        if sharedApp?.state == .runningForeground || sharedApp?.state == .runningBackground {
+        if sharedApp?.state != .notRunning {
             sharedApp.terminate()
         }
         sharedApp = nil

@@ -13,22 +13,30 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Detect UI-relevant path changes
         id: paths
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
         with:
           filters: |
             ui:
               - 'Sources/OpenMUXApp/**'
               - 'Sources/OmuxAppShell/**'
               - 'Tests/OmuxUITests/**'
+              - '.github/**'
+              - 'Makefile'
+              - 'project.yml'
+              - 'Package.swift'
+              - 'Scripts/**'
+              - 'tools/**'
 
       - name: Cache Ghostty build state
         if: steps.paths.outputs.ui == 'true'
         id: ghostty-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .build/tools
@@ -40,7 +48,7 @@ jobs:
 
       - name: Cache Homebrew downloads
         if: steps.paths.outputs.ui == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/Library/Caches/Homebrew
           key: ${{ runner.os }}-brew-zig15
@@ -76,7 +84,7 @@ jobs:
 
       - name: Upload UI test results on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ui-test-results
           path: .build/ui-test-results.xcresult

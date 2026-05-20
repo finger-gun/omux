@@ -24,6 +24,23 @@ mkdir -p "$MACOS_DIR"
 
 cp "$APP_BIN" "$MACOS_DIR/OpenMUXApp"
 
+# Mirror the production Contents/Resources layout so runtime resource lookups
+# (Ghostty assets, packaged fonts, SwiftPM bundles) succeed during UI tests.
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+mkdir -p "$RESOURCES_DIR"
+
+# Copy any .bundle directories produced by SwiftPM alongside the binary.
+for bundle in "$BIN_DIR"/*.bundle; do
+  [ -e "$bundle" ] || continue
+  cp -R "$bundle" "$RESOURCES_DIR/"
+done
+
+# Copy Ghostty runtime share resources if present (fonts, shaders, themes…).
+GHOSTTY_SHARE="$ROOT_DIR/Vendor/ghostty/zig-out/share/ghostty"
+if [ -d "$GHOSTTY_SHARE" ]; then
+  cp -R "$GHOSTTY_SHARE" "$RESOURCES_DIR/ghostty"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

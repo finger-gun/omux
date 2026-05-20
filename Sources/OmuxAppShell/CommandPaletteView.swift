@@ -72,6 +72,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityRole(.group)
         setAccessibilityElement(true)
+        setAccessibilityIdentifier(.commandPalette)
 
         panel.wantsLayer = true
         panel.layer?.cornerRadius = Layout.cornerRadius

@@ -76,9 +76,17 @@ final class WorkspaceTests: OmuxUITestsBase {
     func testDeleteWorkspace() {
         let menuBar = app.menuBars.firstMatch
 
+        // Record how many workspace items exist before creating the extra one.
+        _ = waitForWorkspaceItems(atLeast: 1)
+        let preCreateCount = workspaceItemButtons().count
+
         // Create a second workspace so we have one to delete.
         menuBar.menuBarItems["Workspace"].click()
         menuBar.menuBarItems["Workspace"].menuItems["New Workspace"].click()
+
+        // Wait until the new workspace item is reflected in the sidebar.
+        _ = waitForWorkspaceItems(atLeast: preCreateCount + 1)
+        let postCreateCount = workspaceItemButtons().count
 
         // Delete the active (second) workspace.
         menuBar.menuBarItems["Workspace"].click()
@@ -94,6 +102,12 @@ final class WorkspaceTests: OmuxUITestsBase {
             workspaceList.waitForExistence(timeout: 3),
             "Workspace list should still be visible after deletion"
         )
+        // The item count should have decreased back toward the pre-create level.
+        let postDeleteResult = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count < \(postCreateCount)"),
+            object: workspaceItemButtons()
+        )], timeout: 5)
+        XCTAssertEqual(postDeleteResult, .completed, "Workspace item count should decrease after deletion")
     }
 
     // MARK: - Drag/drop: workspace reorder

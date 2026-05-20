@@ -12,22 +12,22 @@ The `Makefile` SHALL contain a `ui-test` target that builds the app for testing 
 - **THEN** `xcodebuild test` is invoked with `-only-testing OmuxUITests` and the suite runs to completion
 
 ### Requirement: xcodebuild scheme is available
-A scheme named `OpenMUXApp` SHALL be resolvable by `xcodebuild` without requiring a manually maintained committed `.xcodeproj`. The scheme SHALL be generated on demand via `swift package generate-xcodeproj` or an equivalent mechanism before the test step.
+A scheme named `OmuxUITests` SHALL be resolvable by `xcodebuild` without requiring a manually maintained committed `.xcodeproj`. The scheme SHALL be generated on demand via `xcodegen` using `project.yml` (invoked by the Makefile `generate-xcodeproj` target) before the test step.
 
 #### Scenario: Scheme generation succeeds before test run
 - **WHEN** `make ui-test` is run from a clean checkout
-- **THEN** the scheme generation step completes before `xcodebuild test` is invoked and the scheme is discoverable
+- **THEN** the `generate-xcodeproj` step completes before `xcodebuild test` is invoked and the scheme is discoverable
 
 #### Scenario: Scheme resolves the OmuxUITests target
 - **WHEN** `xcodebuild -list` is run after scheme generation
-- **THEN** `OmuxUITests` appears in the list of test targets for the `OpenMUXApp` scheme
+- **THEN** `OmuxUITests` appears in the list of test targets for the `OmuxUITests` scheme
 
 ### Requirement: GitHub Actions ui-test job runs on macos-15
-The `.github/workflows/ci.yml` SHALL contain a `ui-test` job that:
+The `.github/workflows/ui-tests.yml` SHALL contain a `ui-test` job that:
 - runs on `macos-15`
-- depends on the `verify` job (via `needs: verify`) to reuse the Ghostty build cache
 - executes `make ui-test`
 - reports pass/fail as a required check on pull requests
+- does NOT use `needs: verify` because it runs as a standalone workflow
 
 #### Scenario: Job is triggered on pull request
 - **WHEN** a pull request is opened or updated
