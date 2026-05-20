@@ -19,6 +19,13 @@ public struct SessionDescriptor: Equatable, Codable, Sendable {
     }
 }
 
+public enum OpenMUXWorkspaceEnvironment {
+    public static let workspaceIDKey = "OMUX_WORKSPACE_ID"
+    public static let workspaceRootKey = "OMUX_WORKSPACE_ROOT"
+    public static let workspaceHistoryKey = "OMUX_WORKSPACE_HISTORY"
+    public static let shellHistoryFileKey = "HISTFILE"
+}
+
 public enum ExtensionPaneContentKind: String, Codable, Sendable {
     case html
     case placeholder

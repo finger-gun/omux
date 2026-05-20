@@ -392,6 +392,261 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(withSplit.focusedTab?.focusedPaneID, withSplit.focusedTab?.panes.last?.id)
     }
 
+    func testWorkspaceShellHistoryIsIsolatedAcrossWorkspaces() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let first = try controller.openWorkspace(at: "/tmp/first")
+        let second = try controller.openWorkspace(at: "/tmp/second")
+        let firstPane = try XCTUnwrap(first.focusedPane)
+        let secondPane = try XCTUnwrap(second.focusedPane)
+        let firstSurfaceID = try XCTUnwrap(bridge.surface(for: firstPane.id)?.runtimeSurfaceID)
+        let secondSurfaceID = try XCTUnwrap(bridge.surface(for: secondPane.id)?.runtimeSurfaceID)
+        let firstEnvironment = try XCTUnwrap(runtime.session(for: firstSurfaceID)?.environment)
+        let secondEnvironment = try XCTUnwrap(runtime.session(for: secondSurfaceID)?.environment)
+
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey], first.id.rawValue)
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey], "/tmp/first")
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey], second.id.rawValue)
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey], "/tmp/second")
+        XCTAssertEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey], firstEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertEqual(secondEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey], secondEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertNotEqual(firstEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey], secondEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+    }
+
+    func testWorkspaceShellHistoryIsSharedWithinWorkspace() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let firstPane = try XCTUnwrap(workspace.focusedPane)
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane())
+        let splitPane = try XCTUnwrap(splitWorkspace.focusedPane)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let paneTab = try XCTUnwrap(paneTabWorkspace.focusedPane)
+        let tabWorkspace = try XCTUnwrap(controller.createTab())
+        let tabPane = try XCTUnwrap(tabWorkspace.focusedPane)
+
+        let historyValues = try [firstPane, splitPane, paneTab, tabPane].map { pane in
+            let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+            return try XCTUnwrap(runtime.session(for: surfaceID)?.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        }
+
+        XCTAssertEqual(Set(historyValues).count, 1)
+    }
+
+    func testWorkspaceShellHistorySnapshotIsSharedByPaneAndLaunchSession() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        runtime.onCreateSurface = { _ in
+            controller.updateShellHistoryIsolation(false)
+        }
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let initialPane = try XCTUnwrap(workspace.focusedPane)
+
+        func assertLaunchMatchesPane(_ pane: Pane) throws {
+            let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+            let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+            XCTAssertEqual(
+                launchEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey],
+                pane.session.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey]
+            )
+        }
+
+        try assertLaunchMatchesPane(initialPane)
+
+        controller.updateShellHistoryIsolation(true)
+        let tabWorkspace = try XCTUnwrap(controller.createTab())
+        try assertLaunchMatchesPane(try XCTUnwrap(tabWorkspace.focusedPane))
+
+        controller.updateShellHistoryIsolation(true)
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane())
+        try assertLaunchMatchesPane(try XCTUnwrap(splitWorkspace.focusedPane))
+
+        controller.updateShellHistoryIsolation(true)
+        let paneTabWorkspace = try XCTUnwrap(controller.createPaneTab())
+        try assertLaunchMatchesPane(try XCTUnwrap(paneTabWorkspace.focusedPane))
+    }
+
+    func testWorkspaceShellHistoryIsolationCanBeDisabled() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            isolateShellHistory: false,
+            workspaceShellStateDirectoryURL: root
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let environment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+
+        XCTAssertNil(environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertNotNil(environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        XCTAssertEqual(environment[OpenMUXWorkspaceEnvironment.workspaceIDKey], workspace.id.rawValue)
+    }
+
+    func testWorkspaceShellHistoryIsolationDisabledClearsPersistedHistfile() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(
+            shell: "/bin/sh",
+            workingDirectory: "/tmp/project",
+            environment: [OpenMUXWorkspaceEnvironment.shellHistoryFileKey: "/tmp/old-history"]
+        )
+        let pane = Pane(title: "project", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            isolateShellHistory: false,
+            workspaceShellStateDirectoryURL: root
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+
+        XCTAssertNil(launchEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey])
+        XCTAssertEqual(launchEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey]?.hasSuffix("/shell-history"), true)
+    }
+
+    func testRestoredZshSessionReappliesWorkspaceHistoryAfterStartupFiles() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let pane = Pane(title: "project", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            workspaceShellStateDirectoryURL: root
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+        let zshDirectory = try XCTUnwrap(launchEnvironment["ZDOTDIR"])
+        let zshenv = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zshenv").path, encoding: .utf8)
+        let zprofile = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zprofile").path, encoding: .utf8)
+        let zshrc = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zshrc").path, encoding: .utf8)
+        let zlogin = try String(contentsOfFile: URL(fileURLWithPath: zshDirectory).appendingPathComponent(".zlogin").path, encoding: .utf8)
+
+        XCTAssertEqual(launchEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey], launchEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        XCTAssertEqual(launchEnvironment["OMUX_WORKSPACE_ZDOTDIR"], zshDirectory)
+        XCTAssertTrue(zshenv.contains("\"${OMUX_ORIGINAL_ZDOTDIR}\" != \"${OMUX_WORKSPACE_ZDOTDIR:-}\""))
+        XCTAssertFalse(zshenv.contains("$HOME/.zshenv"))
+        XCTAssertFalse(zprofile.contains("$HOME/.zprofile"))
+        XCTAssertFalse(zshrc.contains("$HOME/.zshrc"))
+        XCTAssertFalse(zlogin.contains("$HOME/.zlogin"))
+        XCTAssertTrue(zshenv.contains("export ZDOTDIR=\"$OMUX_WORKSPACE_ZDOTDIR\""))
+        XCTAssertTrue(zprofile.contains("export ZDOTDIR=\"$OMUX_WORKSPACE_ZDOTDIR\""))
+        XCTAssertTrue(zshrc.contains("export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\""))
+        XCTAssertTrue(zshrc.contains("export ZDOTDIR=\"$OMUX_WORKSPACE_ZDOTDIR\""))
+        XCTAssertTrue(zlogin.contains("export ZDOTDIR=\"$OMUX_WORKSPACE_ZDOTDIR\""))
+        XCTAssertTrue(zlogin.contains("export HISTFILE=\"$OMUX_WORKSPACE_HISTORY\""))
+    }
+
+    func testRestoredZshSessionPreservesOriginalZDOTDIRAcrossNestedLaunches() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let shimPath = root
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("shell-integration", isDirectory: true)
+            .appendingPathComponent("zsh", isDirectory: true)
+            .path
+        let session = SessionDescriptor(
+            shell: "/bin/zsh",
+            workingDirectory: "/tmp/project",
+            environment: [
+                "ZDOTDIR": shimPath,
+                "OMUX_ORIGINAL_ZDOTDIR": "/Users/example",
+                "OMUX_WORKSPACE_ZDOTDIR": shimPath,
+            ]
+        )
+        let pane = Pane(title: "project", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            workspaceShellStateDirectoryURL: root.appendingPathComponent("state", isDirectory: true)
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+
+        XCTAssertEqual(launchEnvironment["OMUX_ORIGINAL_ZDOTDIR"], "/Users/example")
+        XCTAssertEqual(launchEnvironment["OMUX_WORKSPACE_ZDOTDIR"], shimPath)
+        XCTAssertEqual(launchEnvironment["ZDOTDIR"], shimPath)
+    }
+
+    func testRestoredZshSessionUsesSessionHomeAsDefaultOriginalZDOTDIR() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let sessionHome = root.appendingPathComponent("session-home", isDirectory: true).path
+        let session = SessionDescriptor(
+            shell: "/bin/zsh",
+            workingDirectory: "/tmp/project",
+            environment: ["HOME": sessionHome]
+        )
+        let pane = Pane(title: "project", session: session)
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        let workspace = Workspace(generatedName: "Workspace 1", rootPath: "/tmp/project", tabs: [tab], focusedTabID: tab.id)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            persistedScrollback: OmuxConfigTerminal.PersistedScrollback(enabled: false),
+            workspaceShellStateDirectoryURL: root.appendingPathComponent("state", isDirectory: true)
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(.init(workspaces: [workspace], activeWorkspaceID: workspace.id)))
+        let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+
+        XCTAssertEqual(launchEnvironment["OMUX_ORIGINAL_ZDOTDIR"], sessionHome)
+    }
+
     func testExtensionPaneActionDispatchInvokesOwningPlugin() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
@@ -2587,6 +2842,12 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(launchSession.shell.hasPrefix("/bin/sh '"))
         XCTAssertFalse(launchSession.shell.contains("direct:"))
         XCTAssertEqual(launchSession.environment["SHELL"], "/bin/zsh")
+        XCTAssertEqual(launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceIDKey], workspace.id.rawValue)
+        XCTAssertEqual(launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceRootKey], workspace.rootPath)
+        XCTAssertEqual(
+            launchSession.environment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey],
+            launchSession.environment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey]
+        )
         let replayPath = try XCTUnwrap(launchSession.environment[ScrollbackReplayStore.environmentKey])
         XCTAssertEqual(try String(contentsOfFile: replayPath, encoding: .utf8), scrollback.text)
         XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.session.shell, "/bin/zsh")
@@ -2691,6 +2952,17 @@ final class OmuxAppShellTests: XCTestCase {
         let surfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
 
         var expectedEnvironment = session.environment
+        let launchEnvironment = try XCTUnwrap(runtime.session(for: surfaceID)?.environment)
+        let historyPath = try XCTUnwrap(launchEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey])
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey] = workspace.id.rawValue
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceRootKey] = workspace.rootPath
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.workspaceHistoryKey] = historyPath
+        expectedEnvironment[OpenMUXWorkspaceEnvironment.shellHistoryFileKey] = historyPath
+        if session.shell.hasSuffix("/zsh") {
+            expectedEnvironment["ZDOTDIR"] = launchEnvironment["ZDOTDIR"]
+            expectedEnvironment["OMUX_ORIGINAL_ZDOTDIR"] = launchEnvironment["OMUX_ORIGINAL_ZDOTDIR"]
+            expectedEnvironment["OMUX_WORKSPACE_ZDOTDIR"] = launchEnvironment["OMUX_WORKSPACE_ZDOTDIR"]
+        }
         expectedEnvironment[OpenMUXTerminalEnvironment.paneIDKey] = pane.id.rawValue
         expectedEnvironment[OpenMUXTerminalEnvironment.sessionIDKey] = session.id.rawValue
         XCTAssertEqual(
@@ -2702,6 +2974,21 @@ final class OmuxAppShellTests: XCTestCase {
                 environment: expectedEnvironment
             )
         )
+    }
+
+    func testWorkspaceOpenFailsWhenShellHistoryStorageCannotBePrepared() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blockedStateURL = root.appendingPathComponent("state-file", isDirectory: false)
+        try Data("blocked".utf8).write(to: blockedStateURL)
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            workspaceShellStateDirectoryURL: blockedStateURL
+        )
+
+        XCTAssertThrowsError(try controller.openWorkspace(at: "/tmp/project"))
+        XCTAssertTrue(controller.allWorkspaces().isEmpty)
     }
 
     func testWorkspacePersistenceDropsRestoredScrollbackWhenFreshRuntimeCaptureIsAvailableEmpty() throws {
@@ -3285,6 +3572,58 @@ final class OmuxAppShellTests: XCTestCase {
         let result = coordinator.reload()
 
         XCTAssertTrue(result.applied)
+        waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
+    func testConfigurationCoordinatorReloadPublishesShellHistoryIsolationChange() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        let expectation = expectation(description: "shell history isolation changed")
+        coordinator.onShellHistoryIsolationChange = { isolateShellHistory in
+            if isolateShellHistory == false {
+                expectation.fulfill()
+            }
+        }
+
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [workspace]
+        isolate_shell_history = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let result = coordinator.reload()
+
+        XCTAssertTrue(result.applied)
+        XCTAssertFalse(coordinator.isolateShellHistory())
         waitForExpectations(timeout: 2)
     }
 
@@ -6673,6 +7012,36 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(captured.contains("\"paneID\":\"\(result.pane.id.rawValue)\""))
     }
 
+    @MainActor
+    func testShellOverlayDoesNotBlockHitTestingWhenNoModalIsPresented() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: controller.activeWorkspace()!, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let overlayHost = try XCTUnwrap(findView(ofType: ShellOverlayHostView.self, in: rootView))
+        let terminalView = try XCTUnwrap(findView(ofType: HostedTerminalPaneView.self, in: rootView))
+
+        // The overlay sits on top of the terminal area.  When no modal is
+        // shown, hitTest at a point inside the terminal should pass through
+        // the overlay and reach the terminal (or a descendant), not the
+        // overlay itself or any of its empty child views.
+        let terminalMid = terminalView.convert(
+            NSPoint(x: terminalView.bounds.midX, y: terminalView.bounds.midY),
+            to: rootView
+        )
+
+        let hitView = rootView.hitTest(terminalMid)
+        // hitView should be inside the terminal, not inside the overlay.
+        XCTAssertNotNil(hitView, "hitTest should find a view at the terminal center")
+        XCTAssertFalse(hitView!.isDescendant(of: overlayHost),
+                       "hitTest should not land inside the shell overlay when no modal is presented")
+    }
+
     private func runGit(_ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -6713,6 +7082,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private var transcriptBySurface: [String: String] = [:]
     private var inputBySurface: [String: String] = [:]
     private var terminalActionHandler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
+    var onCreateSurface: ((PaneID) -> Void)?
     var scrollbackBySurface: [String: String] = [:]
     var transcript = ""
     var sentTextCount = 0
@@ -6723,7 +7093,8 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
-        "action:\(paneID.rawValue)"
+        onCreateSurface?(paneID)
+        return "action:\(paneID.rawValue)"
     }
 
     func attach(session: SessionDescriptor, to runtimeSurfaceID: String) throws {

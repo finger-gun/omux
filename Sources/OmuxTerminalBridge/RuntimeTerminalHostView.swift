@@ -42,12 +42,12 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        registerForDraggedTypes([.fileURL])
+        registerForDraggedTypes([.fileURL, .URL, .string])
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        registerForDraggedTypes([.fileURL])
+        registerForDraggedTypes([.fileURL, .URL, .string])
     }
 
     func configureHostedPane(
@@ -495,13 +495,38 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
 extension RuntimeTerminalHostView: @preconcurrency NSTextInputClient {}
 
 enum TerminalDroppedFileText {
+
     static func pasteText(from pasteboard: NSPasteboard) -> String? {
-        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+        // Prefer file URLs (Finder drags and promised file URLs from browsers).
+        let fileURLOptions: [NSPasteboard.ReadingOptionKey: Any] = [
             .urlReadingFileURLsOnly: true,
         ]
-        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options)?
+        let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: fileURLOptions)?
             .compactMap { $0 as? URL } ?? []
-        return pasteText(for: urls)
+        if let text = pasteText(for: fileURLs) {
+            return text
+        }
+
+        // Try all URLs without the file-only restriction.
+        // Browsers provide promised file URLs that don't match the strict filter above.
+        let allURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: nil)?
+            .compactMap { $0 as? URL } ?? []
+        if let text = pasteText(for: allURLs.filter(\.isFileURL)) {
+            return text
+        }
+
+        // Non-file URLs (e.g. https:// link drags).
+        let nonFileURLs = allURLs.filter { !$0.isFileURL }
+        if !nonFileURLs.isEmpty {
+            return nonFileURLs.map { shellQuotedPath($0.absoluteString) }.joined(separator: " ")
+        }
+
+        // Fall back to plain string content (selected text drags).
+        if let string = pasteboard.string(forType: .string), !string.isEmpty {
+            return string
+        }
+
+        return nil
     }
 
     static func pasteText(for urls: [URL]) -> String? {

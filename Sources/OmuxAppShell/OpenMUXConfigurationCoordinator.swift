@@ -16,6 +16,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     let agentSessions: VaultConfiguration
     let autoCheckUpdate: Bool
     let defaultWorkspaceRootPath: String
+    let isolateShellHistory: Bool
     let keyBindingRegistry: OpenMUXKeyBindingRegistry
     let compiledConfigURL: URL?
     let compiledHash: String?
@@ -31,6 +32,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         agentSessions: VaultConfiguration = VaultConfiguration(),
         autoCheckUpdate: Bool = true,
         defaultWorkspaceRootPath: String,
+        isolateShellHistory: Bool = OmuxConfigWorkspace.defaultIsolateShellHistory,
         keyBindingRegistry: OpenMUXKeyBindingRegistry,
         compiledConfigURL: URL?,
         compiledHash: String?,
@@ -45,6 +47,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         self.agentSessions = agentSessions
         self.autoCheckUpdate = autoCheckUpdate
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
+        self.isolateShellHistory = isolateShellHistory
         self.keyBindingRegistry = keyBindingRegistry
         self.compiledConfigURL = compiledConfigURL
         self.compiledHash = compiledHash
@@ -61,6 +64,7 @@ struct OpenMUXConfigurationReloadResult: Sendable {
 final class OpenMUXConfigurationCoordinator {
     var onThemeChange: ((WorkspaceShellTheme) -> Void)?
     var onWorkspaceDefaultRootChange: ((String) -> Void)?
+    var onShellHistoryIsolationChange: ((Bool) -> Void)?
     var onPersistedScrollbackChange: ((OmuxConfigTerminal.PersistedScrollback) -> Void)?
     var onPaneConfigurationChange: ((OmuxConfigUI.Panes) -> Void)?
     var onIconConfigurationChange: ((OmuxConfigUI.Icons) -> Void)?
@@ -76,6 +80,7 @@ final class OpenMUXConfigurationCoordinator {
     private let stateLock = NSLock()
     private var currentTheme: WorkspaceShellTheme
     private var currentDefaultWorkspaceRootPath: String
+    private var currentIsolateShellHistory: Bool
     private var currentPersistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
@@ -96,6 +101,7 @@ final class OpenMUXConfigurationCoordinator {
         self.evaluator = evaluator
         self.currentTheme = initialState.theme
         self.currentDefaultWorkspaceRootPath = initialState.defaultWorkspaceRootPath
+        self.currentIsolateShellHistory = initialState.isolateShellHistory
         self.currentPersistedScrollback = initialState.persistedScrollback
         self.currentPanes = initialState.panes
         self.currentIcons = initialState.icons
@@ -126,6 +132,7 @@ final class OpenMUXConfigurationCoordinator {
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                isolateShellHistory: evaluation.config.workspace.isolateShellHistory,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
                 compiledHash: nil,
@@ -146,6 +153,7 @@ final class OpenMUXConfigurationCoordinator {
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                isolateShellHistory: evaluation.config.workspace.isolateShellHistory,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: fileURL,
                 compiledHash: output.hash,
@@ -162,6 +170,7 @@ final class OpenMUXConfigurationCoordinator {
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
                 autoCheckUpdate: evaluation.config.autoCheckUpdate,
                 defaultWorkspaceRootPath: evaluation.config.workspace.defaultRootPath,
+                isolateShellHistory: evaluation.config.workspace.isolateShellHistory,
                 keyBindingRegistry: keyBindingRegistry,
                 compiledConfigURL: nil,
                 compiledHash: nil,
@@ -185,6 +194,12 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.lock()
         defer { stateLock.unlock() }
         return currentDefaultWorkspaceRootPath
+    }
+
+    func isolateShellHistory() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentIsolateShellHistory
     }
 
     func keyBindingRegistry() -> OpenMUXKeyBindingRegistry {
@@ -324,6 +339,7 @@ final class OpenMUXConfigurationCoordinator {
                 (
                     hash: currentCompiledHash,
                     defaultWorkspaceRootPath: currentDefaultWorkspaceRootPath,
+                    isolateShellHistory: currentIsolateShellHistory,
                     persistedScrollback: currentPersistedScrollback,
                     panes: currentPanes,
                     icons: currentIcons,
@@ -335,6 +351,7 @@ final class OpenMUXConfigurationCoordinator {
             }
             let keyBindingRegistry = OpenMUXKeyBindingRegistry.effective(overrides: evaluation.config.keyBindings)
             let defaultWorkspaceRootPath = evaluation.config.workspace.defaultRootPath
+            let isolateShellHistory = evaluation.config.workspace.isolateShellHistory
             let persistedScrollback = evaluation.config.terminal.persistedScrollback
             let panes = evaluation.config.ui.panes
             let icons = evaluation.config.ui.icons
@@ -344,6 +361,7 @@ final class OpenMUXConfigurationCoordinator {
             let shouldRefresh = previousState.hash != output.hash || FileManager.default.fileExists(atPath: output.fileURL.path) == false
             let shouldApply = shouldRefresh
                 || previousState.defaultWorkspaceRootPath != defaultWorkspaceRootPath
+                || previousState.isolateShellHistory != isolateShellHistory
                 || previousState.persistedScrollback != persistedScrollback
                 || previousState.panes != panes
                 || previousState.icons != icons
@@ -366,6 +384,7 @@ final class OpenMUXConfigurationCoordinator {
             stateLock.withLock {
                 currentTheme = shellTheme
                 currentDefaultWorkspaceRootPath = defaultWorkspaceRootPath
+                currentIsolateShellHistory = isolateShellHistory
                 currentPersistedScrollback = persistedScrollback
                 currentPanes = panes
                 currentIcons = icons
@@ -380,6 +399,7 @@ final class OpenMUXConfigurationCoordinator {
             publish(
                 theme: shellTheme,
                 defaultWorkspaceRootPath: defaultWorkspaceRootPath,
+                isolateShellHistory: isolateShellHistory,
                 persistedScrollback: persistedScrollback,
                 panes: panes,
                 icons: icons,
@@ -409,6 +429,7 @@ final class OpenMUXConfigurationCoordinator {
         publish(
             theme: nil,
             defaultWorkspaceRootPath: nil,
+            isolateShellHistory: nil,
             persistedScrollback: nil,
             panes: nil,
             icons: nil,
@@ -423,6 +444,7 @@ final class OpenMUXConfigurationCoordinator {
     private func publish(
         theme: WorkspaceShellTheme?,
         defaultWorkspaceRootPath: String?,
+        isolateShellHistory: Bool?,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback?,
         panes: OmuxConfigUI.Panes?,
         icons: OmuxConfigUI.Icons?,
@@ -437,6 +459,9 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let defaultWorkspaceRootPath {
             onWorkspaceDefaultRootChange?(defaultWorkspaceRootPath)
+        }
+        if let isolateShellHistory {
+            onShellHistoryIsolationChange?(isolateShellHistory)
         }
         if let persistedScrollback {
             onPersistedScrollbackChange?(persistedScrollback)

@@ -82,6 +82,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             hookRunner: hookRunner,
             defaultWorkspaceRootPath: preparedConfiguration.defaultWorkspaceRootPath,
             persistedScrollback: preparedConfiguration.persistedScrollback,
+            isolateShellHistory: preparedConfiguration.isolateShellHistory,
+            workspaceShellStateDirectoryURL: OmuxConfigPaths.baseDirectoryURL.appendingPathComponent("state", isDirectory: true),
             paneConfiguration: preparedConfiguration.panes,
             markdownPreviewConfiguration: preparedConfiguration.markdownPreview,
             aiStatusConfiguration: preparedConfiguration.aiStatus,
@@ -182,6 +184,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onWorkspaceDefaultRootChange = { [weak self] path in
                 self?.workspaceController.updateDefaultWorkspaceRootPath(path)
+            }
+            configurationCoordinator.onShellHistoryIsolationChange = { [weak self] isolateShellHistory in
+                self?.workspaceController.updateShellHistoryIsolation(isolateShellHistory)
             }
             configurationCoordinator.onPersistedScrollbackChange = { [weak self] persistedScrollback in
                 self?.workspaceController.updatePersistedScrollback(persistedScrollback)

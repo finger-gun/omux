@@ -41,6 +41,7 @@ name = "monokai-soda"
 
 [workspace]
 default_root_path = "~"
+isolate_shell_history = true
 
 [ui.panes]
 # inactive_opacity = 0.5
@@ -364,6 +365,7 @@ OpenMUX currently models these workspace settings directly:
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `default_root_path` | string | Default workspace root used when OpenMUX opens a workspace without an explicit path. |
+| `isolate_shell_history` | boolean | Use a workspace-scoped shell history file for OpenMUX-launched terminal sessions. Defaults to `true`. |
 
 ### `workspace.default_root_path`
 
@@ -377,6 +379,29 @@ default_root_path = "~/projects"
 ```
 
 The path must resolve to an existing directory. `~` and `~/...` expand to the current user's home directory. If unset, OpenMUX uses the current user's home directory.
+
+### `workspace.isolate_shell_history`
+
+`isolate_shell_history` controls whether OpenMUX sets `HISTFILE` for launched terminal sessions. It defaults to `true`, so each workspace gets its own shell command history while panes and pane tabs inside the same workspace share that workspace history file.
+
+For zsh, OpenMUX also installs a small OpenMUX-owned `ZDOTDIR` shim for launched sessions. The shim sources your normal zsh startup files and then reapplies the workspace history file, which prevents common `.zshrc` assignments from sending OpenMUX sessions back to the global `~/.zsh_history`.
+
+OpenMUX also exposes workspace context variables to launched sessions:
+
+```text
+OMUX_WORKSPACE_ID
+OMUX_WORKSPACE_ROOT
+OMUX_WORKSPACE_HISTORY
+```
+
+When `isolate_shell_history` is enabled, OpenMUX also sets `HISTFILE` to a workspace-specific history file. When `isolate_shell_history = false`, OpenMUX still provides `OMUX_WORKSPACE_HISTORY`, but leaves `HISTFILE` selection entirely to your shell configuration:
+
+```toml
+[workspace]
+isolate_shell_history = false
+```
+
+Shell startup files can still affect history behavior. For non-zsh shells, or for zsh setups that change history after normal startup files run, those shell settings can override OpenMUX's launch environment.
 
 ## `[ui.panes]` settings
 
