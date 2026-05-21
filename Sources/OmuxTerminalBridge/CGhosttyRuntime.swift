@@ -278,6 +278,14 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                     ghostty_config_load_file(config, path)
                 }
             }
+            // Force transparent terminal background so the app window color shows through.
+            let overrideContent = "background-opacity = 0\n"
+            let overrideURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("omux-ghostty-override.conf")
+            try? overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
+            overrideURL.path.withCString { path in
+                ghostty_config_load_file(config, path)
+            }
             ghostty_config_finalize(config)
 
             var runtimeConfig = ghostty_runtime_config_s(
@@ -1574,6 +1582,13 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private func loadConfig(path: URL) -> (config: ghostty_config_t?, diagnostics: [OmuxConfigDiagnostic]) {
         let config = ghostty_config_new()
         path.path.withCString { value in
+            ghostty_config_load_file(config, value)
+        }
+        let overrideContent = "background-opacity = 0\n"
+        let overrideURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omux-ghostty-override.conf")
+        try? overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
+        overrideURL.path.withCString { value in
             ghostty_config_load_file(config, value)
         }
         ghostty_config_finalize(config)

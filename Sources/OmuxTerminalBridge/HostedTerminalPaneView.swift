@@ -62,7 +62,7 @@ public extension TerminalThemePalette {
 }
 
 private enum TerminalLayoutMetrics {
-    static let hostedContentInset: CGFloat = 4
+    static let hostedContentInset: CGFloat = 0
     static let runtimeSurfaceInset: CGFloat = 0
 }
 
@@ -104,7 +104,7 @@ public final class HostedTerminalPaneView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
 
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 0
         layer?.masksToBounds = true
         updateFocusState(isFocused)
         contentHost.apply(themePalette: themePalette)
@@ -156,13 +156,13 @@ public final class HostedTerminalPaneView: NSView {
     public func updateFocusState(_ isFocused: Bool) {
         contentHost.setFocused(isFocused)
         layer?.borderWidth = 0
-        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     public func apply(themePalette: TerminalThemePalette) {
         self.themePalette = themePalette
         contentHost.apply(themePalette: themePalette)
-        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
     }
 }
 
@@ -226,8 +226,8 @@ private final class RuntimeTerminalSurfaceContainer: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+        layer?.cornerRadius = 0
+        layer?.backgroundColor = NSColor.clear.cgColor
 
         runtimeView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(runtimeView)
@@ -246,7 +246,7 @@ private final class RuntimeTerminalSurfaceContainer: NSView {
     }
 
     func apply(themePalette: TerminalThemePalette) {
-        layer?.backgroundColor = themePalette.backgroundColor.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
     }
 }
 

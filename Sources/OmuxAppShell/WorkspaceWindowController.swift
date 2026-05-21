@@ -15,7 +15,8 @@ private enum ShellLayoutMetrics {
     static let outerPadding: CGFloat = 0
     static let interRegionSpacing: CGFloat = 0
     static let canvasPadding: CGFloat = 0
-    static let splitSpacing: CGFloat = 8
+    static let splitSpacing: CGFloat = 1
+    static let splitHitArea: CGFloat = 8
     static let paneHeaderHeight: CGFloat = 28
 }
 
@@ -114,6 +115,14 @@ final class TitleBarButton: NSButton {
 }
 
 @MainActor
+private final class WorkspaceWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    // Suppress the macOS titlebar highlight rendered by NSThemeFrame.
+    @objc func _drawTitlebarHighlight() {}
+}
+
 final class WorkspaceWindowController: NSWindowController {
     private let controller: WorkspaceController
     private let rootViewController: WorkspaceShellViewController
@@ -144,7 +153,7 @@ final class WorkspaceWindowController: NSWindowController {
             },
             onExtensionPaneAction: onExtensionPaneAction
         )
-        let window = NSWindow(
+        let window = WorkspaceWindow(
             contentRect: NSRect(x: 120, y: 120, width: 1220, height: 780),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
@@ -154,6 +163,9 @@ final class WorkspaceWindowController: NSWindowController {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.isMovableByWindowBackground = true
         window.title = workspace.name
         window.contentViewController = rootViewController
@@ -505,6 +517,7 @@ final class WorkspaceShellViewController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        suppressTitlebarDecoration()
         let nc = NotificationCenter.default
         nc.addObserver(
             self,
@@ -525,6 +538,20 @@ final class WorkspaceShellViewController: NSViewController {
         super.viewWillDisappear()
         NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: view.window)
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: view.window)
+    }
+
+    private func suppressTitlebarDecoration() {
+        // Hide the _NSTitlebarDecorationView which renders the gradient highlight
+        // at the top of the window. Walking the NSThemeFrame subview tree avoids
+        // any direct dependency on the private class name.
+        guard let themeFrame = view.window?.contentView?.superview else { return }
+        for subview in themeFrame.subviews {
+            for titlebarSubview in subview.subviews {
+                if String(describing: type(of: titlebarSubview)).contains("DecorationView") {
+                    titlebarSubview.isHidden = true
+                }
+            }
+        }
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -788,7 +815,7 @@ final class WorkspaceShellViewController: NSViewController {
         view.layer?.backgroundColor = theme.shell.windowBackground.cgColor
         view.window?.backgroundColor = theme.shell.windowBackground
         topBarBackgroundView.layer?.backgroundColor = theme.shell.topBarBackground.cgColor
-        topBarBorderView.layer?.backgroundColor = theme.shell.subduedBorder.cgColor
+        topBarBorderView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         sidebarView.apply(theme: theme)
         vaultSidebarView.apply(theme: theme)
         vaultToggleButton.contentTintColor = theme.shell.textMuted
@@ -3283,6 +3310,16 @@ final class WorkspaceSidebarView: NSView {
     func apply(theme: WorkspaceShellTheme) {
         layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
         layer?.borderWidth = 0
+        // Draw a 1px right-edge separator matching the VSCode style
+        let rightBorder = layer?.sublayers?.first(where: { $0.name == "sidebarRightBorder" }) ?? {
+            let l = CALayer()
+            l.name = "sidebarRightBorder"
+            layer?.addSublayer(l)
+            return l
+        }()
+        rightBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        rightBorder.frame = CGRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height)
+        rightBorder.autoresizingMask = [.layerMinXMargin, .layerHeightSizable]
         workspacesSection.apply(theme: theme)
         updateNoticeView.apply(theme: theme)
     }
@@ -5015,7 +5052,7 @@ final class WorkspaceCanvasView: NSView {
     }
 
     func apply(theme: WorkspaceShellTheme) {
-        layer?.backgroundColor = theme.shell.canvasBackground.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
     }
 
@@ -5067,6 +5104,7 @@ final class SplitLayoutView: NSView {
     private let onResize: ([PaneID], [Double]) -> Void
     private var desiredProportions: [Double]
     private var dividerRects: [NSRect] = []
+    private var dividerHitRects: [NSRect] = []
     private var dragState: DragState?
 
     override var isFlipped: Bool { true }
@@ -5114,7 +5152,7 @@ final class SplitLayoutView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor.separatorColor.setFill()
+        NSColor.black.withAlphaComponent(0.35).setFill()
         for rect in dividerRects where dirtyRect.intersects(rect) {
             rect.fill()
         }
@@ -5123,12 +5161,12 @@ final class SplitLayoutView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
         let cursor: NSCursor = axis == .columns ? .resizeLeftRight : .resizeUpDown
-        dividerRects.forEach { addCursorRect($0, cursor: cursor) }
+        dividerHitRects.forEach { addCursorRect($0, cursor: cursor) }
     }
 
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        guard let dividerIndex = dividerRects.firstIndex(where: { $0.contains(location) }) else {
+        guard let dividerIndex = dividerHitRects.firstIndex(where: { $0.contains(location) }) else {
             return
         }
 
@@ -5183,15 +5221,19 @@ final class SplitLayoutView: NSView {
     private func applyLayout() {
         guard subviews.isEmpty == false else {
             dividerRects = []
+            dividerHitRects = []
             return
         }
 
         let spacing = ShellLayoutMetrics.splitSpacing
+        let hitArea = ShellLayoutMetrics.splitHitArea
+        let hitPad = (hitArea - spacing) / 2
         let availableLength = max(primaryLength(of: bounds.size) - spacing * CGFloat(max(subviews.count - 1, 0)), 0)
         let lengths = resolvedLengths(totalLength: availableLength)
 
         var cursor: CGFloat = 0
         dividerRects = []
+        dividerHitRects = []
 
         for (index, subview) in subviews.enumerated() {
             let length = lengths[index]
@@ -5206,12 +5248,16 @@ final class SplitLayoutView: NSView {
 
             if index < subviews.count - 1 {
                 let dividerRect: NSRect
+                let hitRect: NSRect
                 if axis == .columns {
                     dividerRect = NSRect(x: cursor, y: 0, width: spacing, height: bounds.height)
+                    hitRect = NSRect(x: cursor - hitPad, y: 0, width: hitArea, height: bounds.height)
                 } else {
                     dividerRect = NSRect(x: 0, y: cursor, width: bounds.width, height: spacing)
+                    hitRect = NSRect(x: 0, y: cursor - hitPad, width: bounds.width, height: hitArea)
                 }
                 dividerRects.append(dividerRect)
+                dividerHitRects.append(hitRect)
                 cursor += spacing
             }
         }
@@ -6135,7 +6181,7 @@ final class PaneCardView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
-        alphaValue = showActiveBorder ? 1.0 : inactiveOpacity
+        alphaValue = 1.0
     }
 }
 
@@ -6173,7 +6219,14 @@ final class PaneHeaderView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = theme.shell.paneHeaderBackground.cgColor
+        layer?.backgroundColor = theme.shell.topBarBackground.cgColor
+
+        let bottomBorder = CALayer()
+        bottomBorder.name = "tabBarBottomBorder"
+        bottomBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        bottomBorder.frame = CGRect(x: 0, y: 0, width: 0, height: 1)
+        bottomBorder.autoresizingMask = [.layerWidthSizable]
+        layer?.addSublayer(bottomBorder)
 
         let content = NSStackView()
         content.orientation = .horizontal
@@ -6638,7 +6691,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        topBorderLayer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 2)
+        topBorderLayer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
         CATransaction.commit()
         let contentLeft = contentInsets.left
         let contentRight = contentInsets.right
@@ -6859,13 +6912,13 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         iconImageView.contentTintColor = iconColor
         if isActiveTab {
             layer?.backgroundColor = currentTheme.shell.paneCardBackground.cgColor
-            topBorderLayer.backgroundColor = currentTheme.shell.accent.cgColor
+            topBorderLayer.backgroundColor = currentTheme.shell.border.cgColor
+            topBorderLayer.isHidden = false
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
-            topBorderLayer.backgroundColor = currentTheme.shell.border.cgColor
+            topBorderLayer.isHidden = true
         }
-        topBorderLayer.isHidden = false
-        alphaValue = isEnabled ? (isActiveTab ? 1.0 : 0.6) : 0.4
+        alphaValue = isEnabled ? 1.0 : 0.4
     }
 }
 
