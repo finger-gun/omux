@@ -112,6 +112,16 @@ final class TitleBarButton: NSButton {
         path.fill()
         super.draw(dirtyRect)
     }
+
+    // XCUITest determines isHittable for buttons inside a mouseDownCanMoveWindow
+    // container by checking whether accessibilityPerformPress() is implemented and
+    // succeeds. NSButton's default implementation delegates to sendAction, which
+    // works correctly here. Explicitly overriding this makes the hittability check
+    // reliable on headless CI runners where there is no key window guarantee.
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        return sendAction(action, to: target)
+    }
 }
 
 @MainActor
