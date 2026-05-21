@@ -6875,11 +6875,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
             )
             closeButton.frame = .zero
         }
-        // Use middle truncation only when the title is wider than the available space,
-        // so short titles are not needlessly truncated in the middle.
-        titleLabel.lineBreakMode = titleLabel.intrinsicContentSize.width > titleLabel.frame.width
-            ? .byTruncatingMiddle
-            : .byTruncatingTail
+        titleLabel.lineBreakMode = .byTruncatingMiddle
     }
 
     override func mouseDown(with event: NSEvent) {
