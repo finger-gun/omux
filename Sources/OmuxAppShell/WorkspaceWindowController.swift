@@ -3911,10 +3911,10 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         nil
     }
 
-    // Honour `isHidden` in the accessibility tree so that XCUITest queries
-    // using `exists` correctly return `false` when the sidebar is collapsed.
-    override func accessibilityIsIgnored() -> Bool {
-        MainActor.assumeIsolated { isHidden }
+    // Keep the accessibility element flag in sync with visibility so that
+    // XCUITest's `exists` predicate returns `false` when the sidebar is hidden.
+    override var isHidden: Bool {
+        didSet { setAccessibilityElement(!isHidden) }
     }
 
     deinit {
