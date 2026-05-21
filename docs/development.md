@@ -62,6 +62,7 @@ make test
 make verify
 make ui-test
 make smoke
+make power-profile
 make import-themes
 make package-release
 Scripts/check-changes-since-release.sh
@@ -117,6 +118,7 @@ swift run omux worktree <branch>
 swift run omux install-cli [destination]
 swift run omux help
 swift run OpenMUXApp
+Scripts/capture-openmux-power-profile.sh --label manual
 ```
 
 `swift run omux theme` opens the interactive fuzzy-search arrow-key picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback.
@@ -268,6 +270,21 @@ The current shell is usable, but it is still intentionally narrow:
 ## Runtime power profile
 
 Use this profile when changing hidden-surface rendering, display-link activity, or other visually idle runtime behavior.
+
+For a shareable capture that you can run in a separate terminal while you use the app normally, use:
+
+```bash
+make power-profile
+```
+
+Or, if you want a label in the output directory and report:
+
+```bash
+Scripts/capture-openmux-power-profile.sh --label pre-opt
+Scripts/capture-openmux-power-profile.sh --label post-opt --powermetrics
+```
+
+The script waits for `OpenMUXApp`, records branch/commit metadata, logs lightweight process snapshots while you work, and writes a final `report.md` plus raw artifacts under `.build/power-profile/` when you stop it with Ctrl-C.
 
 ### Scenario
 
