@@ -53,6 +53,32 @@ public struct ExtensionPaneActionResult: Sendable {
     public let pane: Pane
 }
 
+public struct TerminalSurfacePresentationState: Equatable, Sendable {
+    public let appIsActive: Bool
+    public let windowIsKey: Bool
+    public let windowIsVisible: Bool
+
+    public init(appIsActive: Bool, windowIsKey: Bool, windowIsVisible: Bool) {
+        self.appIsActive = appIsActive
+        self.windowIsKey = windowIsKey
+        self.windowIsVisible = windowIsVisible
+    }
+
+    public static let visible = TerminalSurfacePresentationState(
+        appIsActive: true,
+        windowIsKey: true,
+        windowIsVisible: true
+    )
+
+    public var runtimeIsFocused: Bool {
+        appIsActive && windowIsKey
+    }
+
+    public var allowsSurfacePresentation: Bool {
+        windowIsVisible
+    }
+}
+
 public final class WorkspaceController: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: GhosttyTerminalBridge
@@ -407,7 +433,10 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     @discardableResult
-    public func ensureVisibleTerminalSurfaces(for workspaceID: WorkspaceID) throws -> Workspace? {
+    public func ensureVisibleTerminalSurfaces(
+        for workspaceID: WorkspaceID,
+        presentationState: TerminalSurfacePresentationState = .visible
+    ) throws -> Workspace? {
         lock.lock()
         guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
             lock.unlock()
@@ -416,7 +445,11 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         try ensureTerminalSurfaces(in: workspace)
-        reconcileTerminalSurfaceVisibility(activeWorkspaceID: workspaceID)
+        bridge.setApplicationFocused(presentationState.runtimeIsFocused)
+        reconcileTerminalSurfaceVisibility(
+            activeWorkspaceID: workspaceID,
+            presentationState: presentationState
+        )
         return workspace
     }
 
@@ -476,7 +509,7 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private func ensureTerminalSurfaces(in workspace: Workspace) throws {
-        for pane in Self.visibleTerminalPanes(in: workspace) {
+        for pane in Self.visibleTerminalPanes(in: workspace, presentationState: .visible) {
             try ensureTerminalSurface(
                 for: pane,
                 workspaceID: workspace.id,
@@ -526,7 +559,13 @@ public final class WorkspaceController: @unchecked Sendable {
         return try ensureTerminalSurface(for: pane, workspaceID: workspace.id, workspaceRootPath: workspace.rootPath)
     }
 
-    private static func visibleTerminalPanes(in workspace: Workspace) -> [Pane] {
+    private static func visibleTerminalPanes(
+        in workspace: Workspace,
+        presentationState: TerminalSurfacePresentationState
+    ) -> [Pane] {
+        guard presentationState.allowsSurfacePresentation else {
+            return []
+        }
         let focusedTab = workspace.focusedTab ?? workspace.tabs.first
         let focusedTabPaneIDs = Set(focusedTab?.visiblePaneIDs ?? [])
         let focusedTabPanes = focusedTab?.panes.filter { focusedTabPaneIDs.contains($0.id) } ?? []
@@ -534,21 +573,23 @@ public final class WorkspaceController: @unchecked Sendable {
         return (focusedTabPanes + floatingPanes).filter(\.isTerminal)
     }
 
-    private func reconcileTerminalSurfaceVisibility(activeWorkspaceID: WorkspaceID, windowVisible: Bool = true) {
+    private func reconcileTerminalSurfaceVisibility(
+        activeWorkspaceID: WorkspaceID,
+        presentationState: TerminalSurfacePresentationState
+    ) {
         let visiblePaneIDs = derivedVisibleTerminalPaneIDs(
             activeWorkspaceID: activeWorkspaceID,
-            windowVisible: windowVisible
+            presentationState: presentationState
         )
         for paneID in bridge.hostedSurfacePaneIDs() {
             bridge.setHostedSurfaceVisible(paneID: paneID, isVisible: visiblePaneIDs.contains(paneID))
         }
     }
 
-    private func derivedVisibleTerminalPaneIDs(activeWorkspaceID: WorkspaceID, windowVisible: Bool) -> Set<PaneID> {
-        guard windowVisible else {
-            return []
-        }
-
+    private func derivedVisibleTerminalPaneIDs(
+        activeWorkspaceID: WorkspaceID,
+        presentationState: TerminalSurfacePresentationState
+    ) -> Set<PaneID> {
         lock.lock()
         let workspace = workspaces.first(where: { $0.id == activeWorkspaceID })
         lock.unlock()
@@ -557,7 +598,12 @@ public final class WorkspaceController: @unchecked Sendable {
             return []
         }
 
-        return Set(Self.visibleTerminalPanes(in: workspace).map(\.id))
+        return Set(
+            Self.visibleTerminalPanes(
+                in: workspace,
+                presentationState: presentationState
+            ).map(\.id)
+        )
     }
 
     private func currentPersistedScrollback() -> OmuxConfigTerminal.PersistedScrollback {

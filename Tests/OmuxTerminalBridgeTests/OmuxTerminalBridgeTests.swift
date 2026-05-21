@@ -228,6 +228,22 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.visibilityBySurface[runtimeSurfaceID], [false])
     }
 
+    func testBridgePaneFocusDoesNotDriveRuntimeAppFocus() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        bridge.setApplicationFocused(true)
+        bridge.setHostedSurfaceFocused(paneID: pane.id, isFocused: true)
+        bridge.setHostedSurfaceFocused(paneID: pane.id, isFocused: false)
+
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        XCTAssertEqual(runtime.applicationFocusUpdates, [true])
+        XCTAssertEqual(runtime.surfaceFocusBySurface[runtimeSurfaceID], [true, false])
+    }
+
     func testBridgePreservesSessionEnvironmentOnAttach() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1866,6 +1882,8 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var accumulatedEvents: [NormalizedKeyEvent] = []
     private(set) var sentTextsBySurface: [String: [String]] = [:]
     private(set) var handledEventsBySurface: [String: [NormalizedKeyEvent]] = [:]
+    private(set) var applicationFocusUpdates: [Bool] = []
+    private(set) var surfaceFocusBySurface: [String: [Bool]] = [:]
     private(set) var visibilityBySurface: [String: [Bool]] = [:]
     private(set) var bindingActions: [String] = []
     private(set) var mouseButtons: [(state: ghostty_input_mouse_state_e, buttonNumber: Int, modifiers: KeyModifiers)] = []
@@ -2014,9 +2032,12 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
         _ = rows
     }
 
+    func setApplicationFocused(_ focused: Bool) {
+        applicationFocusUpdates.append(focused)
+    }
+
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
-        _ = runtimeSurfaceID
-        _ = focused
+        surfaceFocusBySurface[runtimeSurfaceID, default: []].append(focused)
     }
 
     func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {

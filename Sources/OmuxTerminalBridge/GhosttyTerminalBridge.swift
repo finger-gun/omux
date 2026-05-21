@@ -47,6 +47,7 @@ public protocol GhosttyRuntime {
     func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection?
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
     func surfaceSize(runtimeSurfaceID: String) -> TerminalSize?
+    func setApplicationFocused(_ focused: Bool)
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
     func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool)
     func setTerminalActionHandler(
@@ -107,6 +108,10 @@ public extension GhosttyRuntime {
     func surfaceSize(runtimeSurfaceID: String) -> TerminalSize? {
         _ = runtimeSurfaceID
         return nil
+    }
+
+    func setApplicationFocused(_ focused: Bool) {
+        _ = focused
     }
 
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
@@ -402,6 +407,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     private var sessionsByPane: [PaneID: SessionID] = [:]
     private var sessionStateByPane: [PaneID: SessionState] = [:]
     private var visibilityByPane: [PaneID: Bool] = [:]
+    private var applicationFocused: Bool?
     private var observers: [PaneID: [UUID: @Sendable (TerminalSessionSnapshot) -> Void]] = [:]
     private var terminalActionObservers: [UUID: @Sendable (TerminalActionEvent) -> Void] = [:]
 
@@ -883,6 +889,17 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         }
 
         runtime.setSurfaceFocused(runtimeSurfaceID: runtimeSurfaceID, focused: isFocused)
+    }
+
+    public func setApplicationFocused(_ focused: Bool) {
+        lock.lock()
+        if applicationFocused == focused {
+            lock.unlock()
+            return
+        }
+        applicationFocused = focused
+        lock.unlock()
+        runtime.setApplicationFocused(focused)
     }
 
     public func setHostedSurfaceVisible(paneID: PaneID, isVisible: Bool) {

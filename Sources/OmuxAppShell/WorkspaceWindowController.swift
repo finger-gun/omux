@@ -123,8 +123,12 @@ final class WorkspaceWindowController: NSWindowController {
 
     func update(workspace: Workspace) {
         let displayedWorkspace = controller.activeWorkspace() ?? workspace
+        let presentationState = rootViewController.currentTerminalSurfacePresentationState()
         do {
-            _ = try controller.ensureVisibleTerminalSurfaces(for: displayedWorkspace.id)
+            _ = try controller.ensureVisibleTerminalSurfaces(
+                for: displayedWorkspace.id,
+                presentationState: presentationState
+            )
         } catch {
             fputs("warning: failed to ensure visible terminal surfaces: \(error)\n", stderr)
         }
@@ -230,6 +234,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
     private var isSidebarVisible: Bool
+    private var applicationIsActive: Bool = NSApplication.shared.isActive
     private var windowIsKey: Bool = false
     private var focusRestoreGeneration: UInt = 0
     private var terminalIconRefreshTimer: Timer?
@@ -416,6 +421,49 @@ final class WorkspaceShellViewController: NSViewController {
             name: NSWindow.didResignKeyNotification,
             object: view.window
         )
+        nc.addObserver(
+            self,
+            selector: #selector(windowPresentationStateDidChange(_:)),
+            name: NSWindow.didMiniaturizeNotification,
+            object: view.window
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(windowPresentationStateDidChange(_:)),
+            name: NSWindow.didDeminiaturizeNotification,
+            object: view.window
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(windowPresentationStateDidChange(_:)),
+            name: NSWindow.didChangeOcclusionStateNotification,
+            object: view.window
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(applicationPresentationStateDidChange(_:)),
+            name: NSApplication.didBecomeActiveNotification,
+            object: NSApplication.shared
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(applicationPresentationStateDidChange(_:)),
+            name: NSApplication.didResignActiveNotification,
+            object: NSApplication.shared
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(applicationPresentationStateDidChange(_:)),
+            name: NSApplication.didHideNotification,
+            object: NSApplication.shared
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(applicationPresentationStateDidChange(_:)),
+            name: NSApplication.didUnhideNotification,
+            object: NSApplication.shared
+        )
+        applicationIsActive = NSApplication.shared.isActive
         windowIsKey = view.window?.isKeyWindow ?? false
     }
 
@@ -423,6 +471,13 @@ final class WorkspaceShellViewController: NSViewController {
         super.viewWillDisappear()
         NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: view.window)
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: view.window)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didMiniaturizeNotification, object: view.window)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didDeminiaturizeNotification, object: view.window)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: view.window)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didHideNotification, object: NSApplication.shared)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didUnhideNotification, object: NSApplication.shared)
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -439,6 +494,48 @@ final class WorkspaceShellViewController: NSViewController {
         }
         windowIsKey = false
         if let workspace = controller.activeWorkspace() ?? currentWorkspace { update(workspace: workspace) }
+    }
+
+    @objc private func windowPresentationStateDidChange(_ notification: Notification) {
+        _ = notification
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
+            update(workspace: workspace)
+        }
+    }
+
+    @objc private func applicationPresentationStateDidChange(_ notification: Notification) {
+        switch notification.name {
+        case NSApplication.didBecomeActiveNotification:
+            applicationIsActive = true
+        case NSApplication.didResignActiveNotification:
+            applicationIsActive = false
+        default:
+            break
+        }
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
+            update(workspace: workspace)
+        }
+    }
+
+    func currentTerminalSurfacePresentationState() -> TerminalSurfacePresentationState {
+        guard let window = view.window else {
+            return TerminalSurfacePresentationState(
+                appIsActive: applicationIsActive,
+                windowIsKey: windowIsKey,
+                windowIsVisible: false
+            )
+        }
+
+        let windowIsVisible = window.isMiniaturized == false
+            && window.isVisible
+            && NSApplication.shared.isHidden == false
+            && window.occlusionState.contains(.visible)
+
+        return TerminalSurfacePresentationState(
+            appIsActive: applicationIsActive,
+            windowIsKey: windowIsKey,
+            windowIsVisible: windowIsVisible
+        )
     }
 
     func update(workspace: Workspace) {
