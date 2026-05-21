@@ -43,7 +43,7 @@ struct WorkspaceShellTheme {
         self.shell = WorkspaceShellColors(
             windowBackground: canvas,
             sidebarBackground: surface,
-            topBarBackground: surface,
+            topBarBackground: surface.blended(withFraction: 0.15, of: .black) ?? surface,
             canvasBackground: canvas,
             paneCardBackground: canvas,
             paneHeaderBackground: surface,

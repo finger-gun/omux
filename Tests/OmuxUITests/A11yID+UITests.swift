@@ -7,6 +7,8 @@ enum A11yID: String {
     case workspaceList = "omux.workspaceList"
     case paneContainer = "omux.paneContainer"
     case commandPalette = "omux.commandPalette"
+    case vaultSidebar = "omux.vaultSidebar"
+    case vaultSidebarToggle = "omux.vaultSidebarToggle"
 }
 
 // MARK: - Dynamic element identifier prefixes

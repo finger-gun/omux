@@ -66,6 +66,53 @@ final class WorkspaceRootView: NSView {
     }
 }
 
+/// A borderless button designed for the unified title bar area.
+///
+/// Renders as a square with slightly rounded corners and shows a visible
+/// background on hover, matching the style used by VS Code title bar controls.
+@MainActor
+final class TitleBarButton: NSButton {
+    private var isHovered = false
+
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = hoverTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 5), xRadius: 8, yRadius: 8)
+        if isHovered {
+            NSColor.labelColor.withAlphaComponent(0.25).setFill()
+        } else {
+            NSColor.clear.setFill()
+        }
+        path.fill()
+        super.draw(dirtyRect)
+    }
+}
+
 @MainActor
 final class WorkspaceWindowController: NSWindowController {
     private let controller: WorkspaceController
@@ -217,7 +264,10 @@ final class WorkspaceShellViewController: NSViewController {
     private let iconResolver = WorkspaceIconResolver()
     private let sidebarView = WorkspaceSidebarView()
     private let vaultSidebarView = WorkspaceVaultSidebarView()
-    private let vaultToggleButton = NSButton()
+    private let topBarBackgroundView = NSView()
+    private let topBarBorderView = NSView()
+    private let sidebarToggleButton = TitleBarButton()
+    private let vaultToggleButton = TitleBarButton()
     private let canvasView = WorkspaceCanvasView()
     private let shellOverlayHostView = ShellOverlayHostView()
     private let sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring
@@ -317,17 +367,36 @@ final class WorkspaceShellViewController: NSViewController {
 
         mainColumn.addArrangedSubview(canvasView)
 
+        sidebarToggleButton.isBordered = false
+        sidebarToggleButton.image = NSImage(systemSymbolName: "sidebar.squares.left", accessibilityDescription: "Toggle Workspace Sidebar")
+        sidebarToggleButton.toolTip = "Toggle Workspace Sidebar (⌘B)"
+        sidebarToggleButton.target = self
+        sidebarToggleButton.action = #selector(toggleSidebarPressed)
+        sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = false
+
         vaultToggleButton.isBordered = false
-        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Toggle Agent Sessions")
-        vaultToggleButton.identifier = NSUserInterfaceItemIdentifier("vault-sidebar-toggle")
+        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.squares.right", accessibilityDescription: "Toggle Agent Sessions")
+        vaultToggleButton.identifier = NSUserInterfaceItemIdentifier(A11yID.vaultSidebarToggle.rawValue)
+        vaultToggleButton.setAccessibilityIdentifier(A11yID.vaultSidebarToggle)
+        vaultToggleButton.toolTip = "Toggle Agent Sessions (⇧⌘B)"
         vaultToggleButton.target = self
         vaultToggleButton.action = #selector(toggleVaultSidebarPressed)
         vaultToggleButton.translatesAutoresizingMaskIntoConstraints = false
 
+        topBarBackgroundView.wantsLayer = true
+        topBarBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+
+        topBarBorderView.wantsLayer = true
+        topBarBorderView.translatesAutoresizingMaskIntoConstraints = false
+
         sidebarView.setAccessibilityIdentifier(A11yID.workspaceList)
         canvasView.setAccessibilityIdentifier(A11yID.paneContainer)
+        vaultSidebarView.setAccessibilityIdentifier(A11yID.vaultSidebar)
+        view.addSubview(topBarBackgroundView)
+        view.addSubview(topBarBorderView)
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
+        view.addSubview(sidebarToggleButton)
         if vaultConfiguration.enabled {
             view.addSubview(vaultSidebarView)
             if vaultConfiguration.collapsedToggleVisible {
@@ -371,6 +440,27 @@ final class WorkspaceShellViewController: NSViewController {
             canvasView.widthAnchor.constraint(equalTo: mainColumn.widthAnchor),
         ]
 
+        // A layout guide spanning the native title bar area, used to vertically
+        // center all top bar buttons regardless of the actual title bar height.
+        let titleBarGuide = NSLayoutGuide()
+        view.addLayoutGuide(titleBarGuide)
+        constraints += [
+            titleBarGuide.topAnchor.constraint(equalTo: view.topAnchor),
+            titleBarGuide.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            titleBarGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            titleBarGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            topBarBackgroundView.topAnchor.constraint(equalTo: view.topAnchor),
+            topBarBackgroundView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            topBarBackgroundView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topBarBackgroundView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            topBarBorderView.heightAnchor.constraint(equalToConstant: 1),
+            topBarBorderView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            topBarBorderView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topBarBorderView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ]
+
         if vaultConfiguration.enabled, let vaultSidebarWidthConstraint {
             constraints += [
                 vaultSidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -380,13 +470,25 @@ final class WorkspaceShellViewController: NSViewController {
             ]
             if vaultConfiguration.collapsedToggleVisible {
                 constraints += [
-                    vaultToggleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
-                    vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4),
+                    vaultToggleButton.centerYAnchor.constraint(equalTo: titleBarGuide.centerYAnchor),
+                    vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
                     vaultToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
                     vaultToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
                 ]
             }
         }
+
+        // Sidebar toggle button: always present, positioned to the left of the
+        // vault toggle (or at the trailing edge when vault is disabled).
+        let sidebarButtonTrailing = vaultConfiguration.collapsedToggleVisible
+            ? vaultToggleButton.leadingAnchor
+            : view.trailingAnchor
+        constraints += [
+            sidebarToggleButton.centerYAnchor.constraint(equalTo: titleBarGuide.centerYAnchor),
+            sidebarToggleButton.trailingAnchor.constraint(equalTo: sidebarButtonTrailing),
+            sidebarToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
+            sidebarToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
+        ]
 
         constraints += [
             shellOverlayHostView.topAnchor.constraint(equalTo: mainColumn.topAnchor),
@@ -685,9 +787,12 @@ final class WorkspaceShellViewController: NSViewController {
     private func apply(theme: WorkspaceShellTheme) {
         view.layer?.backgroundColor = theme.shell.windowBackground.cgColor
         view.window?.backgroundColor = theme.shell.windowBackground
+        topBarBackgroundView.layer?.backgroundColor = theme.shell.topBarBackground.cgColor
+        topBarBorderView.layer?.backgroundColor = theme.shell.subduedBorder.cgColor
         sidebarView.apply(theme: theme)
         vaultSidebarView.apply(theme: theme)
         vaultToggleButton.contentTintColor = theme.shell.textMuted
+        sidebarToggleButton.contentTintColor = theme.shell.textMuted
         canvasView.apply(theme: theme)
         commandPaletteView?.apply(theme: theme)
         shellOverlayHostView.apply(theme: theme)
@@ -1056,6 +1161,10 @@ final class WorkspaceShellViewController: NSViewController {
         view.layoutSubtreeIfNeeded()
     }
 
+    @objc private func toggleSidebarPressed() {
+        toggleSidebarVisibility()
+    }
+
     @objc private func toggleVaultSidebarPressed() {
         toggleVaultSidebar()
     }
@@ -1082,7 +1191,7 @@ final class WorkspaceShellViewController: NSViewController {
     private func applyVaultSidebarVisibility() {
         let isVisible = vaultConfiguration.enabled && isVaultSidebarVisible
         vaultSidebarView.isHidden = !isVisible
-        vaultToggleButton.isHidden = !vaultConfiguration.enabled || !vaultConfiguration.collapsedToggleVisible || isVisible
+        vaultToggleButton.isHidden = !vaultConfiguration.enabled || !vaultConfiguration.collapsedToggleVisible
         vaultToggleButton.contentTintColor = currentTheme.shell.textMuted
         vaultSidebarWidthConstraint?.constant = isVisible ? ShellLayoutMetrics.vaultSidebarWidth : 0
         mainColumnTrailingConstraint?.constant = isVisible
@@ -1092,13 +1201,9 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private var reservedWidthForCollapsedVaultToggle: CGFloat {
-        guard vaultConfiguration.enabled else {
-            return 0
-        }
-        guard vaultConfiguration.collapsedToggleVisible else {
-            return 0
-        }
-        return ShellLayoutMetrics.vaultToggleReservedWidth
+        // The vault toggle button now lives in the title bar area, so no
+        // horizontal space needs to be reserved in the main canvas column.
+        return 0
     }
 
     private func configureVaultSourceIndexing() {
@@ -3607,7 +3712,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
 
     private let titleLabel = NSTextField(labelWithString: "AGENT SESSIONS")
     private let refreshButton = NSButton()
-    private let collapseButton = NSButton()
     private let searchContainer = NSView()
     private let searchIcon = NSImageView()
     private let searchField = AgentSessionsSearchField()
@@ -3650,12 +3754,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         refreshButton.target = self
         refreshButton.action = #selector(refreshPressed)
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
-
-        collapseButton.isBordered = false
-        collapseButton.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Hide Agent Sessions")
-        collapseButton.target = self
-        collapseButton.action = #selector(collapsePressed)
-        collapseButton.translatesAutoresizingMaskIntoConstraints = false
 
         searchContainer.wantsLayer = true
         searchContainer.layer?.cornerRadius = 14
@@ -3716,7 +3814,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         header.addArrangedSubview(titleLabel)
         header.addArrangedSubview(NSView())
         header.addArrangedSubview(refreshButton)
-        header.addArrangedSubview(collapseButton)
         searchContainer.addSubview(searchIcon)
         searchContainer.addSubview(searchField)
         filterRow.addArrangedSubview(workspacePopup)
@@ -3740,8 +3837,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             refreshButton.widthAnchor.constraint(equalToConstant: 22),
             refreshButton.heightAnchor.constraint(equalToConstant: 22),
-            collapseButton.widthAnchor.constraint(equalToConstant: 22),
-            collapseButton.heightAnchor.constraint(equalToConstant: 22),
             searchContainer.heightAnchor.constraint(equalToConstant: 28),
             searchContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             searchContainer.leadingAnchor.constraint(equalTo: header.leadingAnchor),
@@ -3788,7 +3883,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
         titleLabel.textColor = theme.shell.textMuted
         refreshButton.contentTintColor = theme.shell.textMuted
-        collapseButton.contentTintColor = theme.shell.textMuted
         workspacePopup.contentTintColor = theme.shell.textMuted
         agentPopup.contentTintColor = theme.shell.textMuted
         statusLabel.textColor = theme.shell.textMuted
@@ -4034,10 +4128,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
 
     @objc private func refreshPressed() {
         onRefresh?()
-    }
-
-    @objc private func collapsePressed() {
-        onToggle?()
     }
 
     @objc private func agentFilterChanged() {
