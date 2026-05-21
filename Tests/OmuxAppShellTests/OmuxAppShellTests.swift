@@ -6424,7 +6424,7 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testPaneTabTitleLabelDoesNotMiddleTruncateShortTitles() throws {
+    func testPaneTabTitleLabelUsesMiddleTruncationModeForShortTitles() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -6445,7 +6445,7 @@ final class OmuxAppShellTests: XCTestCase {
         let titleLabel = try XCTUnwrap(findLabelView(withString: "Opencode", in: tabButton))
 
         XCTAssertEqual(titleLabel.stringValue, "Opencode")
-        XCTAssertNotEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
+        XCTAssertEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
         XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
     }
 

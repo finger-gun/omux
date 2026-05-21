@@ -1,5 +1,7 @@
 .PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help check-xcodegen generate-xcodeproj ui-test power-profile
 
+SWIFT := env CLANG_MODULE_CACHE_PATH=.build/module-cache swift
+
 help:
 	@printf "OpenMUX development commands\n\n"
 	@printf "  make setup         Build the vendored Ghostty runtime artifact\n"
@@ -29,10 +31,10 @@ build-ghostty:
 	./Scripts/build-ghostty.sh
 
 build:
-	swift build
+	$(SWIFT) build
 
 test:
-	swift test
+	$(SWIFT) test
 
 verify: build test
 
@@ -71,12 +73,12 @@ uninstall-local:
 	./Scripts/uninstall-local.sh
 
 dev:
-	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" swift run OpenMUXApp
+	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" $(SWIFT) run OpenMUXApp
 
 app: dev
 
 cli-help:
-	swift run omux help
+	$(SWIFT) run omux help
 
 check-xcodegen:
 	@command -v xcodegen >/dev/null 2>&1 || { \
