@@ -112,13 +112,17 @@ public final class HostedTerminalPaneView: NSView {
         let hostedView = contentHost.rootView
         hostedView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hostedView)
+        let minimumWidth = widthAnchor.constraint(greaterThanOrEqualToConstant: 360)
+        minimumWidth.priority = .dragThatCanResizeWindow
+        let minimumHeight = heightAnchor.constraint(greaterThanOrEqualToConstant: 280)
+        minimumHeight.priority = .dragThatCanResizeWindow
         NSLayoutConstraint.activate([
             hostedView.topAnchor.constraint(equalTo: topAnchor, constant: TerminalLayoutMetrics.hostedContentInset),
             hostedView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: TerminalLayoutMetrics.hostedContentInset),
             hostedView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -TerminalLayoutMetrics.hostedContentInset),
             hostedView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -TerminalLayoutMetrics.hostedContentInset),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
+            minimumWidth,
+            minimumHeight,
         ])
     }
 

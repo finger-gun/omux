@@ -316,6 +316,46 @@ final class PaneTests: OmuxUITestsBase {
 
     // MARK: - Drag/drop: pane tab to new split
 
+    func testWindowFrameDoesNotShrinkAfterClosingSplitPane() {
+        let menuBar = app.menuBars.firstMatch
+        let window = app.windows[A11yID.mainWindow.rawValue]
+
+        // Wait for the window to settle before sampling its frame.
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "Main window should exist on launch")
+        let frameBefore = window.frame
+
+        // Split the focused pane.
+        menuBar.menuBarItems["Pane"].click()
+        menuBar.menuBarItems["Pane"].menuItems["Split Right"].click()
+
+        // Wait for the split to appear.
+        let paneContainer = app.groups[A11yID.paneContainer.rawValue]
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count >= 2"),
+            object: paneContainer.children(matching: .any)
+        )], timeout: 5)
+
+        // Remove the active (right) pane.
+        menuBar.menuBarItems["Pane"].click()
+        menuBar.menuBarItems["Pane"].menuItems["Remove Active Pane"].click()
+
+        // Give AppKit a moment to flush any layout pass.
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count < 2"),
+            object: paneContainer.children(matching: .any)
+        )], timeout: 3)
+
+        let frameAfter = window.frame
+
+        // The window must not shrink in width after closing the split pane.
+        // Allow a tolerance of 2 pts for rounding / chrome adjustments.
+        XCTAssertGreaterThanOrEqual(
+            frameAfter.width, frameBefore.width - 2,
+            "Window width should not shrink after closing a split pane (was \(frameBefore.width), now \(frameAfter.width))"
+        )
+        XCTAssertTrue(app.state == .runningForeground, "App should still be running after closing a split pane")
+    }
+
     func testDragPaneTabToCreateSplit() {
         let menuBar = app.menuBars.firstMatch
         let paneContainer = app.groups[A11yID.paneContainer.rawValue]

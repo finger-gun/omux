@@ -6325,6 +6325,7 @@ final class PaneHeaderView: NSView {
     private let pinnedAddButton = ChromePillButton()
     private var contentTrailingToSuperviewConstraint: NSLayoutConstraint?
     private var contentTrailingToPinnedConstraint: NSLayoutConstraint?
+    private static let tabMinWidth: CGFloat = 130
     private static let tabMaxWidth: CGFloat = 200
 
     init(
@@ -6371,7 +6372,7 @@ final class PaneHeaderView: NSView {
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabStrip.identifier = NSUserInterfaceItemIdentifier("pane-tab-strip-\(paneStack.id.rawValue)")
         tabStrip.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        tabStrip.setContentCompressionResistancePriority(.required, for: .horizontal)
+        tabStrip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         for pane in paneStack.panes {
             let button = PaneTabButton(
@@ -6420,12 +6421,14 @@ final class PaneHeaderView: NSView {
             var constraints: [NSLayoutConstraint] = []
             for button in paneTabButtons {
                 let equalShare = button.widthAnchor.constraint(
-                    equalTo: widthAnchor,
+                    equalTo: tabScrollView.widthAnchor,
                     multiplier: 1.0 / count
                 )
                 equalShare.priority = .defaultHigh
                 let maxWidth = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.tabMaxWidth)
-                constraints.append(contentsOf: [equalShare, maxWidth])
+                let minWidth = button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.tabMinWidth)
+                minWidth.priority = .dragThatCanResizeWindow
+                constraints.append(contentsOf: [equalShare, minWidth, maxWidth])
                 if button !== first {
                     let sameWidth = button.widthAnchor.constraint(equalTo: first.widthAnchor)
                     sameWidth.priority = .defaultHigh
@@ -6684,7 +6687,6 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
     private let interItemSpacing = CGFloat(4)
     private let iconSpacing = CGFloat(4)
     private let symbolSide = CGFloat(12)
-    private static let preferredMaximumWidth = CGFloat(200)
     private let showsClose: Bool
     private let currentTheme: WorkspaceShellTheme
     private var isActiveTab: Bool
@@ -6723,8 +6725,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(fullDisplayTitle)" } ?? fullDisplayTitle)
         toolTip = fullDisplayTitle
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
-        widthAnchor.constraint(lessThanOrEqualToConstant: Self.preferredMaximumWidth).isActive = true
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
         progressOrb.configure(progress: progress, theme: theme)
@@ -6802,18 +6803,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
     }
 
     override var intrinsicContentSize: NSSize {
-        let titleSize = titleLabel.intrinsicContentSize
-        let iconSize = renderedIcon == nil
-            ? .zero
-            : (iconSymbolImage == nil ? iconLabel.intrinsicContentSize : NSSize(width: symbolSide, height: symbolSide))
-        let closeSize = showsClose ? closeButton.intrinsicContentSize : .zero
-        let closeWidth = showsClose ? interItemSpacing + closeSize.width : 0
-        let progressWidth = progress == nil ? 0 : PaneProgressOrbView.side + iconSpacing
-        let iconWidth = renderedIcon == nil ? 0 : iconSize.width + iconSpacing
-        return NSSize(
-            width: progressWidth + iconWidth + titleSize.width + closeWidth + contentInsets.left + contentInsets.right,
-            height: ShellLayoutMetrics.paneHeaderHeight
-        )
+        NSSize(width: NSView.noIntrinsicMetric, height: ShellLayoutMetrics.paneHeaderHeight)
     }
 
     override func layout() {

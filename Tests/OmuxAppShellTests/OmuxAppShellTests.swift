@@ -373,6 +373,33 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(OmuxCLIInstallStatus.repairNeeded.menuTitle, "Repair omux CLI")
     }
 
+    // Regression test: closing a split pane must leave the remaining pane in the
+    // workspace model without removing the tab or collapsing the workspace.
+    func testRemoveActivePaneLeavesRemainingPaneIntact() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        XCTAssertEqual(workspace.focusedTab?.panes.count, 1)
+
+        // Split so we have two panes.
+        let splitWorkspace = try XCTUnwrap(controller.splitFocusedPane())
+        XCTAssertEqual(splitWorkspace.focusedTab?.panes.count, 2)
+        let survivingPaneID = try XCTUnwrap(splitWorkspace.focusedTab?.panes.first?.id)
+
+        // Remove the active (second) pane — should succeed.
+        let afterRemoval = try XCTUnwrap(controller.removeActivePane())
+
+        // Exactly one pane must remain in the focused tab.
+        XCTAssertEqual(afterRemoval.focusedTab?.panes.count, 1)
+        // The surviving pane must be the one that was not removed.
+        XCTAssertEqual(afterRemoval.focusedTab?.panes.first?.id, survivingPaneID)
+        // The workspace itself must still be present.
+        XCTAssertEqual(afterRemoval.tabs.count, 1)
+    }
+
     func testWorkspaceControllerCreatesTabsAndSplits() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
