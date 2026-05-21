@@ -82,6 +82,19 @@ final class TitleBarButton: NSButton {
     // interact with the button (isHittable == true).
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
 
+    // On headless CI runners XCUITest cannot synthesise a coordinate-based
+    // click inside a mouseDownCanMoveWindow region (the title bar). It falls
+    // back to accessibilityPerformPress() to determine hittability and to
+    // trigger the action. NSButton's default implementation calls
+    // performClick(), which requires the window to be key — a condition that
+    // is not always met on headless runners. Overriding here fires the action
+    // directly via sendAction, bypassing the key-window guard, so the button
+    // is both considered hittable and actually activates its target/action.
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        return sendAction(action, to: target)
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let existing = hoverTrackingArea {
