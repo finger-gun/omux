@@ -345,6 +345,7 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
     private let tickLock = NSLock()
     private var appState: AppState?
     private var surfaces: [String: SurfaceState] = [:]
+    private var applicationFocused = false
     private var focusedRuntimeSurfaceID: String?
     private var tickScheduled = false
     private var compiledConfigPath: URL?
@@ -431,6 +432,9 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
 
         state.surface = surface
         state.descriptor = session
+        lock.lock()
+        applicationFocused = isWindowFocused
+        lock.unlock()
         runOnMain {
             ghostty_surface_set_content_scale(surface, scale, scale)
             ghostty_surface_set_size(surface, width, height)
@@ -1036,6 +1040,21 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         scheduleTick()
     }
 
+    public func setApplicationFocused(_ focused: Bool) {
+        lock.lock()
+        applicationFocused = focused
+        let app = appState?.app
+        lock.unlock()
+
+        guard let app else {
+            return
+        }
+        runOnMain {
+            ghostty_app_set_focus(app, focused)
+        }
+        scheduleTick()
+    }
+
     public func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
         guard let state = try? surfaceState(for: runtimeSurfaceID),
               let surface = state.surface
@@ -1043,12 +1062,8 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             return
         }
 
-        let app = appState?.app
         runOnMain {
             ghostty_surface_set_focus(surface, focused)
-            if let app {
-                ghostty_app_set_focus(app, focused)
-            }
         }
         lock.lock()
         if focused {
@@ -1057,6 +1072,22 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             focusedRuntimeSurfaceID = nil
         }
         lock.unlock()
+        scheduleTick()
+    }
+
+    public func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return
+        }
+
+        runOnMain {
+            ghostty_surface_set_occlusion(surface, isVisible)
+            if isVisible {
+                ghostty_surface_refresh(surface)
+            }
+        }
         scheduleTick()
     }
 

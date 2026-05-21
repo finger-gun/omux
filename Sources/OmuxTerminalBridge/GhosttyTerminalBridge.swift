@@ -47,7 +47,9 @@ public protocol GhosttyRuntime {
     func selection(for runtimeSurfaceID: String) -> RuntimeTerminalSelection?
     func resizeSurface(runtimeSurfaceID: String, columns: Int, rows: Int) throws
     func surfaceSize(runtimeSurfaceID: String) -> TerminalSize?
+    func setApplicationFocused(_ focused: Bool)
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool)
+    func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool)
     func setTerminalActionHandler(
         _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
     )
@@ -108,9 +110,18 @@ public extension GhosttyRuntime {
         return nil
     }
 
+    func setApplicationFocused(_ focused: Bool) {
+        _ = focused
+    }
+
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
         _ = runtimeSurfaceID
         _ = focused
+    }
+
+    func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        _ = runtimeSurfaceID
+        _ = isVisible
     }
 
     func setTerminalActionHandler(
@@ -395,6 +406,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     private var surfaces: [PaneID: TerminalSurfaceDescriptor] = [:]
     private var sessionsByPane: [PaneID: SessionID] = [:]
     private var sessionStateByPane: [PaneID: SessionState] = [:]
+    private var visibilityByPane: [PaneID: Bool] = [:]
+    private var applicationFocused: Bool?
     private var observers: [PaneID: [UUID: @Sendable (TerminalSessionSnapshot) -> Void]] = [:]
     private var terminalActionObservers: [UUID: @Sendable (TerminalActionEvent) -> Void] = [:]
 
@@ -466,6 +479,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
             return existing
         }
         surfaces[pane.id] = descriptor
+        visibilityByPane[pane.id] = true
         lock.unlock()
         return descriptor
     }
@@ -497,6 +511,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         let surface = surfaces.removeValue(forKey: paneID)
         sessionsByPane.removeValue(forKey: paneID)
         let sessionState = sessionStateByPane.removeValue(forKey: paneID)
+        visibilityByPane.removeValue(forKey: paneID)
         observers.removeValue(forKey: paneID)
         lock.unlock()
 
@@ -518,6 +533,12 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return sessionsByPane[paneID]
+    }
+
+    public func hostedSurfacePaneIDs() -> [PaneID] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(surfaces.keys)
     }
 
     public func snapshot(for paneID: PaneID) -> TerminalSessionSnapshot? {
@@ -868,6 +889,34 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         }
 
         runtime.setSurfaceFocused(runtimeSurfaceID: runtimeSurfaceID, focused: isFocused)
+    }
+
+    public func setApplicationFocused(_ focused: Bool) {
+        lock.lock()
+        if applicationFocused == focused {
+            lock.unlock()
+            return
+        }
+        applicationFocused = focused
+        lock.unlock()
+        runtime.setApplicationFocused(focused)
+    }
+
+    public func setHostedSurfaceVisible(paneID: PaneID, isVisible: Bool) {
+        lock.lock()
+        let previousVisibility = visibilityByPane[paneID]
+        let runtimeSurfaceID = sessionStateByPane[paneID]?.runtimeSurfaceID
+        if previousVisibility == isVisible {
+            lock.unlock()
+            return
+        }
+        visibilityByPane[paneID] = isVisible
+        lock.unlock()
+
+        guard let runtimeSurfaceID else {
+            return
+        }
+        runtime.setSurfaceVisible(runtimeSurfaceID: runtimeSurfaceID, isVisible: isVisible)
     }
 }
 

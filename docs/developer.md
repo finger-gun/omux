@@ -26,6 +26,7 @@ Use the Makefile entrypoints first:
 make app
 make test
 make verify
+make power-profile
 make ui-test
 ```
 
@@ -37,6 +38,7 @@ make ui-test
 | `make test` | Run the Swift test suite. |
 | `make verify` | Run build and tests. |
 | `make smoke` | Launch and sample `OpenMUXApp` as a smoke test. |
+| `make power-profile` | Wait for `OpenMUXApp`, log runtime snapshots while you work, and emit a shareable report on Ctrl-C. |
 | `make ui-test` | Run the XCUIAutomation GUI test suite. |
 
 When changing the CLI, use SwiftPM directly:
