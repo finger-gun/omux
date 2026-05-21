@@ -65,6 +65,22 @@ final class WorkspaceRootView: NSView {
         }
         return point.y >= bounds.maxY - titlebarHeight
     }
+
+    // XCUITest determines isHittable by calling accessibilityHitTest on the
+    // window at the element's centre point. Because this view returns true for
+    // mouseDownCanMoveWindow, AppKit's default implementation returns self (the
+    // drag surface) rather than any button subview sitting in the title bar
+    // region — causing XCUITest to report those buttons as not hittable.
+    //
+    // Overriding here delegates to the NSView hit-test tree first; if a
+    // non-self subview is found it is returned so the accessibility system
+    // (and XCUITest) see the correct interactive element.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any {
+        if let hit = hitTest(point), hit !== self {
+            return hit.accessibilityHitTest(point)
+        }
+        return super.accessibilityHitTest(point)
+    }
 }
 
 /// A borderless button designed for the unified title bar area.
