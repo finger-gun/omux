@@ -6197,7 +6197,7 @@ final class PaneCardView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
-        alphaValue = (focused && windowIsKey) ? 1.0 : inactiveOpacity
+        alphaValue = 1.0
     }
 }
 
