@@ -155,9 +155,6 @@ final class TitleBarButton: NSButton {
 private final class WorkspaceWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
-
-    // Suppress the macOS titlebar highlight rendered by NSThemeFrame.
-    @objc func _drawTitlebarHighlight() {}
 }
 
 final class WorkspaceWindowController: NSWindowController {
@@ -559,7 +556,6 @@ final class WorkspaceShellViewController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        suppressTitlebarDecoration()
         let nc = NotificationCenter.default
         nc.addObserver(
             self,
@@ -630,20 +626,6 @@ final class WorkspaceShellViewController: NSViewController {
         NotificationCenter.default.removeObserver(self, name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
         NotificationCenter.default.removeObserver(self, name: NSApplication.didHideNotification, object: NSApplication.shared)
         NotificationCenter.default.removeObserver(self, name: NSApplication.didUnhideNotification, object: NSApplication.shared)
-    }
-
-    private func suppressTitlebarDecoration() {
-        // Hide the _NSTitlebarDecorationView which renders the gradient highlight
-        // at the top of the window. Walking the NSThemeFrame subview tree avoids
-        // any direct dependency on the private class name.
-        guard let themeFrame = view.window?.contentView?.superview else { return }
-        for subview in themeFrame.subviews {
-            for titlebarSubview in subview.subviews {
-                if String(describing: type(of: titlebarSubview)).contains("DecorationView") {
-                    titlebarSubview.isHidden = true
-                }
-            }
-        }
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -6331,7 +6313,7 @@ final class PaneCardView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
-        alphaValue = 1.0
+        alphaValue = (focused && windowIsKey) ? 1.0 : inactiveOpacity
     }
 }
 
@@ -6841,7 +6823,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        topBorderLayer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
+        topBorderLayer.frame = CGRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
         CATransaction.commit()
         let contentLeft = contentInsets.left
         let contentRight = contentInsets.right

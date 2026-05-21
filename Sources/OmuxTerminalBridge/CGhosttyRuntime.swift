@@ -281,8 +281,9 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
             // Force transparent terminal background so the app window color shows through.
             let overrideContent = "background-opacity = 0\n"
             let overrideURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("omux-ghostty-override.conf")
-            try? overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
+                .appendingPathComponent("omux-ghostty-override-\(UUID().uuidString).conf")
+            defer { try? FileManager.default.removeItem(at: overrideURL) }
+            try overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
             overrideURL.path.withCString { path in
                 ghostty_config_load_file(config, path)
             }

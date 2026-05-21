@@ -51,7 +51,8 @@ final class AgentSessionsTests: OmuxUITestsBase {
     private func closeSidebarIfOpen() {
         guard isSidebarOpen else { return }
         clickToggle()
-        waitForSidebarClosed(timeout: 5)
+        let waitResult = waitForSidebarClosed(timeout: 5)
+        XCTAssertTrue(waitResult, "Sidebar did not close within timeout — test starting from an indeterminate state")
     }
 
     // MARK: - Tests
