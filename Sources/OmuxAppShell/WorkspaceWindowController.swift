@@ -3775,6 +3775,8 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        setAccessibilityRole(.group)
+        setAccessibilityElement(true)
 
         let header = NSStackView()
         header.orientation = .horizontal
