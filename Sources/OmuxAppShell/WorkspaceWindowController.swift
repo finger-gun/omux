@@ -78,18 +78,10 @@ final class WorkspaceRootView: NSView {
     nonisolated override func accessibilityHitTest(_ point: NSPoint) -> Any {
         struct Box: @unchecked Sendable { let value: Any }
         return MainActor.assumeIsolated {
-            let hit = hitTest(point)
-            let isKey = window?.isKeyWindow ?? false
-            let isMain = window?.isMainWindow ?? false
-            fputs("[DIAG] accessibilityHitTest point=\(point) hitView=\(String(describing: hit)) isSelf=\(hit === self) isKey=\(isKey) isMain=\(isMain)\n", stderr)
-            if let hit, hit !== self {
-                let result = hit.accessibilityHitTest(point)
-                fputs("[DIAG] → delegated to \(type(of: hit)), returning \(type(of: result))\n", stderr)
-                return Box(value: result)
+            if let hit = hitTest(point), hit !== self {
+                return Box(value: hit.accessibilityHitTest(point))
             }
-            let result = super.accessibilityHitTest(point)
-            fputs("[DIAG] → returning super result \(type(of: result))\n", stderr)
-            return Box(value: result)
+            return Box(value: super.accessibilityHitTest(point))
         }.value
     }
 }

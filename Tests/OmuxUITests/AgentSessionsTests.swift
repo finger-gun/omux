@@ -16,14 +16,17 @@ final class AgentSessionsTests: OmuxUITestsBase {
         vaultSidebar.exists && vaultSidebar.isHittable
     }
 
-    /// Clicks the toggle button using the element tap (not coordinate-based).
-    /// Sleeps before the click to ensure the app is fully settled from any
-    /// prior interaction (important on slow CI runners where layout animations
-    /// may still be in-flight when the predicate fires), and after the click
-    /// to allow the sidebar animation to complete before the next assertion.
+    /// Toggles the vault sidebar via the ⇧⌘B keyboard shortcut.
+    ///
+    /// The toggle button lives inside the native macOS title bar (y ≈ 24 pt on
+    /// CI runners where the window sits at the top of the screen). XCUITest
+    /// refuses to synthesize coordinate-based clicks into the system title bar
+    /// region regardless of accessibility attributes, so direct `.click()` on
+    /// the button is unreliable on CI. The keyboard shortcut is equivalent and
+    /// works unconditionally.
     private func clickToggle() {
         Thread.sleep(forTimeInterval: 0.5)
-        toggleButton.click()
+        app.typeKey("b", modifierFlags: [.command, .shift])
         Thread.sleep(forTimeInterval: 1.0)
     }
 
