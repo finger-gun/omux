@@ -32,6 +32,16 @@ extension PaneTests {
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleClick()
     }
 
+    /// Renames a pane tab using inline edit (double-click then type).
+    func renamePaneTab(_ tab: XCUIElement, to newTitle: String) {
+        XCTAssertTrue(tab.exists, "tab to rename should exist")
+        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        doubleClickCenter(tab)
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(newTitle)
+        app.typeKey(.return, modifierFlags: [])
+    }
+
     /// Polls until the main window width differs from `baselineWidth` by at least `delta`.
     @discardableResult
     func waitForWindowWidthChange(
@@ -141,6 +151,60 @@ final class PaneTests: OmuxUITestsBase {
             "window width should grow in single-pane mode when dragging right edge outward"
         )
         XCTAssertGreaterThan(mainWindow.frame.width, reducedWidth + 80)
+    }
+
+    func testPaneTabSizingKeepsShortTitlesFromCollapsing() {
+        let menuBar = app.menuBars.firstMatch
+        menuBar.menuBarItems["Pane"].click()
+        menuBar.menuBarItems["Pane"].menuItems["New Pane Tab"].click()
+        XCTAssertTrue(waitForPaneTabs(atLeast: 2), "expected two pane tabs")
+
+        let tabs = paneTabButtons()
+        let firstTab = tabs.element(boundBy: 0)
+        let secondTab = tabs.element(boundBy: 1)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 5))
+
+        renamePaneTab(firstTab, to: "~/projects/omux/a-very-long-tab-title-that-should-truncate-in-the-middle")
+        renamePaneTab(secondTab, to: "omux")
+
+        let mainWindow = app.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+        let rightEdge = mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.998, dy: 0.5))
+        rightEdge.press(forDuration: 0.05, thenDragTo: rightEdge.withOffset(CGVector(dx: 220, dy: 0)))
+        XCTAssertGreaterThan(
+            secondTab.frame.width,
+            70,
+            "short-title tab should not collapse to a tiny width"
+        )
+        XCTAssertGreaterThanOrEqual(
+            firstTab.frame.width,
+            secondTab.frame.width,
+            "long-title tab should not be narrower than the short-title neighbor"
+        )
+    }
+
+    func testPaneTabLongTitleRetainsFullAccessibilityLabelWhenWidthIsTight() {
+        let menuBar = app.menuBars.firstMatch
+        menuBar.menuBarItems["Pane"].click()
+        menuBar.menuBarItems["Pane"].menuItems["New Pane Tab"].click()
+        XCTAssertTrue(waitForPaneTabs(atLeast: 2), "expected two pane tabs")
+
+        let tabs = paneTabButtons()
+        let firstTab = tabs.element(boundBy: 0)
+        let secondTab = tabs.element(boundBy: 1)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 5))
+
+        renamePaneTab(firstTab, to: "~/projects/omux/a-very-long-tab-title-that-should-truncate-in-the-middle")
+        renamePaneTab(secondTab, to: "omux")
+
+        let mainWindow = app.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+        let rightEdge = mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.998, dy: 0.5))
+        rightEdge.press(forDuration: 0.05, thenDragTo: rightEdge.withOffset(CGVector(dx: -260, dy: 0)))
+        XCTAssertTrue(
+            firstTab.label.contains("a-very-long-tab-title-that-should-truncate-in-the-middle"),
+            "long tab should keep full accessibility label even when visually truncated"
+        )
     }
 
     func testNewPaneTab() {
