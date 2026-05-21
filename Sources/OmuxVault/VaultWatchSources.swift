@@ -50,6 +50,8 @@ public enum VaultWatchSourceFactory {
             return [home.appendingPathComponent("tmp", isDirectory: true)]
         case .custom:
             return []
+        case .external:
+            return []
         }
     }
 

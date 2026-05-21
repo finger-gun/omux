@@ -120,19 +120,19 @@ Installing a plugin installs executable local code. OpenMUX prints the source re
 
 When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchanged and adds these environment variables:
 
-| Variable | Meaning |
-| --- | --- |
-| `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
-| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
-| `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
-| `OMUX_CLI` | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
+| Variable                 | Meaning                                                                         |
+|--------------------------|---------------------------------------------------------------------------------|
+| `OMUX_PLUGIN_COMMAND`    | Command name the user invoked.                                                  |
+| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched.                               |
+| `OMUX_PLUGINS_DIR`       | Directory containing the plugin executable.                                     |
+| `OMUX_CLI`               | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
 
 Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app. Prefer `${OMUX_CLI:-omux}` when launching the CLI so packaged app and Terminal-launched workflows both work.
 
 Installed manifest-based plugin callbacks also receive:
 
-| Variable | Meaning |
-| --- | --- |
+| Variable                | Meaning                                                      |
+|-------------------------|--------------------------------------------------------------|
 | `OMUX_PLUGIN_HOOK_NAME` | Hook name that caused OpenMUX to invoke the plugin callback. |
 
 Registry-installed plugins can subscribe to hooks directly in `omux-plugin.toml`:
@@ -144,6 +144,38 @@ arguments = ["codex", "title"]
 ```
 
 OpenMUX invokes the plugin entrypoint with the callback name and arguments, and writes the normal hook JSON payload to stdin. This lets a plugin stay self-contained instead of asking users to install forwarding scripts under `~/.omux/hooks/`.
+
+## Agent Sessions adapter capability
+
+Plugins can contribute Agent Sessions rows by declaring an adapter callback in `omux-plugin.toml`:
+
+```toml
+[agent-sessions]
+callback = "__omux_agent_sessions"
+arguments = ["discover"]
+source_kind = "omp_jsonl"
+resume_command = "omp --resume {session_id}"
+```
+
+OpenMUX invokes the plugin entrypoint with the callback and arguments during `omux agent-sessions reindex`. The callback writes a JSON array to stdout:
+
+```json
+[
+  {
+    "id": "abc123",
+    "title": "Fix release notes",
+    "cwd": "/Users/example/project",
+    "updated_at": "2026-05-21T18:00:00Z",
+    "source_path": "/Users/example/.omp/agent/sessions/abc123.jsonl",
+    "model": "gpt-5",
+    "git_branch": "main"
+  }
+]
+```
+
+The plugin command name is the default Agent Sessions agent name. A row may include `"agent": "name"` when one plugin indexes multiple agents. OpenMUX owns validation, indexing, search, delete/hide behavior, and sidebar display; the plugin only normalizes source data.
+
+Users can disable all plugin adapters with `external_adapters_enabled = false` under `[agent-sessions]`, or disable one adapter with `[agent-sessions.external.<plugin-command>] enabled = false`.
 
 ## AI status host pattern
 
@@ -213,18 +245,18 @@ omux extension-pane close --pane <pane-id>
 
 The control plane accepts these fields:
 
-| Field | Meaning |
-| --- | --- |
-| `--plugin <id>` | Stable plugin identifier. Required for create and update. |
-| `--pane <id>` | Existing extension pane to update or close. |
-| `--title <title>` | User-facing pane title. |
-| `--source <path>` | Local source path represented by the pane. |
-| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host. |
-| `--status ready\|disabled\|error` | Rendering state. Non-ready states show placeholder copy. |
-| `--message <text>` | Placeholder or error message. |
-| `--axis columns\|rows` | Split direction for new panes. |
-| `--presentation pane-tab\|modal` | Initial host presentation for new or updated extension panes. |
-| `--actions` | Opt the pane into the host-mediated JavaScript action bridge. |
+| Field                                  | Meaning                                                       |
+|----------------------------------------|---------------------------------------------------------------|
+| `--plugin <id>`                        | Stable plugin identifier. Required for create and update.     |
+| `--pane <id>`                          | Existing extension pane to update or close.                   |
+| `--title <title>`                      | User-facing pane title.                                       |
+| `--source <path>`                      | Local source path represented by the pane.                    |
+| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host.          |
+| `--status ready\|disabled\|error`      | Rendering state. Non-ready states show placeholder copy.      |
+| `--message <text>`                     | Placeholder or error message.                                 |
+| `--axis columns\|rows`                 | Split direction for new panes.                                |
+| `--presentation pane-tab\|modal`       | Initial host presentation for new or updated extension panes. |
+| `--actions`                            | Opt the pane into the host-mediated JavaScript action bridge. |
 
 Extension panes are shell-owned content panes. They are not terminal sessions, do not allocate Ghostty surfaces, and terminal-only actions such as `omux run`, `send-text`, and history operations reject or ignore them.
 
@@ -277,8 +309,8 @@ The official plugin registry includes `settings-ui`, which opens a local extensi
 
 OpenMUX emits an input hook when a user intentionally activates text in a terminal, currently through Command-click. Plugins can listen for this hook and decide whether to act on local paths, URLs, issue IDs, or other recognizable tokens.
 
-| Hook | Payload |
-| --- | --- |
+| Hook                            | Payload                                                                   |
+|---------------------------------|---------------------------------------------------------------------------|
 | `input:terminal-text-activated` | `token`, `row`, `column`, `cwd`, `resolvedPath`, and numeric `modifiers`. |
 
 Plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting.

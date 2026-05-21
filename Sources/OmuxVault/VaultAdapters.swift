@@ -1,14 +1,24 @@
 import CSQLite
 import Foundation
+import OmuxConfig
 
 public protocol VaultAgentAdapter: Sendable {
     var kind: VaultAgentKind { get }
+    var isExternal: Bool { get }
+    var sourceKindPrefixes: [String] { get }
+    var resumeCommandTemplate: String? { get }
     func discoverSessions() async throws -> [VaultIndexedSession]
+}
+
+public extension VaultAgentAdapter {
+    var isExternal: Bool { false }
+    var sourceKindPrefixes: [String] { [] }
+    var resumeCommandTemplate: String? { nil }
 }
 
 public enum VaultAdapterFactory {
     public static func adapters(configuration: VaultConfiguration) -> [VaultAgentAdapter] {
-        [
+        var adapters: [VaultAgentAdapter] = [
             CopilotVaultAdapter(root: configuration.home(for: .copilot), configuration: configuration),
             CodexVaultAdapter(root: configuration.home(for: .codex), configuration: configuration),
             GeminiVaultAdapter(root: configuration.home(for: .gemini), configuration: configuration),
@@ -17,6 +27,195 @@ public enum VaultAdapterFactory {
             JSONLDirectoryVaultAdapter(kind: .pi, root: configuration.home(for: .pi), sourceKind: "pi_jsonl", globHint: nil, configuration: configuration),
             JSONLDirectoryVaultAdapter(kind: .rovodev, root: configuration.home(for: .rovodev), sourceKind: "rovodev_jsonl", globHint: nil, configuration: configuration),
         ]
+        if configuration.externalAdaptersEnabled {
+            adapters += PluginAgentSessionsAdapterDiscovery.adapters(configuration: configuration).map {
+                ExternalCommandVaultAdapter(configuration: $0)
+            }
+            adapters += configuration.externalAdapters.map {
+                ExternalCommandVaultAdapter(configuration: $0)
+            }
+        }
+        return adapters
+    }
+}
+
+public enum PluginAgentSessionsAdapterDiscovery {
+    public static func adapters(
+        configuration: VaultConfiguration,
+        pluginsDirectoryURL: URL = OmuxConfigPaths.pluginsDirectoryURL,
+        fileManager: FileManager = .default
+    ) -> [VaultConfiguration.ExternalAdapterConfiguration] {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: pluginsDirectoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return entries
+            .filter { isDirectory($0, fileManager: fileManager) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { adapter(forPluginDirectory: $0, configuration: configuration, fileManager: fileManager) }
+    }
+
+    private static func adapter(
+        forPluginDirectory pluginDirectory: URL,
+        configuration: VaultConfiguration,
+        fileManager: FileManager
+    ) -> VaultConfiguration.ExternalAdapterConfiguration? {
+        let manifestURL = pluginDirectory.appendingPathComponent("omux-plugin.toml", isDirectory: false)
+        guard fileManager.fileExists(atPath: manifestURL.path) else {
+            return nil
+        }
+        let parseResult = OmuxTOMLParser.parse(fileAt: manifestURL)
+        guard let document = parseResult.document, parseResult.diagnostics.isEmpty else {
+            return nil
+        }
+        guard document.value(for: "kind")?.stringValue == "plugin" else {
+            return nil
+        }
+        let pluginID = document.value(for: "id")?.stringValue?.nilIfBlank ?? pluginDirectory.lastPathComponent
+        let commandName = document.value(in: "plugin", for: "command")?.stringValue?.nilIfBlank ?? pluginID
+        let entrypoint = document.value(in: "plugin", for: "entrypoint")?.stringValue?.nilIfBlank ?? "plugin"
+        let executableURL = pluginDirectory.appendingPathComponent(entrypoint, isDirectory: false)
+        guard isExecutableRegularFile(executableURL, fileManager: fileManager) else {
+            return nil
+        }
+        guard let callback = document.value(in: "agent-sessions", for: "callback")?.stringValue?.nilIfBlank else {
+            return nil
+        }
+        let setting = configuration.externalAdapterSettings[commandName] ?? configuration.externalAdapterSettings[pluginID]
+        if setting?.enabled == false {
+            return nil
+        }
+        let manifestAgent = document.value(in: "agent-sessions", for: "agent")?.stringValue?.nilIfBlank
+        let agent = VaultAgentKind(rawValue: manifestAgent ?? commandName) ?? .external(commandName)
+        let sourceKind = document.value(in: "agent-sessions", for: "source_kind")?.stringValue?.nilIfBlank
+            ?? "\(agent.rawValue)_plugin"
+        let manifestResumeCommand = document.value(in: "agent-sessions", for: "resume_command")?.stringValue?.nilIfBlank
+        let resumeCommand = setting?.resumeCommand?.nilIfBlank ?? manifestResumeCommand
+        let arguments = [callback] + stringArray(document.value(in: "agent-sessions", for: "arguments"))
+        return VaultConfiguration.ExternalAdapterConfiguration(
+            id: commandName,
+            agent: agent,
+            executablePath: executableURL.path,
+            arguments: arguments,
+            sourceKind: sourceKind,
+            resumeCommand: resumeCommand
+        )
+    }
+
+    private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    private static func isExecutableRegularFile(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false
+        else {
+            return false
+        }
+        return fileManager.isExecutableFile(atPath: url.path)
+    }
+
+    private static func stringArray(_ value: OmuxTOMLValue?) -> [String] {
+        guard case .array(let values) = value else {
+            return []
+        }
+        return values.compactMap(\.stringValue)
+    }
+}
+
+public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
+    public let kind: VaultAgentKind
+    public let adapterID: String
+    public let executablePath: String
+    public let arguments: [String]
+    public let sourceKind: String
+    public let resumeCommandTemplate: String?
+    public let isExternal = true
+
+    public var sourceKindPrefixes: [String] {
+        [sourceKind]
+    }
+
+    public init(configuration: VaultConfiguration.ExternalAdapterConfiguration) {
+        self.kind = configuration.agent
+        self.adapterID = configuration.id
+        self.executablePath = configuration.executablePath
+        self.arguments = configuration.arguments
+        self.sourceKind = configuration.sourceKind
+        self.resumeCommandTemplate = configuration.resumeCommand
+    }
+
+    public func discoverSessions() async throws -> [VaultIndexedSession] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+        process.environment = pluginEnvironment()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw NSError(domain: "OmuxVaultExternalAdapter", code: Int(process.terminationStatus), userInfo: [
+                NSLocalizedDescriptionKey: "external adapter '\(adapterID)' failed: \(message.trimmingCharacters(in: .whitespacesAndNewlines))"
+            ])
+        }
+
+        let payload = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard payload.isEmpty == false else {
+            return []
+        }
+        let sessions = try JSONDecoder().decode(ExternalSessionRecordList.self, from: payload).sessions
+        return mergePreferNewest(sessions.map { record in
+            let rawID = record.sessionID ?? record.id ?? UUID().uuidString
+            let updated = record.modifiedAtDate ?? record.updatedAtDate ?? Date()
+            let agent = record.agent.flatMap(VaultAgentKind.init(rawValue:)) ?? kind
+            let summary = VaultSessionSummary(
+                id: "\(agent.rawValue):\(rawID)",
+                agent: agent,
+                sourceKind: sourceKind,
+                sourcePath: record.sourcePath,
+                title: record.title?.firstLine(maxLength: 80).nilIfEmpty ?? rawID,
+                workingDirectory: record.cwd,
+                model: record.model,
+                gitBranch: record.gitBranch,
+                modifiedAt: updated,
+                previewAvailable: false,
+                resumeAvailable: resumeCommandTemplate != nil
+            )
+            return VaultIndexedSession(summary: summary, resumeSnapshot: nil, turns: [])
+        })
+    }
+
+    private func pluginEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let executableURL = URL(fileURLWithPath: executablePath)
+        environment["OMUX_PLUGIN_COMMAND"] = adapterID
+        environment["OMUX_PLUGIN_EXECUTABLE"] = executablePath
+        environment["OMUX_PLUGINS_DIR"] = executableURL.deletingLastPathComponent().path
+        if environment["OMUX_CLI"] == nil,
+           let bundledCLIURL = bundledCLIURL() {
+            environment["OMUX_CLI"] = bundledCLIURL.path
+        }
+        return environment
+    }
+
+    private func bundledCLIURL() -> URL? {
+        let bundleURL = Bundle.main.bundleURL
+        let candidates = [
+            bundleURL.appendingPathComponent("Contents/MacOS/omux", isDirectory: false),
+            URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 }
 
@@ -641,4 +840,70 @@ private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
     }
+
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct ExternalSessionRecord: Decodable {
+    let id: String?
+    let sessionID: String?
+    let agent: String?
+    let title: String?
+    let cwd: String?
+    let model: String?
+    let gitBranch: String?
+    let sourcePath: String?
+    let modifiedAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionID = "session_id"
+        case agent
+        case title
+        case cwd
+        case model
+        case gitBranch = "git_branch"
+        case sourcePath = "source_path"
+        case modifiedAt = "modified_at"
+        case updatedAt = "updated_at"
+    }
+
+    var modifiedAtDate: Date? {
+        modifiedAt.flatMap(parseExternalDate)
+    }
+
+    var updatedAtDate: Date? {
+        updatedAt.flatMap(parseExternalDate)
+    }
+}
+
+private struct ExternalSessionRecordList: Decodable {
+    let sessions: [ExternalSessionRecord]
+
+    init(from decoder: Decoder) throws {
+        if let array = try? [ExternalSessionRecord](from: decoder) {
+            sessions = array
+            return
+        }
+        let object = try Container(from: decoder)
+        sessions = object.sessions
+    }
+
+    private struct Container: Decodable {
+        let sessions: [ExternalSessionRecord]
+    }
+}
+
+private func parseExternalDate(_ value: String) -> Date? {
+    if let date = parseISO8601Date(value) {
+        return date
+    }
+    if let numeric = Double(value) {
+        return dateFromUnixTimestamp(numeric)
+    }
+    return nil
 }

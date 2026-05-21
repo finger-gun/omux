@@ -1,7 +1,7 @@
 import Foundation
 import OmuxConfig
 
-public enum VaultAgentKind: String, Codable, CaseIterable, Sendable {
+public enum VaultAgentKind: Codable, Hashable, Sendable {
     case codex
     case claude
     case opencode
@@ -10,6 +10,83 @@ public enum VaultAgentKind: String, Codable, CaseIterable, Sendable {
     case copilot
     case gemini
     case custom
+    case external(String)
+
+    public static let allCases: [VaultAgentKind] = [
+        .codex,
+        .claude,
+        .opencode,
+        .pi,
+        .rovodev,
+        .copilot,
+        .gemini,
+        .custom,
+    ]
+
+    public init?(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+        switch trimmed {
+        case "codex":
+            self = .codex
+        case "claude":
+            self = .claude
+        case "opencode":
+            self = .opencode
+        case "pi":
+            self = .pi
+        case "rovodev":
+            self = .rovodev
+        case "copilot":
+            self = .copilot
+        case "gemini":
+            self = .gemini
+        case "custom":
+            self = .custom
+        default:
+            self = .external(trimmed)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .codex:
+            return "codex"
+        case .claude:
+            return "claude"
+        case .opencode:
+            return "opencode"
+        case .pi:
+            return "pi"
+        case .rovodev:
+            return "rovodev"
+        case .copilot:
+            return "copilot"
+        case .gemini:
+            return "gemini"
+        case .custom:
+            return "custom"
+        case .external(let name):
+            return name
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        guard let value = VaultAgentKind(rawValue: rawValue) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Agent kind must be a non-empty string.")
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum VaultGrouping: String, Codable, Sendable {
@@ -196,6 +273,41 @@ public struct VaultExportBundle: Codable, Equatable, Sendable {
 }
 
 public struct VaultConfiguration: Equatable, Sendable {
+    public struct ExternalAdapterConfiguration: Equatable, Sendable {
+        public let id: String
+        public let agent: VaultAgentKind
+        public let executablePath: String
+        public let arguments: [String]
+        public let sourceKind: String
+        public let resumeCommand: String?
+
+        public init(
+            id: String,
+            agent: VaultAgentKind,
+            executablePath: String,
+            arguments: [String],
+            sourceKind: String,
+            resumeCommand: String? = nil
+        ) {
+            self.id = id
+            self.agent = agent
+            self.executablePath = executablePath
+            self.arguments = arguments
+            self.sourceKind = sourceKind
+            self.resumeCommand = resumeCommand
+        }
+    }
+
+    public struct ExternalAdapterSetting: Equatable, Sendable {
+        public let enabled: Bool?
+        public let resumeCommand: String?
+
+        public init(enabled: Bool? = nil, resumeCommand: String? = nil) {
+            self.enabled = enabled
+            self.resumeCommand = resumeCommand
+        }
+    }
+
     public static let defaultIncludedAgents = VaultAgentKind.allCases.filter { $0 != .custom }
 
     public var enabled: Bool
@@ -206,8 +318,11 @@ public struct VaultConfiguration: Equatable, Sendable {
     public var excludedPaths: [String]
     public var maxPreviewBytes: Int
     public var sidebarRowsPerAgent: Int
+    public var externalAdaptersEnabled: Bool
     public var agentHomes: [VaultAgentKind: String]
     public var resumeCommands: [VaultAgentKind: String]
+    public var externalAdapters: [ExternalAdapterConfiguration]
+    public var externalAdapterSettings: [String: ExternalAdapterSetting]
 
     public init(
         enabled: Bool = true,
@@ -218,8 +333,11 @@ public struct VaultConfiguration: Equatable, Sendable {
         excludedPaths: [String] = [],
         maxPreviewBytes: Int = 1_048_576,
         sidebarRowsPerAgent: Int = 10,
+        externalAdaptersEnabled: Bool = true,
         agentHomes: [VaultAgentKind: String] = [:],
-        resumeCommands: [VaultAgentKind: String] = [:]
+        resumeCommands: [VaultAgentKind: String] = [:],
+        externalAdapters: [ExternalAdapterConfiguration] = [],
+        externalAdapterSettings: [String: ExternalAdapterSetting] = [:]
     ) {
         self.enabled = enabled
         self.previewEnabled = previewEnabled
@@ -229,14 +347,18 @@ public struct VaultConfiguration: Equatable, Sendable {
         self.excludedPaths = excludedPaths
         self.maxPreviewBytes = maxPreviewBytes
         self.sidebarRowsPerAgent = max(1, sidebarRowsPerAgent)
+        self.externalAdaptersEnabled = externalAdaptersEnabled
         self.agentHomes = agentHomes
         self.resumeCommands = resumeCommands
+        self.externalAdapters = externalAdapters
+        self.externalAdapterSettings = externalAdapterSettings
     }
 
     public init(config: OmuxConfigAgentSessions) {
         var included = config.includedAgents.compactMap(VaultAgentKind.init(rawValue:))
         var homes: [VaultAgentKind: String] = [:]
         var commands: [VaultAgentKind: String] = [:]
+        var externalAdapterSettings: [String: ExternalAdapterSetting] = [:]
         for (name, agentConfig) in config.agents {
             guard let agent = VaultAgentKind(rawValue: name) else {
                 continue
@@ -253,6 +375,12 @@ public struct VaultConfiguration: Equatable, Sendable {
                 commands[agent] = command
             }
         }
+        for (adapterID, adapterConfig) in config.externalAdapters {
+            externalAdapterSettings[adapterID] = ExternalAdapterSetting(
+                enabled: adapterConfig.enabled,
+                resumeCommand: adapterConfig.resumeCommand
+            )
+        }
         self.init(
             enabled: config.enabled,
             previewEnabled: config.previewEnabled,
@@ -262,8 +390,10 @@ public struct VaultConfiguration: Equatable, Sendable {
             excludedPaths: config.excludedPaths,
             maxPreviewBytes: config.maxPreviewBytes,
             sidebarRowsPerAgent: config.sidebarRowsPerAgent,
+            externalAdaptersEnabled: config.externalAdaptersEnabled,
             agentHomes: homes,
-            resumeCommands: commands
+            resumeCommands: commands,
+            externalAdapterSettings: externalAdapterSettings
         )
     }
 
@@ -289,12 +419,18 @@ public struct VaultConfiguration: Equatable, Sendable {
             return resolveHome(override ?? "~/.gemini")
         case .custom:
             return resolveHome(override ?? "~")
+        case .external:
+            return resolveHome(override ?? "~")
         }
     }
 
     public func resumeCommand(for agent: VaultAgentKind, sessionID: String) -> String? {
         let template = resumeCommands[agent] ?? Self.defaultResumeCommandTemplate(agent)
         return template?.replacingOccurrences(of: "{session_id}", with: shellQuoted(sessionID))
+    }
+
+    public func resumeCommandTemplate(for agent: VaultAgentKind) -> String? {
+        resumeCommands[agent] ?? Self.defaultResumeCommandTemplate(agent)
     }
 
     private static func defaultResumeCommandTemplate(_ agent: VaultAgentKind) -> String? {
@@ -315,6 +451,8 @@ public struct VaultConfiguration: Equatable, Sendable {
             return "gemini --resume {session_id}"
         case .custom:
             return nil
+        case .external:
+            return nil
         }
     }
 
@@ -328,6 +466,12 @@ public struct VaultConfiguration: Equatable, Sendable {
             expanded = path
         }
         return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

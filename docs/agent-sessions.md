@@ -41,16 +41,17 @@ flowchart LR
     Index --> CLI
 ```
 
-OpenMUX uses one adapter per supported agent:
+OpenMUX ships built-in adapters for common agents and can also load adapter capabilities declared by installed plugins:
 
-| Agent | Primary source | Notes |
-| --- | --- | --- |
-| Copilot | `~/.copilot/session-store.db` | Reads the `sessions` table directly (`id`, `cwd`, `summary`, `updated_at`). Recent `session-state` files are used only when the database is unavailable or empty, so normal startup does not block on scanning large session-state files. |
-| Codex | `~/.codex` state databases and JSONL session files | Uses readable state SQLite databases as authoritative when they contain sessions. JSONL rollout files are a fallback for missing, unreadable, incompatible, or empty databases, and stale JSONL fallback rows are removed after successful SQLite indexing. |
-| Gemini | `~/.gemini/tmp/**/logs.json` | Groups log rows by session ID and uses message timestamps. |
-| Claude, opencode, pi, rovodev | Known local homes and common JSONL/SQLite layouts | Support depends on the agent's local file format. |
+| Agent                         | Primary source                                     | Notes                                                                                                                                                                                                                                                       |
+|-------------------------------|----------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Copilot                       | `~/.copilot/session-store.db`                      | Reads the `sessions` table directly (`id`, `cwd`, `summary`, `updated_at`). Recent `session-state` files are used only when the database is unavailable or empty, so normal startup does not block on scanning large session-state files.                   |
+| Codex                         | `~/.codex` state databases and JSONL session files | Uses readable state SQLite databases as authoritative when they contain sessions. JSONL rollout files are a fallback for missing, unreadable, incompatible, or empty databases, and stale JSONL fallback rows are removed after successful SQLite indexing. |
+| Gemini                        | `~/.gemini/tmp/**/logs.json`                       | Groups log rows by session ID and uses message timestamps.                                                                                                                                                                                                  |
+| Claude, opencode, pi, rovodev | Known local homes and common JSONL/SQLite layouts  | Support depends on the agent's local file format.                                                                                                                                                                                                           |
+| Installed plugins             | Plugin-declared callback output                    | A plugin can declare an Agent Sessions adapter capability in `omux-plugin.toml`; OpenMUX invokes the callback during reindex and indexes the normalized JSON rows it prints.                                                                                |
 
-You can override agent homes and included agents in `~/.omux/config.toml`; see [Configuration](./configuration.md#agent-sessions-settings).
+You can override built-in agent homes, disable built-in adapters, and enable or disable plugin adapters in `~/.omux/config.toml`; see [Configuration](./configuration.md#agent-sessions-settings).
 
 ## Indexing and refresh behavior
 
@@ -112,12 +113,12 @@ flowchart TD
 
 When a resumed session runs in an OpenMUX pane, the Agent Sessions sidebar marks the row as **ACTIVE**. The status orb uses the same states as pane tabs:
 
-| Orb state | Meaning |
-| --- | --- |
-| Pulsing accent | The agent is working. |
-| Yellow | The agent needs input. |
-| Blue | The agent is idle. |
-| Red | The agent reported an error. |
+| Orb state      | Meaning                      |
+|----------------|------------------------------|
+| Pulsing accent | The agent is working.        |
+| Yellow         | The agent needs input.       |
+| Blue           | The agent is idle.           |
+| Red            | The agent reported an error. |
 
 Status comes from the same pane status pipeline used by workspace pane tabs, including the bundled AI Status plugin when enabled.
 

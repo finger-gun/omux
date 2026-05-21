@@ -1410,8 +1410,9 @@ final class WorkspaceShellViewController: NSViewController {
         if vaultAgentFilter != nil {
             agentCount = 1
         } else {
-            let includedAgents = vaultConfiguration.includedAgents.filter { $0 != .custom }
-            agentCount = max(1, includedAgents.count)
+            let configuredAgentCount = vaultConfiguration.includedAgents.filter { $0 != .custom }.count
+            let visibleAgentCount = availableVaultAgents.filter { $0 != .custom }.count
+            agentCount = max(1, configuredAgentCount, visibleAgentCount)
         }
         return min(500, max(1, vaultConfiguration.sidebarRowsPerAgent) * agentCount)
     }
@@ -4258,6 +4259,9 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         agentPopup.addItem(withTitle: "All agents")
         agentPopup.lastItem?.representedObject = Optional<VaultAgentKind>.none as Any
         var agents = VaultAgentKind.allCases.filter { availableAgents.contains($0) }
+        agents += availableAgents
+            .filter { agents.contains($0) == false }
+            .sorted { $0.rawValue < $1.rawValue }
         if let selectedAgent, agents.contains(selectedAgent) == false {
             agents.append(selectedAgent)
         }

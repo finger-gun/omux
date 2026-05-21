@@ -365,6 +365,19 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
 
     }
 
+    public struct ExternalAdapter: Equatable, Sendable {
+        public let enabled: Bool?
+        public let resumeCommand: String?
+
+        public init(
+            enabled: Bool? = nil,
+            resumeCommand: String? = nil
+        ) {
+            self.enabled = enabled
+            self.resumeCommand = resumeCommand
+        }
+    }
+
     public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
 
     public let enabled: Bool
@@ -375,7 +388,9 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
     public let excludedPaths: [String]
     public let maxPreviewBytes: Int
     public let sidebarRowsPerAgent: Int
+    public let externalAdaptersEnabled: Bool
     public let agents: [String: Agent]
+    public let externalAdapters: [String: ExternalAdapter]
 
     public init(
         enabled: Bool = true,
@@ -386,7 +401,9 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
         excludedPaths: [String] = [],
         maxPreviewBytes: Int = 1_048_576,
         sidebarRowsPerAgent: Int = 10,
-        agents: [String: Agent] = [:]
+        externalAdaptersEnabled: Bool = true,
+        agents: [String: Agent] = [:],
+        externalAdapters: [String: ExternalAdapter] = [:]
     ) {
         self.enabled = enabled
         self.previewEnabled = previewEnabled
@@ -396,7 +413,9 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
         self.excludedPaths = excludedPaths
         self.maxPreviewBytes = maxPreviewBytes
         self.sidebarRowsPerAgent = sidebarRowsPerAgent
+        self.externalAdaptersEnabled = externalAdaptersEnabled
         self.agents = agents
+        self.externalAdapters = externalAdapters
     }
 }
 
@@ -584,6 +603,7 @@ public enum OmuxConfigTemplate {
         preview_enabled = true
         index_on_launch = true
         collapsed_toggle_visible = true
+        external_adapters_enabled = true
         included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
         excluded_paths = []
         max_preview_bytes = 1048576
@@ -961,6 +981,7 @@ public struct OmuxConfigLoader {
 
         let agentSessionsTableNames = ["agent-sessions"]
         let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
+        let agentSessionsExternalTablePrefixes = agentSessionsTableNames.map { "\($0).external." }
         let allowedTables: Set<String> = [
             "theme",
             "terminal",
@@ -975,7 +996,9 @@ public struct OmuxConfigLoader {
             "ghostty",
         ]
         for tableName in document.tableNames
-        where allowedTables.contains(tableName) == false && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
+        where allowedTables.contains(tableName) == false
+            && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false
+            && agentSessionsExternalTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
             diagnostics.append(
                 OmuxConfigDiagnostic(
                     severity: .error,
@@ -1635,6 +1658,7 @@ public struct OmuxConfigLoader {
             "preview_enabled",
             "index_on_launch",
             "collapsed_toggle_visible",
+            "external_adapters_enabled",
             "included_agents",
             "excluded_paths",
             "max_preview_bytes",
@@ -1648,6 +1672,7 @@ public struct OmuxConfigLoader {
         var agentSessionsExcludedPaths = config.agentSessions.excludedPaths
         var agentSessionsMaxPreviewBytes = config.agentSessions.maxPreviewBytes
         var agentSessionsSidebarRowsPerAgent = config.agentSessions.sidebarRowsPerAgent
+        var agentSessionsExternalAdaptersEnabled = config.agentSessions.externalAdaptersEnabled
         for tableName in agentSessionsTableNames {
             for entry in document.entries(in: tableName) {
                 guard agentSessionsAllowedKeys.contains(entry.key) else {
@@ -1687,11 +1712,15 @@ public struct OmuxConfigLoader {
                         continue
                     }
                     agentSessionsCollapsedToggleVisible = value
+                case "external_adapters_enabled":
+                    guard let value = entry.value.boolValue else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).external_adapters_enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    agentSessionsExternalAdaptersEnabled = value
                 case "included_agents":
-                    guard let values = stringArray(from: entry.value),
-                          values.allSatisfy(supportedAgentSessionAgents.contains)
-                    else {
-                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).included_agents must contain supported agent names.", filePath: sourceURL.path, line: entry.line))
+                    guard let values = stringArray(from: entry.value) else {
+                        diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).included_agents must be an array of strings.", filePath: sourceURL.path, line: entry.line))
                         continue
                     }
                     agentSessionsIncludedAgents = values
@@ -1785,6 +1814,67 @@ public struct OmuxConfigLoader {
                 }
             }
             agentSessionsAgents[agentName] = OmuxConfigAgentSessions.Agent(enabled: enabled, home: home, resumeCommand: resumeCommand)
+            }
+        }
+
+        var agentSessionsExternalAdapters = config.agentSessions.externalAdapters
+        let orderedExternalTablePrefixes = ["agent-sessions.external."]
+        for tablePrefix in orderedExternalTablePrefixes {
+            let tableNames = document.tableNames
+                .filter { $0.hasPrefix(tablePrefix) }
+                .sorted()
+            for tableName in tableNames {
+                let adapterName = String(tableName.dropFirst(tablePrefix.count))
+                guard adapterName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Malformed Agent Sessions external adapter table [\(tableName)].",
+                            filePath: sourceURL.path
+                        )
+                    )
+                    continue
+                }
+                let allowedExternalKeys: Set<String> = ["enabled", "resume_command"]
+                var enabled: Bool?
+                var resumeCommand: String?
+                for entry in document.entries(in: tableName) {
+                    guard allowedExternalKeys.contains(entry.key) else {
+                        diagnostics.append(
+                            OmuxConfigDiagnostic(
+                                severity: .error,
+                                message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                                filePath: sourceURL.path,
+                                line: entry.line
+                            )
+                        )
+                        continue
+                    }
+                    switch entry.key {
+                    case "enabled":
+                        guard let value = entry.value.boolValue else {
+                            diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).enabled must be a boolean.", filePath: sourceURL.path, line: entry.line))
+                            continue
+                        }
+                        enabled = value
+                    case "resume_command":
+                        guard let value = entry.value.stringValue else {
+                            diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a string.", filePath: sourceURL.path, line: entry.line))
+                            continue
+                        }
+                        guard value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                            diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).resume_command must be a non-empty string.", filePath: sourceURL.path, line: entry.line))
+                            continue
+                        }
+                        resumeCommand = value
+                    default:
+                        break
+                    }
+                }
+                agentSessionsExternalAdapters[adapterName] = OmuxConfigAgentSessions.ExternalAdapter(
+                    enabled: enabled,
+                    resumeCommand: resumeCommand
+                )
             }
         }
 
@@ -1890,7 +1980,9 @@ public struct OmuxConfigLoader {
                 excludedPaths: agentSessionsExcludedPaths,
                 maxPreviewBytes: agentSessionsMaxPreviewBytes,
                 sidebarRowsPerAgent: agentSessionsSidebarRowsPerAgent,
-                agents: agentSessionsAgents
+                externalAdaptersEnabled: agentSessionsExternalAdaptersEnabled,
+                agents: agentSessionsAgents,
+                externalAdapters: agentSessionsExternalAdapters
             ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(

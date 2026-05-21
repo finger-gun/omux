@@ -941,6 +941,88 @@ struct OmuxVaultTests {
         #expect(sources.contains { $0.agent == .custom } == false)
     }
 
+    @Test("Plugin-declared external adapter indexes dynamic agent")
+    func pluginDeclaredExternalAdapterIndexesDynamicAgent() async throws {
+        let root = try temporaryDirectory()
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("omp", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        try """
+        schema = 1
+        id = "omp"
+        name = "OMP"
+        description = "Indexes OMP sessions."
+        version = "0.1.0"
+        kind = "plugin"
+
+        [plugin]
+        command = "omp"
+        entrypoint = "plugin"
+
+        [agent-sessions]
+        callback = "__omux_agent_sessions"
+        arguments = ["discover"]
+        source_kind = "omp_jsonl"
+        resume_command = "omp --resume {session_id}"
+        """.write(to: plugin.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+        try """
+        #!/bin/sh
+        printf '[{"id":"abc","title":"OMP session","cwd":"/tmp/project","updated_at":"2026-05-21T18:00:00Z"}]'
+        """.write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
+
+        let configuration = VaultConfiguration(enabled: true)
+        let adapters = PluginAgentSessionsAdapterDiscovery.adapters(
+            configuration: configuration,
+            pluginsDirectoryURL: plugins
+        ).map(ExternalCommandVaultAdapter.init(configuration:))
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: configuration,
+            adapters: adapters
+        )
+
+        let warnings = try await store.reindex()
+        #expect(warnings.isEmpty)
+        let list = try await store.list()
+        #expect(list.totalCount == 1)
+        #expect(list.sessions.first?.id == "omp:abc")
+        #expect(list.sessions.first?.agent == VaultAgentKind(rawValue: "omp"))
+        #expect(list.sessions.first?.sourceKind == "omp_jsonl")
+        #expect(list.sessions.first?.resumeAvailable == true)
+        let resume = try await store.resumeSnapshot(sessionID: "omp:abc")
+        #expect(resume?.resumeCommand == "omp --resume 'abc'")
+    }
+
+    @Test("Plugin adapter discovery honors per-adapter disable")
+    func pluginAdapterDiscoveryHonorsPerAdapterDisable() throws {
+        let root = try temporaryDirectory()
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("omp", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        try """
+        schema = 1
+        id = "omp"
+        kind = "plugin"
+
+        [plugin]
+        command = "omp"
+        entrypoint = "plugin"
+
+        [agent-sessions]
+        callback = "__omux_agent_sessions"
+        """.write(to: plugin.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nprintf '[]'\n".write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
+
+        let configuration = VaultConfiguration(
+            enabled: true,
+            externalAdapterSettings: ["omp": VaultConfiguration.ExternalAdapterSetting(enabled: false)]
+        )
+        let adapters = PluginAgentSessionsAdapterDiscovery.adapters(configuration: configuration, pluginsDirectoryURL: plugins)
+        #expect(adapters.isEmpty)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
