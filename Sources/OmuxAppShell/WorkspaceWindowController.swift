@@ -6412,12 +6412,13 @@ final class PaneHeaderView: NSView {
             paneTabButtons.append(button)
         }
 
-        // Keep tab visuals balanced like 08efd4d, but avoid imposing a hard
-        // minimum width that can block window resizing.
+        // Keep tab visuals balanced like 08efd4d while preserving a usable
+        // minimum hit target once multiple tabs are open.
         let tabWidthConstraints: [NSLayoutConstraint] = {
             guard !paneTabButtons.isEmpty else { return [] }
             let first = paneTabButtons[0]
             let count = CGFloat(paneTabButtons.count)
+            let shouldEnforceMinWidth = paneTabButtons.count > 1
             var constraints: [NSLayoutConstraint] = []
             for button in paneTabButtons {
                 let equalShare = button.widthAnchor.constraint(
@@ -6426,9 +6427,12 @@ final class PaneHeaderView: NSView {
                 )
                 equalShare.priority = .defaultHigh
                 let maxWidth = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.tabMaxWidth)
-                let minWidth = button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.tabMinWidth)
-                minWidth.priority = .dragThatCanResizeWindow
-                constraints.append(contentsOf: [equalShare, minWidth, maxWidth])
+                constraints.append(contentsOf: [equalShare, maxWidth])
+                if shouldEnforceMinWidth {
+                    let minWidth = button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.tabMinWidth)
+                    minWidth.priority = .required
+                    constraints.append(minWidth)
+                }
                 if button !== first {
                     let sameWidth = button.widthAnchor.constraint(equalTo: first.widthAnchor)
                     sameWidth.priority = .defaultHigh

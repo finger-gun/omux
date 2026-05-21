@@ -6661,6 +6661,39 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testMultiPaneTabsInstallUsableMinimumWidthConstraint() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let withSecondTab = try XCTUnwrap(controller.createPaneTab())
+        let secondPane = try XCTUnwrap(withSecondTab.focusedPane)
+
+        let windowController = WorkspaceWindowController(
+            workspace: withSecondTab,
+            controller: controller
+        )
+        let window = try XCTUnwrap(windowController.window)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        window.setFrame(
+            NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: 260, height: window.frame.height),
+            display: true
+        )
+        rootView.layoutSubtreeIfNeeded()
+
+        let secondTabButton = try XCTUnwrap(findViews(ofType: NSControl.self, in: rootView).first {
+            $0.identifier?.rawValue == "pane-tab-\(secondPane.id.rawValue)"
+        })
+
+        XCTAssertGreaterThanOrEqual(
+            secondTabButton.frame.width,
+            125,
+            "multi-pane tabs should keep a usable minimum width instead of collapsing to tiny hit targets"
+        )
+    }
+
+    @MainActor
     func testShortPaneTabTitleKeepsIntrinsicWidthWhenNeighborTabIsLong() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
