@@ -6325,7 +6325,6 @@ final class PaneHeaderView: NSView {
     private let pinnedAddButton = ChromePillButton()
     private var contentTrailingToSuperviewConstraint: NSLayoutConstraint?
     private var contentTrailingToPinnedConstraint: NSLayoutConstraint?
-    private static let tabMinWidth: CGFloat = 130
     private static let tabMaxWidth: CGFloat = 200
 
     init(
@@ -6412,23 +6411,21 @@ final class PaneHeaderView: NSView {
             paneTabButtons.append(button)
         }
 
-        // Each tab takes an equal share of the available width, clamped to
-        // [tabMinWidth, tabMaxWidth]. When tabs overflow at minimum width the
-        // scroll view allows horizontal scrolling.
+        // Keep tab visuals balanced like 08efd4d, but avoid imposing a hard
+        // minimum width that can block window resizing.
         let tabWidthConstraints: [NSLayoutConstraint] = {
-            guard !paneTabButtons.isEmpty else { return [] }
+            guard paneTabButtons.count > 1 else { return [] }
             let first = paneTabButtons[0]
             let count = CGFloat(paneTabButtons.count)
             var constraints: [NSLayoutConstraint] = []
             for button in paneTabButtons {
-                let equalWidth = button.widthAnchor.constraint(
+                let equalShare = button.widthAnchor.constraint(
                     equalTo: widthAnchor,
                     multiplier: 1.0 / count
                 )
-                equalWidth.priority = .defaultHigh
-                let minWidth = button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.tabMinWidth)
+                equalShare.priority = .defaultHigh
                 let maxWidth = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.tabMaxWidth)
-                constraints.append(contentsOf: [equalWidth, minWidth, maxWidth])
+                constraints.append(contentsOf: [equalShare, maxWidth])
                 if button !== first {
                     let sameWidth = button.widthAnchor.constraint(equalTo: first.widthAnchor)
                     sameWidth.priority = .defaultHigh
@@ -6478,8 +6475,6 @@ final class PaneHeaderView: NSView {
         content.addArrangedSubview(tabScrollView)
         addSubview(pinnedAddButton)
         addSubview(content)
-
-        // Activate after content is in the view hierarchy so button and self share a common ancestor.
         NSLayoutConstraint.activate(tabWidthConstraints)
 
         let trailingToSuperview = content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
@@ -6685,7 +6680,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
     private let iconImageView = NSImageView()
     private let progressOrb = PaneProgressOrbView()
     private let closeButton = ChromePillButton()
-     private let contentInsets = NSEdgeInsets(top: 0, left: 5, bottom: 0, right: 3)
+    private let contentInsets = NSEdgeInsets(top: 0, left: 5, bottom: 0, right: 3)
     private let interItemSpacing = CGFloat(4)
     private let iconSpacing = CGFloat(4)
     private let symbolSide = CGFloat(12)
@@ -6727,6 +6722,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(fullDisplayTitle)" } ?? fullDisplayTitle)
         toolTip = fullDisplayTitle
         setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
         progressOrb.configure(progress: progress, theme: theme)

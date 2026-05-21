@@ -5570,6 +5570,80 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(hostedFrame.maxX, canvasFrame.maxX, accuracy: 1)
     }
 
+    @MainActor
+    func testWorkspaceWindowSinglePaneCanResizeInWindowedAndFullscreenModes() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        let originalFrame = window.frame
+        let narrowWidth = max(window.minSize.width, originalFrame.width - 260)
+        window.setFrame(
+            NSRect(
+                x: originalFrame.origin.x,
+                y: originalFrame.origin.y,
+                width: narrowWidth,
+                height: originalFrame.height
+            ),
+            display: true
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(window.frame.width, narrowWidth, accuracy: 2)
+
+        let wideWidth = narrowWidth + 320
+        window.setFrame(
+            NSRect(
+                x: originalFrame.origin.x,
+                y: originalFrame.origin.y,
+                width: wideWidth,
+                height: originalFrame.height
+            ),
+            display: true
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(window.frame.width, wideWidth, accuracy: 2)
+
+        let didEnterFullscreen = expectation(
+            forNotification: NSWindow.didEnterFullScreenNotification,
+            object: window
+        )
+        window.toggleFullScreen(nil)
+        let enterResult = XCTWaiter.wait(for: [didEnterFullscreen], timeout: 5)
+        guard enterResult == .completed else {
+            throw XCTSkip("Fullscreen transition unavailable in this test environment")
+        }
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let fullscreenWidth = window.frame.width
+        XCTAssertGreaterThan(
+            fullscreenWidth,
+            wideWidth + 80,
+            "single-pane layout must not cap fullscreen width"
+        )
+
+        let didExitFullscreen = expectation(
+            forNotification: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
+        window.toggleFullScreen(nil)
+        let exitResult = XCTWaiter.wait(for: [didExitFullscreen], timeout: 5)
+        guard exitResult == .completed else {
+            throw XCTSkip("Could not exit fullscreen in this test environment")
+        }
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(window.frame.width, wideWidth, accuracy: 8)
+    }
+
     func testTerminalActionCoordinatorEmitsStructuredHooksAndNativeNotifications() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -6528,6 +6602,68 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(titleLabel.stringValue, "Opencode")
         XCTAssertEqual(titleLabel.lineBreakMode, .byTruncatingMiddle)
         XCTAssertGreaterThanOrEqual(titleLabel.frame.width, titleLabel.intrinsicContentSize.width)
+    }
+
+    @MainActor
+    func testSinglePaneTabDoesNotInstallFixedMinimumWidthConstraint() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let tabButton = try XCTUnwrap(findViews(ofType: NSControl.self, in: rootView).first {
+            $0.identifier?.rawValue == "pane-tab-\(pane.id.rawValue)"
+        })
+
+        let horizontalConstraints = tabButton.constraintsAffectingLayout(for: .horizontal)
+        let hasFixedMinimum = horizontalConstraints.contains { constraint in
+            constraint.firstAnchor == tabButton.widthAnchor &&
+            constraint.relation == .greaterThanOrEqual &&
+            abs(constraint.constant - 130) < 0.001
+        }
+
+        XCTAssertFalse(hasFixedMinimum, "single-pane tabs must not impose a fixed minimum width on the window layout")
+    }
+
+    @MainActor
+    func testShortPaneTabTitleKeepsIntrinsicWidthWhenNeighborTabIsLong() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        _ = try XCTUnwrap(controller.createPaneTab())
+
+        let focusedPaneID = try XCTUnwrap(controller.activeWorkspace()?.focusedPane?.id)
+        let renamedShort = try XCTUnwrap(controller.renamePaneTab(focusedPaneID, to: "omux"))
+        let firstPaneID = try XCTUnwrap(renamedShort.focusedTab?.panes.first?.id)
+        let renamed = try XCTUnwrap(controller.renamePaneTab(firstPaneID, to: "~/proj...s/omux/a-very-long-tab-title-to-trigger-middle-truncation"))
+
+        let windowController = WorkspaceWindowController(
+            workspace: renamed,
+            controller: controller
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let shortButton = try XCTUnwrap(findViews(ofType: NSControl.self, in: rootView).first {
+            $0.identifier?.rawValue == "pane-tab-\(focusedPaneID.rawValue)"
+        })
+        let shortLabel = try XCTUnwrap(findLabelView(withString: "omux", in: shortButton))
+
+        XCTAssertGreaterThanOrEqual(
+            shortLabel.frame.width,
+            shortLabel.intrinsicContentSize.width,
+            "short pane tab titles should not be truncated when layout has available width"
+        )
     }
 
     func testPaneTabDragRequiresAttachedTerminalSession() throws {

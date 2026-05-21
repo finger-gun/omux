@@ -31,6 +31,24 @@ extension PaneTests {
     func doubleClickCenter(_ element: XCUIElement) {
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleClick()
     }
+
+    /// Polls until the main window width differs from `baselineWidth` by at least `delta`.
+    @discardableResult
+    func waitForWindowWidthChange(
+        _ window: XCUIElement,
+        baselineWidth: CGFloat,
+        delta: CGFloat,
+        timeout: TimeInterval = 3
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if abs(window.frame.width - baselineWidth) >= delta {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
 }
 
 final class PaneTests: OmuxUITestsBase {
@@ -92,6 +110,37 @@ final class PaneTests: OmuxUITestsBase {
         // We don't assert the final count since one pane may remain as minimum;
         // the key check is the menu action fired without crashing.
         XCTAssertTrue(app.state == .runningForeground, "App should still be running after pane removal")
+    }
+
+    func testSinglePaneWindowWidthCanResizeFromRightEdge() {
+        XCTAssertTrue(
+            waitForPaneTabs(atLeast: 1),
+            "single-pane tab should be visible on launch"
+        )
+
+        let mainWindow = app.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5), "main window should exist")
+
+        let initialWidth = mainWindow.frame.width
+        XCTAssertGreaterThan(initialWidth, 300, "baseline window width should be reasonable")
+
+        let rightEdge = mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.998, dy: 0.5))
+        rightEdge.press(forDuration: 0.05, thenDragTo: rightEdge.withOffset(CGVector(dx: -220, dy: 0)))
+        XCTAssertTrue(
+            waitForWindowWidthChange(mainWindow, baselineWidth: initialWidth, delta: 80),
+            "window width should shrink in single-pane mode when dragging right edge inward"
+        )
+
+        let reducedWidth = mainWindow.frame.width
+        XCTAssertLessThan(reducedWidth, initialWidth - 80)
+
+        let rightEdgeAfterShrink = mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.998, dy: 0.5))
+        rightEdgeAfterShrink.press(forDuration: 0.05, thenDragTo: rightEdgeAfterShrink.withOffset(CGVector(dx: 260, dy: 0)))
+        XCTAssertTrue(
+            waitForWindowWidthChange(mainWindow, baselineWidth: reducedWidth, delta: 80),
+            "window width should grow in single-pane mode when dragging right edge outward"
+        )
+        XCTAssertGreaterThan(mainWindow.frame.width, reducedWidth + 80)
     }
 
     func testNewPaneTab() {
