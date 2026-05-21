@@ -2892,6 +2892,89 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotNil(runtime.session(for: "action:\(hiddenPane.id.rawValue)"))
     }
 
+    func testWorkspaceVisibilitySwitchHidesPreviousWorkspaceSurface() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let paneA = Pane(
+            title: "A",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/a")
+        )
+        let paneB = Pane(
+            title: "B",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/b")
+        )
+        let tabA = Tab(title: "A", panes: [paneA], focusedPaneID: paneA.id)
+        let tabB = Tab(title: "B", panes: [paneB], focusedPaneID: paneB.id)
+        let workspaceA = Workspace(generatedName: "Workspace A", rootPath: "/tmp/a", tabs: [tabA], focusedTabID: tabA.id)
+        let workspaceB = Workspace(generatedName: "Workspace B", rootPath: "/tmp/b", tabs: [tabB], focusedTabID: tabB.id)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        _ = try XCTUnwrap(
+            controller.restorePersistedState(.init(workspaces: [workspaceA, workspaceB], activeWorkspaceID: workspaceA.id))
+        )
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceA.id)
+
+        _ = controller.focus(paneID: paneB.id)
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceB.id)
+
+        let runtimeSurfaceA = "action:\(paneA.id.rawValue)"
+        let runtimeSurfaceB = "action:\(paneB.id.rawValue)"
+        XCTAssertEqual(runtime.visibilityBySurface[runtimeSurfaceA], [false])
+        XCTAssertNil(runtime.visibilityBySurface[runtimeSurfaceB])
+    }
+
+    func testPaneStackVisibilitySwitchHidesInactivePaneTabSurface() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let firstSurfaceID = try XCTUnwrap(bridge.surface(for: firstPaneID)?.runtimeSurfaceID)
+        let updatedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let secondPaneID = try XCTUnwrap(updatedWorkspace.focusedPane?.id)
+
+        _ = try controller.ensureVisibleTerminalSurfaces(for: updatedWorkspace.id)
+
+        XCTAssertEqual(runtime.visibilityBySurface[firstSurfaceID], [false])
+        XCTAssertNil(runtime.visibilityBySurface[try XCTUnwrap(bridge.surface(for: secondPaneID)?.runtimeSurfaceID)])
+    }
+
+    func testHiddenWindowPresentationHidesRootAndFloatingModalTerminalSurfaces() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        let workspace = try controller.openWorkspace(at: "/tmp/project")
+        let rootPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let rootSurfaceID = try XCTUnwrap(bridge.surface(for: rootPaneID)?.runtimeSurfaceID)
+        let tabbedWorkspace = try XCTUnwrap(controller.createPaneTab())
+        let modalPaneID = try XCTUnwrap(tabbedWorkspace.focusedPane?.id)
+        let sourceStackID = try XCTUnwrap(
+            tabbedWorkspace.focusedTab?.rootLayout.paneStack(containingPaneID: modalPaneID)?.id
+        )
+        let modalWorkspace = try XCTUnwrap(
+            controller.movePaneTabToFloatingModal(
+                paneID: modalPaneID,
+                sourceStackID: sourceStackID
+            )
+        )
+        let modalSurfaceID = try XCTUnwrap(bridge.surface(for: modalPaneID)?.runtimeSurfaceID)
+
+        runtime.clearTrackedPresentationChanges()
+        _ = try controller.ensureVisibleTerminalSurfaces(
+            for: modalWorkspace.id,
+            presentationState: TerminalSurfacePresentationState(
+                appIsActive: true,
+                windowIsKey: true,
+                windowIsVisible: false
+            )
+        )
+
+        XCTAssertEqual(runtime.visibilityBySurface[rootSurfaceID], [false])
+        XCTAssertEqual(runtime.visibilityBySurface[modalSurfaceID], [false])
+    }
+
     func testControlPlaneActionStartsLazyRestoredPaneBeforeSendingInput() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3015,6 +3098,177 @@ final class OmuxAppShellTests: XCTestCase {
         let persistedAgain = try XCTUnwrap(controller.persistenceSnapshot())
 
         XCTAssertNil(persistedAgain.workspaces.first?.focusedPane?.terminalState.restoredScrollback)
+    }
+
+    func testHiddenInactiveWorkspaceSessionPreservesLiveOutputAndPersistence() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspaceA = try controller.openWorkspace(at: "/tmp/a")
+        let paneAID = try XCTUnwrap(workspaceA.focusedPane?.id)
+        let surfaceAID = try XCTUnwrap(bridge.surface(for: paneAID)?.runtimeSurfaceID)
+        let workspaceB = try controller.openWorkspace(at: "/tmp/b")
+
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceB.id)
+        runtime.scrollbackBySurface[surfaceAID] = "hidden output"
+
+        let hiddenHistory = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(paneAID))))
+        XCTAssertEqual(hiddenHistory.items.first?.text, "hidden output")
+
+        _ = try XCTUnwrap(controller.focus(paneID: paneAID))
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceA.id)
+        XCTAssertEqual(controller.terminalBridge.terminalTextSnapshot(for: paneAID).text, "hidden output")
+
+        let persisted = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
+        let persistedPane = try XCTUnwrap(
+            persisted.workspaces
+                .flatMap(\.tabs)
+                .flatMap(\.panes)
+                .first(where: { $0.id == paneAID })
+        )
+        XCTAssertEqual(persistedPane.terminalState.restoredScrollback?.text, "hidden output")
+    }
+
+    func testHiddenInactiveWorkspaceTerminalActionsStillUpdatePaneStateAndEvents() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            terminalStateChangeCoalescingDelay: 0
+        )
+        var publishedEventNames: [String] = []
+        controller.onControlPlaneEvent = { publishedEventNames.append($0.name) }
+
+        let workspaceA = try controller.openWorkspace(at: "/tmp/a")
+        let paneAID = try XCTUnwrap(workspaceA.focusedPane?.id)
+        let surfaceAID = try XCTUnwrap(bridge.surface(for: paneAID)?.runtimeSurfaceID)
+        let workspaceB = try controller.openWorkspace(at: "/tmp/b")
+
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceB.id)
+        runtime.emit(.titleChanged("builder"), on: surfaceAID)
+        runtime.emit(.progressReported(state: .active, progress: 42), on: surfaceAID)
+        runtime.emit(.bell, on: surfaceAID)
+        runtime.emit(.childExited(exitCode: 0, elapsedMilliseconds: 12), on: surfaceAID)
+
+        let flushed = expectation(description: "hidden terminal actions flushed")
+        DispatchQueue.main.async { flushed.fulfill() }
+        wait(for: [flushed], timeout: 1)
+
+        let hiddenPane = try XCTUnwrap(
+            controller.allWorkspaces()
+                .flatMap(\.tabs)
+                .flatMap(\.panes)
+                .first(where: { $0.id == paneAID })
+        )
+        XCTAssertEqual(hiddenPane.title, "builder")
+        XCTAssertEqual(hiddenPane.terminalState.progress?.state, .active)
+        XCTAssertEqual(hiddenPane.terminalState.progress?.value, 42)
+        XCTAssertEqual(hiddenPane.terminalState.lastExit?.exitCode, 0)
+        XCTAssertTrue(publishedEventNames.contains("terminal.bell"))
+        XCTAssertTrue(publishedEventNames.contains("terminal.titleChanged"))
+        XCTAssertTrue(publishedEventNames.contains("terminal.progressReported"))
+    }
+
+    func testHiddenInactiveWorkspaceUnavailableCaptureDoesNotFabricateScrollback() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let scrollback = PaneScrollbackSnapshot(text: "restored history", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: scrollback)
+        )
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let hiddenWorkspace = Workspace(
+            generatedName: "Workspace A",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab],
+            focusedTabID: hiddenTab.id
+        )
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let visibleWorkspace = Workspace(
+            generatedName: "Workspace B",
+            rootPath: "/tmp/visible",
+            tabs: [visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(
+            controller.restorePersistedState(
+                .init(workspaces: [hiddenWorkspace, visibleWorkspace], activeWorkspaceID: visibleWorkspace.id)
+            )
+        )
+
+        let persisted = try XCTUnwrap(controller.persistenceSnapshot(mode: .includeScrollback()))
+        let hiddenPersistedPane = try XCTUnwrap(
+            persisted.workspaces
+                .flatMap(\.tabs)
+                .flatMap(\.panes)
+                .first(where: { $0.id == hiddenPane.id })
+        )
+        XCTAssertEqual(hiddenPersistedPane.terminalState.restoredScrollback, scrollback)
+    }
+
+    func testHiddenInactiveWorkspaceHistoryCombinesRestoredAndLiveOutput() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let restored = PaneScrollbackSnapshot(text: "restored history", truncated: false)
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let hiddenPane = Pane(
+            title: "hidden",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: restored)
+        )
+        let visiblePane = Pane(
+            title: "visible",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/visible")
+        )
+        let hiddenTab = Tab(title: "Hidden", panes: [hiddenPane], focusedPaneID: hiddenPane.id)
+        let visibleTab = Tab(title: "Visible", panes: [visiblePane], focusedPaneID: visiblePane.id)
+        let hiddenWorkspace = Workspace(
+            generatedName: "Workspace A",
+            rootPath: "/tmp/project",
+            tabs: [hiddenTab],
+            focusedTabID: hiddenTab.id
+        )
+        let visibleWorkspace = Workspace(
+            generatedName: "Workspace B",
+            rootPath: "/tmp/visible",
+            tabs: [visibleTab],
+            focusedTabID: visibleTab.id
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        _ = try XCTUnwrap(
+            controller.restorePersistedState(
+                .init(workspaces: [hiddenWorkspace, visibleWorkspace], activeWorkspaceID: visibleWorkspace.id)
+            )
+        )
+        _ = try controller.ensureVisibleTerminalSurfaces(for: hiddenWorkspace.id)
+        _ = try controller.ensureVisibleTerminalSurfaces(for: visibleWorkspace.id)
+        let hiddenSurfaceID = try XCTUnwrap(bridge.surface(for: hiddenPane.id)?.runtimeSurfaceID)
+        runtime.scrollbackBySurface[hiddenSurfaceID] = "live hidden output"
+
+        let history = try XCTUnwrap(controller.terminalHistory(ControlPlaneHistoryRequest(scope: .pane(hiddenPane.id))))
+
+        XCTAssertEqual(history.items.first?.text, "restored history\nlive hidden output")
     }
 
     func testWorkspaceControllerSupportsOrderedWorkspaceSwitchingAndPreviousRecall() throws {
@@ -3868,6 +4122,37 @@ final class OmuxAppShellTests: XCTestCase {
         paneViews = findViews(ofType: HostedTerminalPaneView.self, in: rootView)
         XCTAssertEqual(paneViews.count, 2)
         XCTAssertTrue(window.firstResponder === paneViews.last?.focusTarget)
+    }
+
+    func testTerminalPresentationStateDrivesRuntimeApplicationFocus() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        runtime.clearTrackedPresentationChanges()
+
+        _ = try controller.ensureVisibleTerminalSurfaces(
+            for: workspace.id,
+            presentationState: TerminalSurfacePresentationState(
+                appIsActive: true,
+                windowIsKey: true,
+                windowIsVisible: true
+            )
+        )
+        _ = try controller.ensureVisibleTerminalSurfaces(
+            for: workspace.id,
+            presentationState: TerminalSurfacePresentationState(
+                appIsActive: true,
+                windowIsKey: false,
+                windowIsVisible: true
+            )
+        )
+
+        XCTAssertEqual(runtime.applicationFocusUpdates, [true, false])
     }
 
     @MainActor
@@ -7090,6 +7375,9 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
+    private(set) var applicationFocusUpdates: [Bool] = []
+    private(set) var surfaceFocusBySurface: [String: [Bool]] = [:]
+    private(set) var visibilityBySurface: [String: [Bool]] = [:]
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
@@ -7159,6 +7447,24 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
         _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
     ) {
         terminalActionHandler = handler
+    }
+
+    func setApplicationFocused(_ focused: Bool) {
+        applicationFocusUpdates.append(focused)
+    }
+
+    func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
+        surfaceFocusBySurface[runtimeSurfaceID, default: []].append(focused)
+    }
+
+    func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        visibilityBySurface[runtimeSurfaceID, default: []].append(isVisible)
+    }
+
+    func clearTrackedPresentationChanges() {
+        applicationFocusUpdates.removeAll(keepingCapacity: true)
+        surfaceFocusBySurface.removeAll(keepingCapacity: true)
+        visibilityBySurface.removeAll(keepingCapacity: true)
     }
 
     func snapshot(
