@@ -3277,6 +3277,10 @@ final class WorkspaceSidebarView: NSView {
         scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
         scrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
+        let header = workspacesSection.headerView
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(header)
         addSubview(container)
         scrollContent.addArrangedSubview(workspacesSection)
         container.addArrangedSubview(scrollView)
@@ -3284,16 +3288,19 @@ final class WorkspaceSidebarView: NSView {
         updateNoticeView.isHidden = true
 
         NSLayoutConstraint.activate([
-            container.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+
+            container.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             container.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            container.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            container.trailingAnchor.constraint(equalTo: trailingAnchor),
             container.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             scrollView.widthAnchor.constraint(equalTo: container.widthAnchor),
             updateNoticeView.widthAnchor.constraint(equalTo: container.widthAnchor),
             scrollContent.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             scrollContent.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            scrollContent.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-            scrollContent.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            scrollContent.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor, constant: -12),
             scrollContent.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
             workspacesSection.widthAnchor.constraint(equalTo: scrollContent.widthAnchor),
         ])
@@ -3350,11 +3357,6 @@ final class WorkspaceSidebarView: NSView {
                     content: .symbol(name: "plus", accessibilityLabel: "Create workspace"),
                     isEnabled: true,
                     action: onCreateWorkspace
-                ),
-                SidebarSectionAccessory(
-                    content: .symbol(name: "xmark", accessibilityLabel: "Close active workspace"),
-                    isEnabled: canDeleteWorkspace,
-                    action: onDeleteWorkspace
                 ),
             ],
             onMoveWorkspace: onMoveWorkspace,
@@ -3449,7 +3451,6 @@ private final class WorkspaceSidebarSectionView: NSView {
     }
 
     private let titleLabel = NSTextField(labelWithString: "")
-    private let headerStack = NSStackView()
     private let itemStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "")
     private var accessoryButtons: [ChromePillButton] = []
@@ -3460,13 +3461,17 @@ private final class WorkspaceSidebarSectionView: NSView {
     private var reorderHandler: ((WorkspaceID, Int) -> Void)?
     private var draggingWorkspaceID: WorkspaceID?
 
+    /// The header row (title + accessory buttons). Lives outside the scroll view
+    /// so it stays visible and receives mouse events regardless of scroll position.
+    let headerView = NSStackView()
+
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        headerStack.orientation = .horizontal
-        headerStack.alignment = .centerY
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerView.orientation = .horizontal
+        headerView.alignment = .centerY
+        headerView.translatesAutoresizingMaskIntoConstraints = false
 
         itemStack.orientation = .vertical
         itemStack.alignment = .leading
@@ -3479,24 +3484,19 @@ private final class WorkspaceSidebarSectionView: NSView {
         emptyLabel.isHidden = true
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        headerStack.addArrangedSubview(titleLabel)
-        headerStack.addArrangedSubview(NSView())
+        headerView.addArrangedSubview(titleLabel)
+        headerView.addArrangedSubview(NSView())
 
-        addSubview(headerStack)
         addSubview(itemStack)
         addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            headerStack.topAnchor.constraint(equalTo: topAnchor),
-            headerStack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            headerStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            itemStack.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 8),
+            itemStack.topAnchor.constraint(equalTo: topAnchor),
             itemStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             itemStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             itemStack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            emptyLabel.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 8),
+            emptyLabel.topAnchor.constraint(equalTo: topAnchor),
             emptyLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
         ])
     }
@@ -3539,7 +3539,7 @@ private final class WorkspaceSidebarSectionView: NSView {
         workspaceDragGroups.removeAll()
 
         for accessoryButton in accessoryButtons {
-            headerStack.removeArrangedSubview(accessoryButton)
+            headerView.removeArrangedSubview(accessoryButton)
             accessoryButton.removeFromSuperview()
         }
         accessoryButtons.removeAll()
@@ -3554,7 +3554,7 @@ private final class WorkspaceSidebarSectionView: NSView {
             button.isEnabled = accessory.isEnabled
             button.onPress = accessory.action
             accessoryButtons.append(button)
-            headerStack.addArrangedSubview(button)
+            headerView.addArrangedSubview(button)
         }
 
         emptyLabel.isHidden = !items.isEmpty
@@ -3782,7 +3782,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         header.distribution = .fill
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        titleLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -3869,7 +3869,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         )
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             refreshButton.widthAnchor.constraint(equalToConstant: 22),
@@ -3918,6 +3918,15 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     func apply(theme: WorkspaceShellTheme) {
         currentTheme = theme
         layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
+        let leftBorder = layer?.sublayers?.first(where: { $0.name == "vaultSidebarLeftBorder" }) ?? {
+            let l = CALayer()
+            l.name = "vaultSidebarLeftBorder"
+            layer?.addSublayer(l)
+            return l
+        }()
+        leftBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        leftBorder.frame = CGRect(x: 0, y: 0, width: 1, height: bounds.height)
+        leftBorder.autoresizingMask = [.layerMaxXMargin, .layerHeightSizable]
         titleLabel.textColor = theme.shell.textMuted
         refreshButton.contentTintColor = theme.shell.textMuted
         workspacePopup.contentTintColor = theme.shell.textMuted
@@ -6177,7 +6186,6 @@ final class PaneCardView: NSView {
         container.addArrangedSubview(paneView)
         paneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
 
-        let showActiveBorder = focused && windowIsKey
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
@@ -6938,6 +6946,7 @@ private class ChromePillButton: NSControl {
     private var symbolName: String?
     private var accessibilityLabel: String?
     private var isActive = false
+    private var isHovered = false
     private var currentTheme = WorkspaceShellTheme.defaultTheme
 
     override init(frame frameRect: NSRect) {
@@ -7017,10 +7026,55 @@ private class ChromePillButton: NSControl {
         let foreground = isActive ? currentTheme.shell.selectedText : currentTheme.shell.textSecondary
         titleLabel.textColor = foreground
         imageView.contentTintColor = foreground
-        layer?.backgroundColor = (isActive ? currentTheme.shell.selection : NSColor.clear).cgColor
+        let background: NSColor
+        if isActive {
+            background = currentTheme.shell.selection
+        } else if isHovered {
+            background = NSColor.labelColor.withAlphaComponent(0.15)
+        } else {
+            background = .clear
+        }
+        layer?.backgroundColor = background.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
         alphaValue = isEnabled ? 1 : 0.4
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        guard !bounds.isEmpty else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if newSize == .zero {
+            isHovered = false
+            updateVisualState()
+        }
+        updateTrackingAreas()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateVisualState()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        updateVisualState()
     }
 
     override var intrinsicContentSize: NSSize {
@@ -7040,6 +7094,7 @@ private class ChromePillButton: NSControl {
 
     override func layout() {
         super.layout()
+        updateTrackingAreas()
         let contentBounds = bounds.insetBy(dx: contentInsets.left, dy: contentInsets.top)
         if title == nil {
             let symbolSide = compact ? CGFloat(11) : CGFloat(12)
@@ -7214,10 +7269,12 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
             layer?.backgroundColor = item.isActive
                 ? theme.shell.selection.cgColor
                 : NSColor.clear.cgColor
+            layer?.cornerRadius = 3
         case .terminal:
             layer?.backgroundColor = item.isActive
                 ? theme.shell.selection.withAlphaComponent(0.28).cgColor
                 : NSColor.clear.cgColor
+            layer?.cornerRadius = 3
         }
         layer?.borderWidth = 0
         layer?.borderColor = nil

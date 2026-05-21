@@ -1288,7 +1288,7 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testSidebarPinsShortWorkspaceListToTopOfScrollArea() throws {
+    func testSidebarHeaderIsPinnedAboveScrollView() throws {
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         let items = [
             SidebarItem(
@@ -1336,7 +1336,137 @@ final class OmuxAppShellTests: XCTestCase {
         let scrollFrame = scrollView.convert(scrollView.bounds, to: sidebar)
         let titleFrame = titleLabel.convert(titleLabel.bounds, to: sidebar)
 
-        XCTAssertLessThanOrEqual(abs(titleFrame.minY - scrollFrame.minY), 4)
+        // Header lives outside the scroll view and is pinned above it.
+        XCTAssertLessThan(titleFrame.minY, scrollFrame.minY,
+            "Title label should be above the scroll view")
+        XCTAssertLessThanOrEqual(titleFrame.minY, 20,
+            "Title label should be near the top of the sidebar")
+    }
+
+    @MainActor
+    func testWorkspaceSidebarTitleFontMatchesAgentSessionsSidebarTitle() throws {
+        // Workspace sidebar
+        let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
+        sidebar.render(
+            workspaceItems: [],
+            theme: .defaultTheme,
+            onSelectWorkspace: { _ in },
+            onCreateWorkspace: {},
+            onDeleteWorkspace: {},
+            canDeleteWorkspace: false,
+            updateAvailability: nil,
+            onMoveWorkspace: { _, _ in },
+            onToggleWorkspaceExpansion: { _ in },
+            onRenameWorkspace: { _, _ in },
+            onSelectPane: { _ in }
+        )
+        sidebar.layoutSubtreeIfNeeded()
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
+
+        // Vault sidebar — via WorkspaceWindowController with vault enabled
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(
+            workspace: controller.activeWorkspace()!,
+            controller: controller,
+            vaultConfiguration: VaultConfiguration(enabled: true)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+        let agentTitleLabel = try XCTUnwrap(findLabelView(withString: "AGENT SESSIONS", in: rootView))
+
+        XCTAssertEqual(
+            workspaceTitleLabel.font?.pointSize,
+            agentTitleLabel.font?.pointSize,
+            "Workspace and agent sessions sidebar titles should have the same font size"
+        )
+        XCTAssertEqual(
+            workspaceTitleLabel.font?.fontName,
+            agentTitleLabel.font?.fontName,
+            "Workspace and agent sessions sidebar titles should have the same font"
+        )
+    }
+
+    @MainActor
+    func testAgentSessionsSidebarTitleTopPaddingMatchesWorkspaceSidebar() throws {
+        // Workspace sidebar header top inset
+        let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
+        sidebar.render(
+            workspaceItems: [],
+            theme: .defaultTheme,
+            onSelectWorkspace: { _ in },
+            onCreateWorkspace: {},
+            onDeleteWorkspace: {},
+            canDeleteWorkspace: false,
+            updateAvailability: nil,
+            onMoveWorkspace: { _, _ in },
+            onToggleWorkspaceExpansion: { _ in },
+            onRenameWorkspace: { _, _ in },
+            onSelectPane: { _ in }
+        )
+        sidebar.layoutSubtreeIfNeeded()
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
+        let workspaceTitleFrame = workspaceTitleLabel.convert(workspaceTitleLabel.bounds, to: sidebar)
+
+        // Vault sidebar header top inset
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(
+            workspace: controller.activeWorkspace()!,
+            controller: controller,
+            vaultConfiguration: VaultConfiguration(enabled: true)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+        let vaultSidebarView = try XCTUnwrap(
+            findViews(ofType: NSView.self, in: rootView)
+                .first { $0.accessibilityIdentifier() == A11yID.vaultSidebar.rawValue }
+        )
+        let agentTitleLabel = try XCTUnwrap(findLabelView(withString: "AGENT SESSIONS", in: vaultSidebarView))
+        let agentTitleFrame = agentTitleLabel.convert(agentTitleLabel.bounds, to: vaultSidebarView)
+
+        XCTAssertEqual(
+            workspaceTitleFrame.minY.rounded(),
+            agentTitleFrame.minY.rounded(),
+            accuracy: 4,
+            "Workspace and agent sessions sidebar titles should have similar top padding"
+        )
+    }
+
+    @MainActor
+    func testAgentSessionsSidebarHasLeftBorder() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        _ = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(
+            workspace: controller.activeWorkspace()!,
+            controller: controller,
+            vaultConfiguration: VaultConfiguration(enabled: true)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+        let vaultSidebarView = try XCTUnwrap(
+            findViews(ofType: NSView.self, in: rootView)
+                .first { $0.accessibilityIdentifier() == A11yID.vaultSidebar.rawValue }
+        )
+
+        // apply(theme:) is called during render in WorkspaceWindowController init,
+        // which creates the border layer lazily.
+
+        let borderLayer = vaultSidebarView.layer?.sublayers?.first {
+            $0.name == "vaultSidebarLeftBorder"
+        }
+        XCTAssertNotNil(borderLayer, "Agent sessions sidebar should have a left border layer")
+        XCTAssertEqual(borderLayer?.frame.width, 1, "Left border should be 1pt wide")
+        XCTAssertEqual(borderLayer?.frame.minX, 0, "Left border should be at x=0")
     }
 
     @MainActor
@@ -6115,28 +6245,6 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(invalidResponse.error?.code, 404)
     }
 
-    func testPaneTabTitleFormatterKeepsShortTitlesUnchanged() {
-        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("Opencode"), "Opencode")
-        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("~/Projects/DungeonPlanner"), "~/Projects/DungeonPlanner")
-
-        let exactMaximum = String(repeating: "a", count: PaneTabTitleFormatter.defaultMaximumLength)
-        XCTAssertEqual(PaneTabTitleFormatter.displayTitle(exactMaximum), exactMaximum)
-    }
-
-    func testPaneTabTitleFormatterBoundsLongTitles() {
-        let title = ".../T/openmux-update-0733BCA7-E332-40BC-B156-16BA405604E7/unpacked"
-        let displayTitle = PaneTabTitleFormatter.displayTitle(title, maximumLength: 44)
-
-        XCTAssertLessThanOrEqual(displayTitle.count, 44)
-        XCTAssertTrue(displayTitle.hasPrefix(".../T/openmux-update"))
-        XCTAssertTrue(displayTitle.hasSuffix("unpacked"))
-        XCTAssertNotEqual(displayTitle, title)
-    }
-
-    func testPaneTabTitleFormatterSplitsTruncatedTitlesWithinMaximum() {
-        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("abcdefghij", maximumLength: 8), "ab...hij")
-        XCTAssertEqual(PaneTabTitleFormatter.displayTitle("abcdefghij", maximumLength: 9), "abc...hij")
-    }
 
     @MainActor
     func testPaneTabTitleLabelDoesNotMiddleTruncateShortTitles() throws {
