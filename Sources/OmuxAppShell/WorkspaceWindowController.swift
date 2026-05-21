@@ -6480,7 +6480,9 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
-         titleLabel.lineBreakMode = .byTruncatingMiddle
+         titleLabel.lineBreakMode = pane.displayTitle.count > PaneTabTitleFormatter.defaultMaximumLength
+            ? .byTruncatingMiddle
+            : .byTruncatingTail
         titleLabel.stringValue = pane.displayTitle
         titleLabel.toolTip = pane.displayTitle
          titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
