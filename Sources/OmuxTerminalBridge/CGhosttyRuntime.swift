@@ -1052,6 +1052,22 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         scheduleTick()
     }
 
+    public func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        guard let state = try? surfaceState(for: runtimeSurfaceID),
+              let surface = state.surface
+        else {
+            return
+        }
+
+        runOnMain {
+            ghostty_surface_set_occlusion(surface, isVisible)
+            if isVisible {
+                ghostty_surface_refresh(surface)
+            }
+        }
+        scheduleTick()
+    }
+
     public func snapshot(
         paneID: PaneID,
         sessionID: SessionID,

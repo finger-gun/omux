@@ -2892,6 +2892,37 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotNil(runtime.session(for: "action:\(hiddenPane.id.rawValue)"))
     }
 
+    func testWorkspaceVisibilitySwitchHidesPreviousWorkspaceSurface() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let paneA = Pane(
+            title: "A",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/a")
+        )
+        let paneB = Pane(
+            title: "B",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/b")
+        )
+        let tabA = Tab(title: "A", panes: [paneA], focusedPaneID: paneA.id)
+        let tabB = Tab(title: "B", panes: [paneB], focusedPaneID: paneB.id)
+        let workspaceA = Workspace(generatedName: "Workspace A", rootPath: "/tmp/a", tabs: [tabA], focusedTabID: tabA.id)
+        let workspaceB = Workspace(generatedName: "Workspace B", rootPath: "/tmp/b", tabs: [tabB], focusedTabID: tabB.id)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        _ = try XCTUnwrap(
+            controller.restorePersistedState(.init(workspaces: [workspaceA, workspaceB], activeWorkspaceID: workspaceA.id))
+        )
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceA.id)
+
+        _ = controller.focus(paneID: paneB.id)
+        _ = try controller.ensureVisibleTerminalSurfaces(for: workspaceB.id)
+
+        let runtimeSurfaceA = "action:\(paneA.id.rawValue)"
+        let runtimeSurfaceB = "action:\(paneB.id.rawValue)"
+        XCTAssertEqual(runtime.visibilityBySurface[runtimeSurfaceA], [false])
+        XCTAssertNil(runtime.visibilityBySurface[runtimeSurfaceB])
+    }
+
     func testControlPlaneActionStartsLazyRestoredPaneBeforeSendingInput() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -7090,6 +7121,7 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private(set) var destroyedSurfaceIDs: [String] = []
     private(set) var terminalTextSnapshotCount = 0
     private(set) var clearedScreenAndScrollbackSurfaceIDs: [String] = []
+    private(set) var visibilityBySurface: [String: [Bool]] = [:]
     var failNextSend = false
 
     func createSurface(for paneID: PaneID) throws -> String {
@@ -7159,6 +7191,10 @@ private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
         _ handler: (@Sendable (RuntimeTerminalActionRecord) -> Bool)?
     ) {
         terminalActionHandler = handler
+    }
+
+    func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        visibilityBySurface[runtimeSurfaceID, default: []].append(isVisible)
     }
 
     func snapshot(

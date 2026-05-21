@@ -47,6 +47,8 @@ Rationale: Terminal-first behavior requires background work to continue. The pro
 
 Alternative considered: Destroy hidden surfaces and recreate them from scrollback when visible. Rejected because it would break live process semantics and increase complexity around terminal state restoration.
 
+Implementation note: libghostty's VT state is renderer-independent, so occlusion is expected to preserve grid/cursor/scrollback and shell-integration-derived state. OpenMUX still must keep the embedding callbacks and effects handling alive while surfaces are hidden so action events (for example title/bell/clipboard/progress) remain observable.
+
 ### D4: Refresh On Visibility Restoration
 
 When a hidden surface becomes visible, the bridge should mark it visible and request a presentation refresh/tick so the user sees current output without waiting for the next terminal event.
@@ -93,8 +95,8 @@ Alternative considered: Build in-app telemetry. Rejected for this change because
 5. Capture before/after manual runtime power profiles using the documented scenario.
 6. Rollback strategy: disable shell visibility propagation while keeping the bridge API inert if runtime occlusion causes regressions.
 
-## Open Questions
+## Resolved Questions
 
-- Which AppKit window notifications provide the most reliable signal for minimized, hidden, and occluded states in the manually assembled app bundle?
-- Should the first implementation mark only inactive workspace/tab surfaces hidden, then add full window occlusion after validation?
-- Does libghostty occlusion preserve all terminal action events required by AI status, title updates, and scrollback capture, or do we need a narrower runtime primitive?
+- App/window lifecycle signaling should use a combined set of notifications (`didMiniaturize` / `didDeminiaturize`, `didChangeOcclusionState`, app hide/unhide, app active/inactive) and reconcile through one idempotent visibility derivation path rather than per-notification side effects.
+- Implementation should roll out in two phases: first mark inactive workspace/tab/pane-stack/modal surfaces hidden, then add full window/app occlusion gating after validation.
+- Hidden-surface correctness should be enforced with explicit bridge/runtime and shell tests that keep sessions alive while validating continued action/effects flow (title/progress/bell/clipboard/child lifecycle where test infra supports it) and visible refresh on unhide.

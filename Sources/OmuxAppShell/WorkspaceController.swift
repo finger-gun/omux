@@ -416,6 +416,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         try ensureTerminalSurfaces(in: workspace)
+        reconcileTerminalSurfaceVisibility(activeWorkspaceID: workspaceID)
         return workspace
     }
 
@@ -526,9 +527,37 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     private static func visibleTerminalPanes(in workspace: Workspace) -> [Pane] {
-        let focusedTabPanes = (workspace.focusedTab ?? workspace.tabs.first)?.panes ?? []
-        let floatingPanes = workspace.floatingPaneModals.flatMap(\.panes)
+        let focusedTab = workspace.focusedTab ?? workspace.tabs.first
+        let focusedTabPaneIDs = Set(focusedTab?.visiblePaneIDs ?? [])
+        let focusedTabPanes = focusedTab?.panes.filter { focusedTabPaneIDs.contains($0.id) } ?? []
+        let floatingPanes = workspace.floatingPaneModals.compactMap(\.focusedPane)
         return (focusedTabPanes + floatingPanes).filter(\.isTerminal)
+    }
+
+    private func reconcileTerminalSurfaceVisibility(activeWorkspaceID: WorkspaceID, windowVisible: Bool = true) {
+        let visiblePaneIDs = derivedVisibleTerminalPaneIDs(
+            activeWorkspaceID: activeWorkspaceID,
+            windowVisible: windowVisible
+        )
+        for paneID in bridge.hostedSurfacePaneIDs() {
+            bridge.setHostedSurfaceVisible(paneID: paneID, isVisible: visiblePaneIDs.contains(paneID))
+        }
+    }
+
+    private func derivedVisibleTerminalPaneIDs(activeWorkspaceID: WorkspaceID, windowVisible: Bool) -> Set<PaneID> {
+        guard windowVisible else {
+            return []
+        }
+
+        lock.lock()
+        let workspace = workspaces.first(where: { $0.id == activeWorkspaceID })
+        lock.unlock()
+
+        guard let workspace else {
+            return []
+        }
+
+        return Set(Self.visibleTerminalPanes(in: workspace).map(\.id))
     }
 
     private func currentPersistedScrollback() -> OmuxConfigTerminal.PersistedScrollback {

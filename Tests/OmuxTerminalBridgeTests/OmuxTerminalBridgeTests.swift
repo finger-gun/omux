@@ -197,6 +197,37 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertNil(bridge.surface(for: pane.id))
     }
 
+    func testBridgeMarksSurfaceVisibilityWithoutDestroyingSession() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: false)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: true)
+
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        XCTAssertEqual(runtime.visibilityBySurface[runtimeSurfaceID], [false, true])
+        XCTAssertEqual(bridge.attachedSession(for: pane.id), session.id)
+    }
+
+    func testBridgeVisibilityUpdatesAreIdempotent() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
+        let pane = Pane(title: "Main", session: session)
+
+        _ = try bridge.attach(session: session, to: pane)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: true)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: true)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: false)
+        bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: false)
+
+        let runtimeSurfaceID = "inspect:\(pane.id.rawValue)"
+        XCTAssertEqual(runtime.visibilityBySurface[runtimeSurfaceID], [false])
+    }
+
     func testBridgePreservesSessionEnvironmentOnAttach() throws {
         let runtime = InspectableGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -1835,6 +1866,7 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     private(set) var accumulatedEvents: [NormalizedKeyEvent] = []
     private(set) var sentTextsBySurface: [String: [String]] = [:]
     private(set) var handledEventsBySurface: [String: [NormalizedKeyEvent]] = [:]
+    private(set) var visibilityBySurface: [String: [Bool]] = [:]
     private(set) var bindingActions: [String] = []
     private(set) var mouseButtons: [(state: ghostty_input_mouse_state_e, buttonNumber: Int, modifiers: KeyModifiers)] = []
     private(set) var mousePositions: [(point: CGPoint?, modifiers: KeyModifiers)] = []
@@ -1985,6 +2017,10 @@ private final class InspectableGhosttyRuntime: GhosttyRuntime {
     func setSurfaceFocused(runtimeSurfaceID: String, focused: Bool) {
         _ = runtimeSurfaceID
         _ = focused
+    }
+
+    func setSurfaceVisible(runtimeSurfaceID: String, isVisible: Bool) {
+        visibilityBySurface[runtimeSurfaceID, default: []].append(isVisible)
     }
 
     func setTerminalActionHandler(
