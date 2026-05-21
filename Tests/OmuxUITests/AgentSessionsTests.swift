@@ -11,20 +11,44 @@ final class AgentSessionsTests: OmuxUITestsBase {
         app.groups[A11yID.vaultSidebar.rawValue]
     }
 
+    /// Returns true when the sidebar is open and interactable.
     private var isSidebarOpen: Bool {
         vaultSidebar.exists && vaultSidebar.isHittable
+    }
+
+    /// Clicks the toggle button using the element tap (not coordinate-based).
+    /// Sleeps before the click to ensure the app is fully settled from any
+    /// prior interaction (important on slow CI runners where layout animations
+    /// may still be in-flight when the predicate fires), and after the click
+    /// to allow the sidebar animation to complete before the next assertion.
+    private func clickToggle() {
+        Thread.sleep(forTimeInterval: 0.5)
+        toggleButton.click()
+        Thread.sleep(forTimeInterval: 1.0)
+    }
+
+    /// Waits up to `timeout` seconds for the sidebar to become open (hittable).
+    @discardableResult
+    private func waitForSidebarOpen(timeout: TimeInterval = 10) -> Bool {
+        let pred = NSPredicate(format: "isHittable == true")
+        let exp = XCTNSPredicateExpectation(predicate: pred, object: vaultSidebar)
+        return XCTWaiter.wait(for: [exp], timeout: timeout) == .completed
+    }
+
+    /// Waits up to `timeout` seconds for the sidebar to become closed (not hittable).
+    @discardableResult
+    private func waitForSidebarClosed(timeout: TimeInterval = 10) -> Bool {
+        let pred = NSPredicate(format: "isHittable == false")
+        let exp = XCTNSPredicateExpectation(predicate: pred, object: vaultSidebar)
+        return XCTWaiter.wait(for: [exp], timeout: timeout) == .completed
     }
 
     /// Closes the vault sidebar if it is currently open so each test starts
     /// from a known-closed state regardless of prior test execution order.
     private func closeSidebarIfOpen() {
         guard isSidebarOpen else { return }
-        toggleButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        let closedPredicate = NSPredicate(format: "isHittable == false")
-        _ = XCTWaiter.wait(
-            for: [XCTNSPredicateExpectation(predicate: closedPredicate, object: vaultSidebar)],
-            timeout: 3
-        )
+        clickToggle()
+        waitForSidebarClosed(timeout: 5)
     }
 
     // MARK: - Tests
@@ -53,18 +77,10 @@ final class AgentSessionsTests: OmuxUITestsBase {
             toggleButton.waitForExistence(timeout: 5),
             "Agent Sessions toggle button should exist"
         )
-
-        // Ensure the sidebar is closed before starting.
         closeSidebarIfOpen()
-
-        // Click the toggle button to open the sidebar.
-        toggleButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-
-        let openPredicate = NSPredicate(format: "isHittable == true")
-        let sidebarOpen = XCTNSPredicateExpectation(predicate: openPredicate, object: vaultSidebar)
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [sidebarOpen], timeout: 3),
-            .completed,
+        clickToggle()
+        XCTAssertTrue(
+            waitForSidebarOpen(),
             "Agent Sessions sidebar should appear after clicking the toggle button"
         )
     }
@@ -74,26 +90,16 @@ final class AgentSessionsTests: OmuxUITestsBase {
             toggleButton.waitForExistence(timeout: 5),
             "Agent Sessions toggle button should exist"
         )
-
-        // Ensure the sidebar is closed before starting, then open it.
         closeSidebarIfOpen()
-        toggleButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
-        let openPredicate = NSPredicate(format: "isHittable == true")
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: openPredicate, object: vaultSidebar)], timeout: 3),
-            .completed,
-            "Agent Sessions sidebar should open after first click"
-        )
+        // Open.
+        clickToggle()
+        XCTAssertTrue(waitForSidebarOpen(), "Agent Sessions sidebar should open after first click")
 
-        // Click again to close.
-        toggleButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-
-        let closedPredicate = NSPredicate(format: "isHittable == false")
-        let sidebarClosed = XCTNSPredicateExpectation(predicate: closedPredicate, object: vaultSidebar)
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [sidebarClosed], timeout: 3),
-            .completed,
+        // Close.
+        clickToggle()
+        XCTAssertTrue(
+            waitForSidebarClosed(),
             "Agent Sessions sidebar should close after clicking the toggle button again"
         )
     }
@@ -103,20 +109,10 @@ final class AgentSessionsTests: OmuxUITestsBase {
             toggleButton.waitForExistence(timeout: 5),
             "Agent Sessions toggle button should exist"
         )
-
-        // Ensure the sidebar is closed before starting.
         closeSidebarIfOpen()
 
-        // Open the sidebar.
-        toggleButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        let openPredicate = NSPredicate(format: "isHittable == true")
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: openPredicate, object: vaultSidebar)], timeout: 3),
-            .completed,
-            "Agent Sessions sidebar should open"
-        )
-
-        // The toggle button should remain in the title bar while the sidebar is open.
+        clickToggle()
+        XCTAssertTrue(waitForSidebarOpen(), "Agent Sessions sidebar should open")
         XCTAssertTrue(
             toggleButton.exists,
             "Agent Sessions toggle button should remain visible in the title bar when the sidebar is open"
@@ -128,55 +124,38 @@ final class AgentSessionsTests: OmuxUITestsBase {
             toggleButton.waitForExistence(timeout: 5),
             "Agent Sessions toggle button should exist"
         )
-
-        // Ensure the sidebar is closed before starting.
         closeSidebarIfOpen()
 
-        // Open via keyboard shortcut Cmd+Shift+B.
+        // Open via keyboard shortcut ⇧⌘B.
         app.typeKey("b", modifierFlags: [.command, .shift])
-
-        let openPredicate = NSPredicate(format: "isHittable == true")
         XCTAssertTrue(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: openPredicate, object: vaultSidebar)], timeout: 3) == .completed,
+            waitForSidebarOpen(),
             "Agent Sessions sidebar should open via keyboard shortcut ⇧⌘B"
         )
 
-        // Close via keyboard shortcut again.
+        // Close via keyboard shortcut ⇧⌘B.
         app.typeKey("b", modifierFlags: [.command, .shift])
-
-        let closedPredicate = NSPredicate(format: "isHittable == false")
-        let sidebarClosed = XCTNSPredicateExpectation(predicate: closedPredicate, object: vaultSidebar)
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [sidebarClosed], timeout: 3),
-            .completed,
+        XCTAssertTrue(
+            waitForSidebarClosed(),
             "Agent Sessions sidebar should close via keyboard shortcut ⇧⌘B"
         )
     }
 
     func testToggleViaViewMenu() {
-        // Ensure the sidebar is closed before starting.
         closeSidebarIfOpen()
 
-        // Open via View menu.
         let menuBar = app.menuBars.firstMatch
         menuBar.menuBarItems["View"].click()
         menuBar.menuBarItems["View"].menuItems["Toggle Agent Sessions"].click()
-
-        let openPredicate = NSPredicate(format: "isHittable == true")
         XCTAssertTrue(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: openPredicate, object: vaultSidebar)], timeout: 3) == .completed,
+            waitForSidebarOpen(),
             "Agent Sessions sidebar should open via View menu"
         )
 
-        // Close via View menu.
         menuBar.menuBarItems["View"].click()
         menuBar.menuBarItems["View"].menuItems["Toggle Agent Sessions"].click()
-
-        let closedPredicate = NSPredicate(format: "isHittable == false")
-        let sidebarClosed = XCTNSPredicateExpectation(predicate: closedPredicate, object: vaultSidebar)
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [sidebarClosed], timeout: 3),
-            .completed,
+        XCTAssertTrue(
+            waitForSidebarClosed(),
             "Agent Sessions sidebar should close via View menu"
         )
     }
