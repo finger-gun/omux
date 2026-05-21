@@ -6414,7 +6414,7 @@ final class PaneHeaderView: NSView {
         // Keep tab visuals balanced like 08efd4d, but avoid imposing a hard
         // minimum width that can block window resizing.
         let tabWidthConstraints: [NSLayoutConstraint] = {
-            guard paneTabButtons.count > 1 else { return [] }
+            guard !paneTabButtons.isEmpty else { return [] }
             let first = paneTabButtons[0]
             let count = CGFloat(paneTabButtons.count)
             var constraints: [NSLayoutConstraint] = []
@@ -6684,6 +6684,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
     private let interItemSpacing = CGFloat(4)
     private let iconSpacing = CGFloat(4)
     private let symbolSide = CGFloat(12)
+    private static let preferredMaximumWidth = CGFloat(200)
     private let showsClose: Bool
     private let currentTheme: WorkspaceShellTheme
     private var isActiveTab: Bool
@@ -6722,7 +6723,8 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(fullDisplayTitle)" } ?? fullDisplayTitle)
         toolTip = fullDisplayTitle
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        widthAnchor.constraint(lessThanOrEqualToConstant: Self.preferredMaximumWidth).isActive = true
 
         progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
         progressOrb.configure(progress: progress, theme: theme)
