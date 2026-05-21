@@ -3426,7 +3426,7 @@ final class OmuxAppShellTests: XCTestCase {
         rootView.layoutSubtreeIfNeeded()
 
         let toggle = findViews(ofType: NSButton.self, in: rootView)
-            .first { $0.identifier?.rawValue == "vault-sidebar-toggle" }
+            .first { $0.identifier?.rawValue == A11yID.vaultSidebarToggle.rawValue }
         XCTAssertNotNil(toggle)
     }
 
@@ -3447,7 +3447,7 @@ final class OmuxAppShellTests: XCTestCase {
         rootView.layoutSubtreeIfNeeded()
 
         let toggle = findViews(ofType: NSButton.self, in: rootView)
-            .first { $0.identifier?.rawValue == "vault-sidebar-toggle" }
+            .first { $0.identifier?.rawValue == A11yID.vaultSidebarToggle.rawValue }
         XCTAssertNil(toggle)
     }
 

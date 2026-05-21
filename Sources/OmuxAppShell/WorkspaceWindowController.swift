@@ -3911,6 +3911,12 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         nil
     }
 
+    // Honour `isHidden` in the accessibility tree so that XCUITest queries
+    // using `exists` correctly return `false` when the sidebar is collapsed.
+    override func accessibilityIsIgnored() -> Bool {
+        isHidden
+    }
+
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
@@ -6191,7 +6197,7 @@ final class PaneCardView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
-        alphaValue = 1.0
+        alphaValue = (focused && windowIsKey) ? 1.0 : inactiveOpacity
     }
 }
 
@@ -6772,6 +6778,11 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
             )
             closeButton.frame = .zero
         }
+        // Use middle truncation only when the title is wider than the available space,
+        // so short titles are not needlessly truncated in the middle.
+        titleLabel.lineBreakMode = titleLabel.intrinsicContentSize.width > titleLabel.frame.width
+            ? .byTruncatingMiddle
+            : .byTruncatingTail
     }
 
     override func mouseDown(with event: NSEvent) {
