@@ -9,6 +9,7 @@ SAMPLE_SECONDS="${POWER_PROFILE_SAMPLE_SECONDS:-5}"
 ENABLE_POWERMETRICS="${POWER_PROFILE_ENABLE_POWERMETRICS:-0}"
 LABEL="${POWER_PROFILE_LABEL:-}"
 WAIT_SECONDS="${POWER_PROFILE_WAIT_SECONDS:-1}"
+CLEANED_UP=0
 
 usage() {
   cat <<'EOF'
@@ -90,6 +91,46 @@ current_timestamp() {
   date '+%Y-%m-%dT%H:%M:%S%z'
 }
 
+thread_count_for_pid() {
+  ps -M -p "$1" 2>/dev/null | awk '
+    NR == 1 { next }
+    { count += 1 }
+    END { print count + 0 }
+  '
+}
+
+append_process_snapshot() {
+  pid="$1"
+  timestamp="$2"
+  threads="$(thread_count_for_pid "$pid")"
+  ps -o pid=,etime=,%cpu=,rss=,state=,command= -p "$pid" \
+    | awk -v ts="$timestamp" -v threads="$threads" '
+        NF {
+          pid=$1; etime=$2; cpu=$3; rss=$4; state=$5
+          $1=$2=$3=$4=$5=""
+          sub(/^[[:space:]]+/, "", $0)
+          printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts, pid, etime, cpu, rss, threads, state, $0
+        }
+      '
+}
+
+write_final_ps_snapshot() {
+  pid="$1"
+  threads="$(thread_count_for_pid "$pid")"
+  {
+    printf "PID ELAPSED %%CPU RSS_KB THREADS STATE COMMAND\n"
+    ps -o pid=,etime=,%cpu=,rss=,state=,command= -p "$pid" \
+      | awk -v threads="$threads" '
+          NF {
+            pid=$1; etime=$2; cpu=$3; rss=$4; state=$5
+            $1=$2=$3=$4=$5=""
+            sub(/^[[:space:]]+/, "", $0)
+            printf "%s %s %s %s %s %s %s\n", pid, etime, cpu, rss, threads, state, $0
+          }
+        '
+  } >"$FINAL_PS_FILE"
+}
+
 branch_name="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown-branch')"
 branch_slug="$(sanitize_slug "$branch_name")"
 commit_sha="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'unknown')"
@@ -162,15 +203,7 @@ monitor_loop() {
     fi
 
     if [ -n "$current_pid" ] && kill -0 "$current_pid" 2>/dev/null; then
-      ps -o pid=,etime=,%cpu=,rss=,thcount=,state=,command= -p "$current_pid" \
-        | awk -v ts="$timestamp" '
-            NF {
-              pid=$1; etime=$2; cpu=$3; rss=$4; threads=$5; state=$6
-              $1=$2=$3=$4=$5=$6=""
-              sub(/^[[:space:]]+/, "", $0)
-              printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts, pid, etime, cpu, rss, threads, state, $0
-            }
-          ' >>"$TIMELINE_FILE"
+      append_process_snapshot "$current_pid" "$timestamp" >>"$TIMELINE_FILE"
     else
       if [ -n "$current_pid" ]; then
         printf "%s missing pid=%s\n" "$timestamp" "$current_pid" >>"$LIFECYCLE_FILE"
@@ -204,7 +237,7 @@ generate_report() {
   end_timestamp="$(current_timestamp)"
   latest_pid="$(latest_app_pid || true)"
   if [ -n "$latest_pid" ] && kill -0 "$latest_pid" 2>/dev/null; then
-    ps -o pid=,etime=,%cpu=,rss=,thcount=,state=,command= -p "$latest_pid" >"$FINAL_PS_FILE" 2>&1 || true
+    write_final_ps_snapshot "$latest_pid" || true
     top -l 1 -pid "$latest_pid" -stats pid,command,cpu,mem,threads,time >"$FINAL_TOP_FILE" 2>&1 || true
     sample "$latest_pid" "$SAMPLE_SECONDS" 1 >"$FINAL_SAMPLE_FILE" 2>&1 || true
     vmmap -summary "$latest_pid" >"$FINAL_VMMAP_FILE" 2>&1 || true
@@ -334,9 +367,10 @@ EOF
 }
 
 cleanup() {
-  if [ -f "$STOP_FILE" ]; then
+  if [ "$CLEANED_UP" = "1" ]; then
     return
   fi
+  CLEANED_UP=1
   : >"$STOP_FILE"
   if kill -0 "$MONITOR_PID" 2>/dev/null; then
     wait "$MONITOR_PID" 2>/dev/null || true
@@ -345,7 +379,13 @@ cleanup() {
   printf "\nCapture complete. Report: %s\n" "$REPORT_FILE"
 }
 
-trap cleanup INT TERM EXIT
+handle_interrupt() {
+  cleanup
+  exit 0
+}
+
+trap handle_interrupt INT TERM
+trap cleanup EXIT
 
 while :; do
   sleep 3600

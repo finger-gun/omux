@@ -40,7 +40,11 @@ smoke:
 	./Scripts/smoke-openmux-app.sh
 
 power-profile:
-	./Scripts/capture-openmux-power-profile.sh
+	@status=0; \
+	./Scripts/capture-openmux-power-profile.sh || status=$$?; \
+	if [ "$$status" -ne 0 ] && [ "$$status" -ne 130 ]; then \
+		exit "$$status"; \
+	fi
 
 smoke-packaged-release:
 	./Scripts/smoke-packaged-release-app.sh
