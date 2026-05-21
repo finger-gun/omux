@@ -76,21 +76,20 @@ final class WorkspaceRootView: NSView {
     // non-self subview is found it is returned so the accessibility system
     // (and XCUITest) see the correct interactive element.
     nonisolated override func accessibilityHitTest(_ point: NSPoint) -> Any {
-        // XCUITest determines isHittable by calling accessibilityHitTest at the
-        // element centre point. Because this view returns mouseDownCanMoveWindow=true,
-        // AppKit's default returns self (the drag surface) rather than button
-        // subviews in the title bar, so XCUITest reports them as not hittable.
-        // Delegating through hitTest first ensures the correct element is returned.
-        //
-        // assumeIsolated is safe: AppKit always calls accessibilityHitTest on the
-        // main thread. The wrapper boxes Any through @unchecked Sendable to satisfy
-        // the strict-concurrency checker at the AppKit boundary.
         struct Box: @unchecked Sendable { let value: Any }
         return MainActor.assumeIsolated {
-            if let hit = hitTest(point), hit !== self {
-                return Box(value: hit.accessibilityHitTest(point))
+            let hit = hitTest(point)
+            let isKey = window?.isKeyWindow ?? false
+            let isMain = window?.isMainWindow ?? false
+            fputs("[DIAG] accessibilityHitTest point=\(point) hitView=\(String(describing: hit)) isSelf=\(hit === self) isKey=\(isKey) isMain=\(isMain)\n", stderr)
+            if let hit, hit !== self {
+                let result = hit.accessibilityHitTest(point)
+                fputs("[DIAG] → delegated to \(type(of: hit)), returning \(type(of: result))\n", stderr)
+                return Box(value: result)
             }
-            return Box(value: super.accessibilityHitTest(point))
+            let result = super.accessibilityHitTest(point)
+            fputs("[DIAG] → returning super result \(type(of: result))\n", stderr)
+            return Box(value: result)
         }.value
     }
 }

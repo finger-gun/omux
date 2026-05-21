@@ -57,9 +57,13 @@ class OmuxUITestsBase: XCTestCase {
 
             // Wait for the main window to become hittable (confirms window is key).
             let hittable = NSPredicate(format: "isHittable == true")
-            _ = XCTWaiter.wait(
+            let windowHittable = XCTWaiter.wait(
                 for: [XCTNSPredicateExpectation(predicate: hittable, object: mainWindow)],
                 timeout: 5
+            )
+            print("[DIAG] setUp: mainWindow.isHittable=\(mainWindow.isHittable) windowHittableResult=\(windowHittable.rawValue)")
+            let toggleButton = a.buttons["omux.vaultSidebarToggle"]
+            print("[DIAG] setUp: toggleButton.exists=\(toggleButton.exists) toggleButton.isHittable=\(toggleButton.isHittable) frame=\(toggleButton.frame)")
             )
         }
     }
