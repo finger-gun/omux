@@ -492,7 +492,7 @@ final class WorkspaceShellViewController: NSViewController {
 
         // Sidebar toggle button: always present, positioned to the left of the
         // vault toggle (or at the trailing edge when vault is disabled).
-        let sidebarButtonTrailing = vaultConfiguration.collapsedToggleVisible
+        let sidebarButtonTrailing = vaultConfiguration.enabled && vaultConfiguration.collapsedToggleVisible
             ? vaultToggleButton.leadingAnchor
             : view.trailingAnchor
         constraints += [
