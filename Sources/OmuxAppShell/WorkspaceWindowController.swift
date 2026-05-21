@@ -6810,7 +6810,7 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        topBorderLayer.frame = CGRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
+        topBorderLayer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
         CATransaction.commit()
         let contentLeft = contentInsets.left
         let contentRight = contentInsets.right
