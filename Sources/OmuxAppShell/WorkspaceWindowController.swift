@@ -75,14 +75,13 @@ final class WorkspaceRootView: NSView {
     // Overriding here delegates to the NSView hit-test tree first; if a
     // non-self subview is found it is returned so the accessibility system
     // (and XCUITest) see the correct interactive element.
-    nonisolated override func accessibilityHitTest(_ point: NSPoint) -> Any {
-        struct Box: @unchecked Sendable { let value: Any }
-        return MainActor.assumeIsolated {
+    nonisolated override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        DispatchQueue.main.sync {
             if let hit = hitTest(point), hit !== self {
-                return Box(value: hit.accessibilityHitTest(point))
+                return hit.accessibilityHitTest(point)
             }
-            return Box(value: super.accessibilityHitTest(point))
-        }.value
+            return super.accessibilityHitTest(point)
+        }
     }
 }
 

@@ -279,13 +279,10 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
                 }
             }
             // Force transparent terminal background so the app window color shows through.
-            let overrideContent = "background-opacity = 0\n"
-            let overrideURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("omux-ghostty-override-\(UUID().uuidString).conf")
-            defer { try? FileManager.default.removeItem(at: overrideURL) }
-            try overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
-            overrideURL.path.withCString { path in
-                ghostty_config_load_file(config, path)
+            try CGhosttyRuntime.withTemporaryOverrideFile(content: "background-opacity = 0\n") { overrideURL in
+                overrideURL.path.withCString { path in
+                    ghostty_config_load_file(config, path)
+                }
             }
             ghostty_config_finalize(config)
 
@@ -1611,17 +1608,30 @@ public final class CGhosttyRuntime: @unchecked Sendable, GhosttyRuntime {
         return loadResult.diagnostics
     }
 
+    /// Writes `content` to a uniquely-named temporary file, invokes `body` with
+    /// the file URL, and removes the file on return regardless of outcome.
+    /// Throws if the write fails so callers can decide how to handle the error.
+    private static func withTemporaryOverrideFile(
+        content: String,
+        body: (URL) -> Void
+    ) throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omux-ghostty-override-\(UUID().uuidString).conf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        body(url)
+    }
+
     private func loadConfig(path: URL) -> (config: ghostty_config_t?, diagnostics: [OmuxConfigDiagnostic]) {
         let config = ghostty_config_new()
         path.path.withCString { value in
             ghostty_config_load_file(config, value)
         }
         let overrideContent = "background-opacity = 0\n"
-        let overrideURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omux-ghostty-override.conf")
-        try? overrideContent.write(to: overrideURL, atomically: true, encoding: .utf8)
-        overrideURL.path.withCString { value in
-            ghostty_config_load_file(config, value)
+        try? CGhosttyRuntime.withTemporaryOverrideFile(content: overrideContent) { overrideURL in
+            overrideURL.path.withCString { value in
+                ghostty_config_load_file(config, value)
+            }
         }
         ghostty_config_finalize(config)
         return (config, diagnostics(for: config, filePath: path.path))
