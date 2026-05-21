@@ -6058,6 +6058,8 @@ final class PaneHeaderView: NSView {
     private let pinnedAddButton = ChromePillButton()
     private var contentTrailingToSuperviewConstraint: NSLayoutConstraint?
     private var contentTrailingToPinnedConstraint: NSLayoutConstraint?
+    private static let tabMinWidth: CGFloat = 130
+    private static let tabMaxWidth: CGFloat = 200
 
     init(
         paneStack: PaneStack,
@@ -6091,7 +6093,7 @@ final class PaneHeaderView: NSView {
 
         tabStrip.orientation = .horizontal
         tabStrip.alignment = .centerY
-        tabStrip.spacing = 6
+        tabStrip.spacing = 0
         tabStrip.distribution = .fill
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabStrip.identifier = NSUserInterfaceItemIdentifier("pane-tab-strip-\(paneStack.id.rawValue)")
@@ -6136,6 +6138,32 @@ final class PaneHeaderView: NSView {
             paneTabButtons.append(button)
         }
 
+        // Each tab takes an equal share of the available width, clamped to
+        // [tabMinWidth, tabMaxWidth]. When tabs overflow at minimum width the
+        // scroll view allows horizontal scrolling.
+        let tabWidthConstraints: [NSLayoutConstraint] = {
+            guard !paneTabButtons.isEmpty else { return [] }
+            let first = paneTabButtons[0]
+            let count = CGFloat(paneTabButtons.count)
+            var constraints: [NSLayoutConstraint] = []
+            for button in paneTabButtons {
+                let equalWidth = button.widthAnchor.constraint(
+                    equalTo: widthAnchor,
+                    multiplier: 1.0 / count
+                )
+                equalWidth.priority = .defaultHigh
+                let minWidth = button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.tabMinWidth)
+                let maxWidth = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.tabMaxWidth)
+                constraints.append(contentsOf: [equalWidth, minWidth, maxWidth])
+                if button !== first {
+                    let sameWidth = button.widthAnchor.constraint(equalTo: first.widthAnchor)
+                    sameWidth.priority = .defaultHigh
+                    constraints.append(sameWidth)
+                }
+            }
+            return constraints
+        }()
+
         inlineAddButton.configure(symbolName: "plus", accessibilityLabel: "Add pane tab", active: false, theme: theme, compact: true)
         inlineAddButton.identifier = NSUserInterfaceItemIdentifier("pane-tab-add-\(paneStack.id.rawValue)")
         inlineAddButton.onPress = {
@@ -6177,16 +6205,19 @@ final class PaneHeaderView: NSView {
         addSubview(pinnedAddButton)
         addSubview(content)
 
+        // Activate after content is in the view hierarchy so button and self share a common ancestor.
+        NSLayoutConstraint.activate(tabWidthConstraints)
+
         let trailingToSuperview = content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
         let trailingToPinned = content.trailingAnchor.constraint(equalTo: pinnedAddButton.leadingAnchor, constant: -4)
         self.contentTrailingToSuperviewConstraint = trailingToSuperview
         self.contentTrailingToPinnedConstraint = trailingToPinned
 
         NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
             trailingToSuperview,
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
             pinnedAddButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             pinnedAddButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -6336,37 +6367,6 @@ final class PaneProgressOrbView: NSView {
     }
 }
 
-struct PaneTabTitleFormatter {
-    static let defaultMaximumLength = 40
-    private static let truncationMarker = "..."
-
-    static func displayTitle(
-        _ title: String,
-        maximumLength: Int = defaultMaximumLength
-    ) -> String {
-        guard maximumLength > 0 else {
-            return ""
-        }
-
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayTitle = trimmedTitle.isEmpty ? title : trimmedTitle
-        guard displayTitle.count > maximumLength else {
-            return displayTitle
-        }
-
-        guard maximumLength > truncationMarker.count + 1 else {
-            return String(displayTitle.prefix(maximumLength))
-        }
-
-        let remainingLength = maximumLength - truncationMarker.count
-        let leadingLength = max(1, remainingLength / 2)
-        let trailingLength = max(1, remainingLength - leadingLength)
-        return String(displayTitle.prefix(leadingLength))
-            + truncationMarker
-            + String(displayTitle.suffix(trailingLength))
-    }
-}
-
 private extension WorkspaceShellTheme {
     func iconColor(
         for icon: OmuxRenderedIcon,
@@ -6453,7 +6453,6 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
         setAccessibilityLabel(icon.map { "\($0.accessibilityLabel), \(fullDisplayTitle)" } ?? fullDisplayTitle)
         toolTip = fullDisplayTitle
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
 
         progressOrb.identifier = NSUserInterfaceItemIdentifier("pane-tab-progress-\(pane.id.rawValue)")
         progressOrb.configure(progress: progress, theme: theme)
@@ -6481,9 +6480,9 @@ private final class PaneTabButton: NSControl, NSTextFieldDelegate {
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
-         titleLabel.lineBreakMode = .byClipping
-        titleLabel.stringValue = PaneTabTitleFormatter.displayTitle(fullDisplayTitle)
-        titleLabel.toolTip = fullDisplayTitle
+         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.stringValue = pane.displayTitle
+        titleLabel.toolTip = pane.displayTitle
          titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(titleLabel)
