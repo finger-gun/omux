@@ -62,6 +62,7 @@ struct OmuxThemeTests {
             "solarized-dark",
             "solarized-light",
             "synthwave",
+            "tokyo-night",
             "tokyo-night-storm",
             "tokyonight-moon",
             "tomorrow-night-eighties",

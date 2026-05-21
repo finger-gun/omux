@@ -1,4 +1,6 @@
-.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help check-xcodegen generate-xcodeproj ui-test
+.PHONY: help setup build-ghostty build test verify smoke smoke-packaged-release smoke-release-installer import-themes publish-unsigned package-release install-local-release tag-release uninstall-local dev app cli-help check-xcodegen generate-xcodeproj ui-test power-profile
+
+SWIFT := env CLANG_MODULE_CACHE_PATH=.build/module-cache swift
 
 help:
 	@printf "OpenMUX development commands\n\n"
@@ -8,6 +10,7 @@ help:
 	@printf "  make test          Run the Swift test suite\n"
 	@printf "  make verify        Run build and test\n"
 	@printf "  make smoke         Launch and sample OpenMUXApp as a smoke test\n"
+	@printf "  make power-profile Capture a shareable OpenMUX runtime profile\n"
 	@printf "  make smoke-packaged-release Launch packaged release app with build resources hidden\n"
 	@printf "  make smoke-release-installer Run the packaged release installer smoke test\n"
 	@printf "  make import-themes Import selected iTerm2 Color Schemes into bundled themes\n"
@@ -28,15 +31,22 @@ build-ghostty:
 	./Scripts/build-ghostty.sh
 
 build:
-	swift build
+	$(SWIFT) build
 
 test:
-	swift test
+	$(SWIFT) test
 
 verify: build test
 
 smoke:
 	./Scripts/smoke-openmux-app.sh
+
+power-profile:
+	@status=0; \
+	./Scripts/capture-openmux-power-profile.sh || status=$$?; \
+	if [ "$$status" -ne 0 ] && [ "$$status" -ne 130 ]; then \
+		exit "$$status"; \
+	fi
 
 smoke-packaged-release:
 	./Scripts/smoke-packaged-release-app.sh
@@ -63,12 +73,12 @@ uninstall-local:
 	./Scripts/uninstall-local.sh
 
 dev:
-	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" swift run OpenMUXApp
+	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" $(SWIFT) run OpenMUXApp
 
 app: dev
 
 cli-help:
-	swift run omux help
+	$(SWIFT) run omux help
 
 check-xcodegen:
 	@command -v xcodegen >/dev/null 2>&1 || { \

@@ -62,6 +62,7 @@ make test
 make verify
 make ui-test
 make smoke
+make power-profile
 make import-themes
 make package-release
 Scripts/check-changes-since-release.sh
@@ -117,6 +118,7 @@ swift run omux worktree <branch>
 swift run omux install-cli [destination]
 swift run omux help
 swift run OpenMUXApp
+Scripts/capture-openmux-power-profile.sh --label manual
 ```
 
 `swift run omux theme` opens the interactive fuzzy-search arrow-key picker when stdin/stdout are attached to a TTY; tests and non-interactive runs keep the typed number/name fallback.
@@ -264,6 +266,104 @@ The current shell is usable, but it is still intentionally narrow:
 
 - Workspace layout persistence in `OpenMUXAppDelegate` must be scheduled through `WorkspaceLayoutPersistenceCoordinator` so bursty `onChange` updates are coalesced. Lifecycle boundaries that need durability (quit, power-off, full-state writes) should call the coordinator flush path.
 - `WorkspaceController` pane/session/tab/workspace target resolution should prefer the internal lookup indexes and keep index invalidation hooks aligned with every state mutation. If new mutations are added, update index dirtiness/rebuild wiring in the same change.
+
+## Runtime power profile
+
+Use this profile when changing hidden-surface rendering, display-link activity, or other visually idle runtime behavior.
+
+For a shareable capture that you can run in a separate terminal while you use the app normally, use:
+
+```bash
+make power-profile
+```
+
+Or, if you want a label in the output directory and report:
+
+```bash
+Scripts/capture-openmux-power-profile.sh --label pre-opt
+Scripts/capture-openmux-power-profile.sh --label post-opt --powermetrics
+```
+
+The script waits for `OpenMUXApp`, records branch/commit metadata, logs lightweight process snapshots while you work, and writes a final `report.md` plus raw artifacts under `.build/power-profile/` when you stop it with Ctrl-C.
+
+### Scenario
+
+Keep the scenario stable before and after the change:
+
+1. Launch `OpenMUXApp`.
+2. Create at least three workspaces.
+3. Leave only one workspace visible.
+4. In at least one inactive workspace, run a live but low-duty-cycle command such as:
+
+```bash
+while true; do printf 'hidden tick %s\n' "$(date +%T)"; sleep 5; done
+```
+
+5. In another inactive workspace, keep a second long-lived process alive, for example:
+
+```bash
+python3 -m http.server 8123
+```
+
+Record any deviations from that setup when you compare runs.
+
+### Capture commands
+
+Create a scratch directory first:
+
+```bash
+mkdir -p .build/power-profile
+APP_PID="$(pgrep -x OpenMUXApp | tail -n 1)"
+```
+
+Then collect the comparable metrics:
+
+```bash
+ps -o pid=,etime=,%cpu=,rss=,thcount=,state=,command= -p "$APP_PID" \
+  | tee .build/power-profile/openmux.ps.txt
+
+top -l 1 -pid "$APP_PID" -stats pid,command,cpu,mem,threads,time \
+  | tee .build/power-profile/openmux.top.txt
+
+sample "$APP_PID" 5 1 \
+  > .build/power-profile/openmux.sample.txt 2>&1 || true
+
+vmmap -summary "$APP_PID" \
+  > .build/power-profile/openmux.vmmap.txt 2>&1 || true
+```
+
+Optional process-energy capture:
+
+```bash
+sudo powermetrics --samplers tasks --show-process-energy -n 1 -i 1000 \
+  > .build/power-profile/openmux.powermetrics.txt 2>&1 || true
+```
+
+If `powermetrics`, `vmmap`, or another command is unavailable or permission-restricted, keep the rest of the profile and record the missing measurement in the run notes instead of substituting fabricated data.
+
+### Baseline for `optimize-inactive-workspace-power`
+
+The baseline observation for this change was:
+
+- main AppKit thread mostly blocked
+- terminal IO reader threads mostly polling
+- renderer/display activity still present in sampled stacks, including CVDisplayLink, Metal command queues, Core Animation commits, and IOSurface work
+
+Treat that as the before-change reference when a fresh local pre-change capture is unavailable.
+
+### After-change comparison
+
+For the after profile, re-run the same scenario and compare:
+
+- `%CPU`, RSS, elapsed runtime, and thread count
+- whether sampled stacks still show renderer, CVDisplayLink, Metal, Core Animation, or IOSurface activity while inactive workspaces are hidden
+- whether the inactive-workspace commands above stayed live and produced output when you switched back
+
+Classify remaining background work explicitly as one of:
+
+- expected visible-surface work
+- unresolved hidden-surface work
+- unrelated background work
 
 ## UI tests
 
