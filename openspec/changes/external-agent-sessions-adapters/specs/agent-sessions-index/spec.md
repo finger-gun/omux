@@ -7,8 +7,8 @@ The system SHALL use built-in adapters and plugin-declared external adapters to 
 - **WHEN** the Copilot adapter syncs from `session-store.db`
 - **THEN** it SHALL normalize each Copilot session row using the session id, cwd, summary, and updated timestamp from the `sessions` table
 
-#### Scenario: Adapter syncs file-based agents
-- **WHEN** an adapter reads file-based history such as Codex, Gemini, or Claude
+#### Scenario: Adapter syncs bundled file-based agents
+- **WHEN** a bundled adapter reads file-based history such as Codex or Gemini
 - **THEN** it SHALL normalize each discovered session into the same Agent Sessions row shape
 
 #### Scenario: Plugin adapter syncs normalized rows

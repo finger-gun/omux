@@ -3,10 +3,6 @@ import OmuxConfig
 
 public enum VaultAgentKind: Codable, Hashable, Sendable {
     case codex
-    case claude
-    case opencode
-    case pi
-    case rovodev
     case copilot
     case gemini
     case custom
@@ -14,10 +10,6 @@ public enum VaultAgentKind: Codable, Hashable, Sendable {
 
     public static let allCases: [VaultAgentKind] = [
         .codex,
-        .claude,
-        .opencode,
-        .pi,
-        .rovodev,
         .copilot,
         .gemini,
         .custom,
@@ -31,14 +23,6 @@ public enum VaultAgentKind: Codable, Hashable, Sendable {
         switch trimmed {
         case "codex":
             self = .codex
-        case "claude":
-            self = .claude
-        case "opencode":
-            self = .opencode
-        case "pi":
-            self = .pi
-        case "rovodev":
-            self = .rovodev
         case "copilot":
             self = .copilot
         case "gemini":
@@ -54,14 +38,6 @@ public enum VaultAgentKind: Codable, Hashable, Sendable {
         switch self {
         case .codex:
             return "codex"
-        case .claude:
-            return "claude"
-        case .opencode:
-            return "opencode"
-        case .pi:
-            return "pi"
-        case .rovodev:
-            return "rovodev"
         case .copilot:
             return "copilot"
         case .gemini:
@@ -402,14 +378,6 @@ public struct VaultConfiguration: Equatable, Sendable {
         switch agent {
         case .codex:
             return resolveHome(override ?? "~/.codex")
-        case .claude:
-            return resolveHome(override ?? "~/.claude")
-        case .opencode:
-            return resolveHome(override ?? "~/.opencode")
-        case .pi:
-            return resolveHome(override ?? "~/.pi")
-        case .rovodev:
-            return resolveHome(override ?? "~/.rovodev")
         case .copilot:
             if let env = ProcessInfo.processInfo.environment["COPILOT_HOME"], env.isEmpty == false {
                 return resolveHome(override ?? env)
@@ -437,14 +405,6 @@ public struct VaultConfiguration: Equatable, Sendable {
         switch agent {
         case .codex:
             return "codex resume {session_id}"
-        case .claude:
-            return "claude --resume {session_id}"
-        case .opencode:
-            return "opencode --session {session_id}"
-        case .pi:
-            return "pi --session {session_id}"
-        case .rovodev:
-            return "rovodev --resume {session_id}"
         case .copilot:
             return "copilot --resume {session_id}"
         case .gemini:

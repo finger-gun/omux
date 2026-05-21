@@ -842,7 +842,7 @@ struct OmuxConfigTests {
     }
 
     @Test
-    func agentSessionsIncludedAgentsAllowsDynamicNames() throws {
+    func agentSessionsIncludedAgentsRejectsPluginNames() throws {
         let home = try temporaryHome()
         defer { cleanup(home) }
         let configURL = home.appendingPathComponent("config.toml")
@@ -857,8 +857,8 @@ struct OmuxConfigTests {
         )
 
         let result = OmuxConfigLoader(configURL: configURL).load()
-        #expect(result.hasErrors == false)
-        #expect(result.config.agentSessions.includedAgents == ["codex", "omp"])
+        #expect(result.hasErrors == true)
+        #expect(result.diagnostics.contains { $0.message.contains("included_agents contains unsupported built-in agent 'omp'") })
     }
 
 }

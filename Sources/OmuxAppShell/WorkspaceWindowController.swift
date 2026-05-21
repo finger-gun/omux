@@ -1537,18 +1537,6 @@ final class WorkspaceShellViewController: NSViewController {
             if normalized.contains("gemini") {
                 return .gemini
             }
-            if normalized.contains("claude") {
-                return .claude
-            }
-            if normalized.contains("opencode") {
-                return .opencode
-            }
-            if normalized.contains("rovodev") || normalized.contains("rovo dev") {
-                return .rovodev
-            }
-            if normalized == "pi" || normalized.contains(" pi ") {
-                return .pi
-            }
         }
 
         return nil

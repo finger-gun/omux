@@ -171,7 +171,9 @@ enabled = true
 preview_enabled = true
 index_on_launch = true
 collapsed_toggle_visible = true
-included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+# Built-in adapter allowlist. Installed plugin adapters are discovered separately.
+external_adapters_enabled = true
+included_agents = ["codex", "copilot", "gemini"]
 excluded_paths = []
 max_preview_bytes = 1048576
 sidebar_rows_per_agent = 10

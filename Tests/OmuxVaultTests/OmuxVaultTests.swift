@@ -5,6 +5,14 @@ import Testing
 
 @Suite("Vault")
 struct OmuxVaultTests {
+    @Test("Default built-in adapters are limited to bundled agents")
+    func defaultBuiltinAdaptersAreLimitedToBundledAgents() {
+        let configuration = VaultConfiguration(externalAdaptersEnabled: false)
+        let kinds = VaultAdapterFactory.adapters(configuration: configuration).map(\.kind)
+
+        #expect(kinds == [.copilot, .codex, .gemini])
+    }
+
     @Test("JSONL adapter indexes normalized session and resume command")
     func jsonlAdapterIndexesSession() async throws {
         let root = try temporaryDirectory()
@@ -945,7 +953,7 @@ struct OmuxVaultTests {
     func pluginDeclaredExternalAdapterIndexesDynamicAgent() async throws {
         let root = try temporaryDirectory()
         let plugins = root.appendingPathComponent("plugins", isDirectory: true)
-        let plugin = plugins.appendingPathComponent("omp", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("agent-sessions.omp", isDirectory: true)
         try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
         try """
         schema = 1
@@ -956,10 +964,11 @@ struct OmuxVaultTests {
         kind = "plugin"
 
         [plugin]
-        command = "omp"
+        command = "agent-sessions.omp"
         entrypoint = "plugin"
 
         [agent-sessions]
+        name = "omp"
         callback = "__omux_agent_sessions"
         arguments = ["discover"]
         source_kind = "omp_jsonl"
@@ -998,7 +1007,7 @@ struct OmuxVaultTests {
     func pluginAdapterDiscoveryHonorsPerAdapterDisable() throws {
         let root = try temporaryDirectory()
         let plugins = root.appendingPathComponent("plugins", isDirectory: true)
-        let plugin = plugins.appendingPathComponent("omp", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("agent-sessions.omp", isDirectory: true)
         try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
         try """
         schema = 1
@@ -1006,10 +1015,11 @@ struct OmuxVaultTests {
         kind = "plugin"
 
         [plugin]
-        command = "omp"
+        command = "agent-sessions.omp"
         entrypoint = "plugin"
 
         [agent-sessions]
+        name = "omp"
         callback = "__omux_agent_sessions"
         """.write(to: plugin.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
         try "#!/bin/sh\nprintf '[]'\n".write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)

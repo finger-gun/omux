@@ -286,14 +286,9 @@ preview_enabled = true
 index_on_launch = true
 collapsed_toggle_visible = true
 external_adapters_enabled = true
-included_agents = ["copilot", "codex", "gemini"]
 excluded_paths = []
 max_preview_bytes = 1048576
 sidebar_rows_per_agent = 10
-
-[agent-sessions.agents.copilot]
-home = "~/.copilot"
-resume_command = "copilot --resume {session_id}"
 
 [agent-sessions.external.omp]
 enabled = true
@@ -307,12 +302,12 @@ resume_command = "omp --resume {session_id}"
 | `index_on_launch`           | boolean          | Rebuilds the local index when OpenMUX starts. Defaults to `true`.                                                                                                                                                                                                         |
 | `collapsed_toggle_visible`  | boolean          | Shows the collapsed Agent Sessions toggle and reserves a small top-right gutter for it. Set to `false` to remove both the gutter and icon, leaving keyboard shortcuts, menu actions, and `omux agent-sessions open` as the way to reopen the sidebar. Defaults to `true`. |
 | `external_adapters_enabled` | boolean          | Runs installed plugin-declared Agent Sessions adapters during normal reindex. Defaults to `true`.                                                                                                                                                                         |
-| `included_agents`           | array of strings | Built-in agents to index. Common values are `copilot`, `codex`, `gemini`, `claude`, `opencode`, `pi`, and `rovodev`. Dynamic plugin adapter names may also appear here for filtering/config consistency.                                                                  |
+| `included_agents`           | array of strings | Optional built-in adapter allowlist. Defaults to bundled built-in agents: `codex`, `copilot`, and `gemini`. Plugin adapters do not need to be listed here.                                                                                                                   |
 | `excluded_paths`            | array of strings | Paths to skip while indexing.                                                                                                                                                                                                                                             |
 | `max_preview_bytes`         | integer          | Maximum bytes reserved for preview-capable Agent Sessions surfaces.                                                                                                                                                                                                       |
 | `sidebar_rows_per_agent`    | integer          | Number of rows to fetch per agent for each sidebar page. Defaults to `10`.                                                                                                                                                                                                |
 
-Per-agent tables live under `[agent-sessions.agents.<agent>]`:
+Per-agent tables live under `[agent-sessions.agents.<agent>]` and apply to built-in adapters only:
 
 | Key              | Type    | Meaning                                                                                 |
 |------------------|---------|-----------------------------------------------------------------------------------------|
@@ -320,12 +315,35 @@ Per-agent tables live under `[agent-sessions.agents.<agent>]`:
 | `home`           | string  | Override the agent's local home directory.                                              |
 | `resume_command` | string  | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
 
-External plugin adapter overrides live under `[agent-sessions.external.<plugin-command>]`:
+Example:
+
+```toml
+[agent-sessions.agents.copilot]
+enabled = true
+home = "~/.copilot"
+resume_command = "copilot --resume {session_id}"
+```
+
+Do not use `[agent-sessions.agents.<name>]` for plugin adapters unless you are intentionally enabling or disabling a built-in adapter with the same agent name.
+
+External plugin adapter overrides live under `[agent-sessions.external.<name>]`:
 
 | Key              | Type    | Meaning                                                                                                                 |
 |------------------|---------|-------------------------------------------------------------------------------------------------------------------------|
 | `enabled`        | boolean | Include or exclude this installed plugin-declared adapter.                                                              |
 | `resume_command` | string  | Override the adapter manifest's resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
+
+The `<name>` segment is the Agent Sessions name declared by `[agent-sessions] name`, not a fixed OpenMUX-owned list. For example, a plugin with `[plugin] command = "agent-sessions.opencode"` and `[agent-sessions] name = "opencode"` is configured under `[agent-sessions.external.opencode]`.
+
+Built-in and plugin adapters can coexist. If you want a community plugin to replace a bundled adapter for the same agent name, disable the built-in adapter and leave the external adapter enabled:
+
+```toml
+[agent-sessions.agents.codex]
+enabled = false
+
+[agent-sessions.external.codex-plus]
+enabled = true
+```
 
 ## `[plugins]` settings
 

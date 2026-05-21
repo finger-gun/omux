@@ -22,10 +22,6 @@ public enum VaultAdapterFactory {
             CopilotVaultAdapter(root: configuration.home(for: .copilot), configuration: configuration),
             CodexVaultAdapter(root: configuration.home(for: .codex), configuration: configuration),
             GeminiVaultAdapter(root: configuration.home(for: .gemini), configuration: configuration),
-            JSONLDirectoryVaultAdapter(kind: .claude, root: configuration.home(for: .claude), sourceKind: "claude_jsonl", globHint: "projects", configuration: configuration),
-            SQLiteBackedVaultAdapter(kind: .opencode, root: configuration.home(for: .opencode), databaseNames: ["opencode.db", "state.db", "db.sqlite"], sourceKind: "opencode_db", configuration: configuration),
-            JSONLDirectoryVaultAdapter(kind: .pi, root: configuration.home(for: .pi), sourceKind: "pi_jsonl", globHint: nil, configuration: configuration),
-            JSONLDirectoryVaultAdapter(kind: .rovodev, root: configuration.home(for: .rovodev), sourceKind: "rovodev_jsonl", globHint: nil, configuration: configuration),
         ]
         if configuration.externalAdaptersEnabled {
             adapters += PluginAgentSessionsAdapterDiscovery.adapters(configuration: configuration).map {
@@ -85,12 +81,16 @@ public enum PluginAgentSessionsAdapterDiscovery {
         guard let callback = document.value(in: "agent-sessions", for: "callback")?.stringValue?.nilIfBlank else {
             return nil
         }
-        let setting = configuration.externalAdapterSettings[commandName] ?? configuration.externalAdapterSettings[pluginID]
+        let manifestName = document.value(in: "agent-sessions", for: "name")?.stringValue?.nilIfBlank
+        let manifestAgent = document.value(in: "agent-sessions", for: "agent")?.stringValue?.nilIfBlank
+        let adapterName = manifestName ?? manifestAgent ?? commandName
+        let setting = configuration.externalAdapterSettings[adapterName]
+            ?? configuration.externalAdapterSettings[commandName]
+            ?? configuration.externalAdapterSettings[pluginID]
         if setting?.enabled == false {
             return nil
         }
-        let manifestAgent = document.value(in: "agent-sessions", for: "agent")?.stringValue?.nilIfBlank
-        let agent = VaultAgentKind(rawValue: manifestAgent ?? commandName) ?? .external(commandName)
+        let agent = VaultAgentKind(rawValue: adapterName) ?? .external(adapterName)
         let sourceKind = document.value(in: "agent-sessions", for: "source_kind")?.stringValue?.nilIfBlank
             ?? "\(agent.rawValue)_plugin"
         let manifestResumeCommand = document.value(in: "agent-sessions", for: "resume_command")?.stringValue?.nilIfBlank

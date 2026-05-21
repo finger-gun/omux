@@ -378,7 +378,7 @@ public struct OmuxConfigAgentSessions: Equatable, Sendable {
         }
     }
 
-    public static let defaultIncludedAgents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+    public static let defaultIncludedAgents = ["codex", "copilot", "gemini"]
 
     public let enabled: Bool
     public let previewEnabled: Bool
@@ -604,7 +604,7 @@ public enum OmuxConfigTemplate {
         index_on_launch = true
         collapsed_toggle_visible = true
         external_adapters_enabled = true
-        included_agents = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+        included_agents = ["codex", "copilot", "gemini"]
         excluded_paths = []
         max_preview_bytes = 1048576
         sidebar_rows_per_agent = 10
@@ -1652,7 +1652,7 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let supportedAgentSessionAgents: Set<String> = ["codex", "claude", "opencode", "pi", "rovodev", "copilot", "gemini"]
+        let supportedAgentSessionAgents: Set<String> = ["codex", "copilot", "gemini"]
         let agentSessionsAllowedKeys: Set<String> = [
             "enabled",
             "preview_enabled",
@@ -1721,6 +1721,18 @@ public struct OmuxConfigLoader {
                 case "included_agents":
                     guard let values = stringArray(from: entry.value) else {
                         diagnostics.append(OmuxConfigDiagnostic(severity: .error, message: "\(tableName).included_agents must be an array of strings.", filePath: sourceURL.path, line: entry.line))
+                        continue
+                    }
+                    let unsupported = values.filter { supportedAgentSessionAgents.contains($0) == false }
+                    guard unsupported.isEmpty else {
+                        diagnostics.append(
+                            OmuxConfigDiagnostic(
+                                severity: .error,
+                                message: "\(tableName).included_agents contains unsupported built-in agent '\(unsupported[0])'. Plugin adapters are configured under [agent-sessions.external.<name>].",
+                                filePath: sourceURL.path,
+                                line: entry.line
+                            )
+                        )
                         continue
                     }
                     agentSessionsIncludedAgents = values
