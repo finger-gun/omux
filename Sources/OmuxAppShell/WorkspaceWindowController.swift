@@ -81,7 +81,6 @@ final class TitleBarButton: NSButton {
     // accessibility role. Explicitly restore it so XCUITest can find and
     // interact with the button (isHittable == true).
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
-    override func isAccessibilityElement() -> Bool { true }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
