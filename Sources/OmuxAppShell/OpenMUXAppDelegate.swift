@@ -625,17 +625,15 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     @MainActor
     private func reindexAgentSessionsIncrementally(vaultStore: VaultStore) async {
-        for agent in prioritizedAgentSessionsAgents() {
-            do {
-                let warnings = try await vaultStore.reindex(agent: agent)
-                for warning in warnings {
-                    fputs("Agent Sessions warning: \(warning)\n", stderr)
-                }
-                windowController?.vaultIndexDidUpdate()
-            } catch {
-                fputs("Agent Sessions indexing failed for \(agent.rawValue): \(error)\n", stderr)
+        do {
+            let warnings = try await vaultStore.reindex(agent: nil)
+            for warning in warnings {
+                fputs("Agent Sessions warning: \(warning)\n", stderr)
             }
+        } catch {
+            fputs("Agent Sessions indexing failed: \(error)\n", stderr)
         }
+        windowController?.vaultIndexDidUpdate()
     }
 
     private func prioritizedAgentSessionsAgents() -> [VaultAgentKind] {
