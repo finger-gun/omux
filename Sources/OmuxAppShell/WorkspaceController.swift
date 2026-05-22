@@ -4388,6 +4388,9 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         for removedWorkspace in removedWorkspaces {
+            _ = withControllerLock {
+                bannersAlreadyOffered.remove(removedWorkspace.id)
+            }
             recentlyClosedStore.add(removedWorkspace)
             clearRestoreOfferSuppression(matching: Self.workspacePaths(for: removedWorkspace))
             for pane in removedWorkspace.panes {

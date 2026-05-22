@@ -1257,12 +1257,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func restoreBannerRelevantRoots(for workspace: Workspace) -> Set<String> {
-        let focusedPaths = [
-            workspace.focusedPane.flatMap(Self.currentVaultPath(for:)),
-            workspace.focusedFloatingPaneModal?.focusedPane.flatMap(Self.currentVaultPath(for:)),
-        ].compactMap { $0 }
-
-        return Self.restoreBannerRoots(for: focusedPaths)
+        Self.restoreBannerRoots(for: vaultConnectedPaths(for: workspace))
     }
 
     private static func restoreBannerRoots(for paths: [String]) -> Set<String> {
