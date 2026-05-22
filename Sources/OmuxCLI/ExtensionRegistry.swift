@@ -170,9 +170,9 @@ enum OmuxExtensionRegistryError: Error, CustomStringConvertible, Equatable {
 
 enum OmuxExtensionPackageValidator {
     static func validatePackageID(_ value: String) -> Bool {
-        guard value.isEmpty == false, value.first != "-" else { return false }
+        guard value.isEmpty == false, value.first != "-", value.first != "." else { return false }
         return value.allSatisfy { character in
-            character.isLetter || character.isNumber || character == "-" || character == "_"
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
         }
     }
 

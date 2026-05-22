@@ -1535,6 +1535,20 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["hello\t0.1.0\tHello Pane\t\(registry.absoluteString)"])
     }
 
+    func testCLIPluginDiscoveryAllowsDottedPackageID() throws {
+        let registry = try makePluginRegistryFixture(
+            packageID: "agentsessions.kilocode",
+            commandName: "agentsessions.kilocode"
+        )
+        defer { try? FileManager.default.removeItem(at: registry) }
+
+        var output = [String]()
+        let command = OmuxCLICommand(writeLine: { output.append($0) })
+
+        XCTAssertEqual(command.run(arguments: ["omux", "plugins", "discover", "--registry", registry.absoluteString]), 0)
+        XCTAssertEqual(output, ["agentsessions.kilocode\t0.1.0\tHello Pane\t\(registry.absoluteString)"])
+    }
+
     func testCLIPluginDiscoverySupportsJSONOutput() throws {
         let registry = try makePluginRegistryFixture()
         defer { try? FileManager.default.removeItem(at: registry) }
@@ -2846,24 +2860,28 @@ final class OmuxCLITests: XCTestCase {
         OmuxTheme(schema: 1, name: name, displayName: displayName, tokens: [:])
     }
 
-    private func makePluginRegistryFixture(targetPath: String = "plugin") throws -> URL {
+    private func makePluginRegistryFixture(
+        targetPath: String = "plugin",
+        packageID: String = "hello",
+        commandName: String = "hello"
+    ) throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let package = root.appendingPathComponent("plugins/hello", isDirectory: true)
+        let package = root.appendingPathComponent("plugins/\(packageID)", isDirectory: true)
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
         try """
         schema = 1
 
-        [packages.hello]
+        [packages.\(packageID)]
         kind = "plugin"
         name = "Hello Pane"
         description = "Creates a sample extension pane."
         version = "0.1.0"
-        path = "plugins/hello/omux-plugin.toml"
+        path = "plugins/\(packageID)/omux-plugin.toml"
         tags = ["demo"]
         """.write(to: root.appendingPathComponent("catalog.toml"), atomically: true, encoding: .utf8)
         try """
         schema = 1
-        id = "hello"
+        id = "\(packageID)"
         name = "Hello Pane"
         description = "Creates a sample extension pane."
         version = "0.1.0"
@@ -2871,7 +2889,7 @@ final class OmuxCLITests: XCTestCase {
         kind = "plugin"
 
         [plugin]
-        command = "hello"
+        command = "\(commandName)"
         entrypoint = "plugin"
 
         [files.plugin]
