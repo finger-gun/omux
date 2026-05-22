@@ -1837,7 +1837,9 @@ public struct OmuxConfigLoader {
                 .sorted()
             for tableName in tableNames {
                 let adapterName = String(tableName.dropFirst(tablePrefix.count))
-                guard adapterName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                let trimmedAdapterName = adapterName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmedAdapterName.isEmpty == false,
+                      trimmedAdapterName.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ $0.isEmpty == false }) else {
                     diagnostics.append(
                         OmuxConfigDiagnostic(
                             severity: .error,
@@ -1883,7 +1885,7 @@ public struct OmuxConfigLoader {
                         break
                     }
                 }
-                agentSessionsExternalAdapters[adapterName] = OmuxConfigAgentSessions.ExternalAdapter(
+                agentSessionsExternalAdapters[trimmedAdapterName] = OmuxConfigAgentSessions.ExternalAdapter(
                     enabled: enabled,
                     resumeCommand: resumeCommand
                 )

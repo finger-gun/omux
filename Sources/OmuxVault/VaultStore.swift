@@ -37,7 +37,11 @@ public actor VaultStore {
                     }
                     try cleanupObsoleteSourceKinds(for: adapter.kind, indexedSourceKinds: indexedSourceKinds)
                     for prefix in adapter.sourceKindPrefixes where prefix.isEmpty == false {
-                        try cleanupObsoleteSourceKindPrefixes(prefix: prefix, indexedSourceKinds: indexedSourceKinds)
+                        try cleanupObsoleteSourceKindPrefixes(
+                            for: adapter.kind,
+                            prefix: prefix,
+                            indexedSourceKinds: indexedSourceKinds
+                        )
                     }
                 }
             } catch {
@@ -246,24 +250,26 @@ public actor VaultStore {
         }
     }
 
-    private func cleanupObsoleteSourceKindPrefixes(prefix: String, indexedSourceKinds: Set<String>) throws {
+    private func cleanupObsoleteSourceKindPrefixes(for agent: VaultAgentKind, prefix: String, indexedSourceKinds: Set<String>) throws {
         let indexed = indexedSourceKinds.filter { $0.hasPrefix(prefix) }
         if indexed.isEmpty {
             try database.write(
-                "DELETE FROM agent_sessions WHERE source_kind LIKE ? ESCAPE '\\'",
-                bindings: [.string(sqlLikeEscaped(prefix) + "%")]
+                "DELETE FROM agent_sessions WHERE agent = ? AND source_kind LIKE ? ESCAPE '\\'",
+                bindings: [.string(agent.rawValue), .string(sqlLikeEscaped(prefix) + "%")]
             )
             return
         }
         let placeholders = indexed.map { _ in "?" }.joined(separator: ", ")
         var bindings: [SQLiteBinding] = [
+            .string(agent.rawValue),
             .string(sqlLikeEscaped(prefix) + "%"),
         ]
         bindings += indexed.map(SQLiteBinding.string)
         try database.write(
             """
             DELETE FROM agent_sessions
-            WHERE source_kind LIKE ? ESCAPE '\\'
+            WHERE agent = ?
+              AND source_kind LIKE ? ESCAPE '\\'
               AND source_kind NOT IN (\(placeholders))
             """,
             bindings: bindings
@@ -293,12 +299,20 @@ public actor VaultStore {
     }
 
     private func resumeCommand(for agent: VaultAgentKind, sessionID: String, sourceKind: String?) -> String? {
+        if let sourceKind,
+           let sourceMatchedAdapter = adapters.first(where: { adapter in
+               adapter.sourceKindPrefixes.contains(where: { prefix in
+                   prefix.isEmpty == false && sourceKind.hasPrefix(prefix)
+               })
+           }),
+           let template = sourceMatchedAdapter.resumeCommandTemplate {
+            return template.replacingOccurrences(of: "{session_id}", with: shellQuoted(sessionID))
+        }
+
         if let command = configuration.resumeCommand(for: agent, sessionID: sessionID) {
             return command
         }
-        let adapter = adapters.first { adapter in
-            adapter.kind == agent || (sourceKind.map { source in adapter.sourceKindPrefixes.contains(source) } == true)
-        }
+        let adapter = adapters.first { $0.kind == agent }
         guard let template = adapter?.resumeCommandTemplate else {
             return nil
         }

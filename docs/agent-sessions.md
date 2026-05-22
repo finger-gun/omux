@@ -48,9 +48,10 @@ OpenMUX ships built-in adapters for bundled agents and can also load adapter cap
 | Copilot                       | `~/.copilot/session-store.db`                      | Reads the `sessions` table directly (`id`, `cwd`, `summary`, `updated_at`). Recent `session-state` files are used only when the database is unavailable or empty, so normal startup does not block on scanning large session-state files.                   |
 | Codex                         | `~/.codex` state databases and JSONL session files | Uses readable state SQLite databases as authoritative when they contain sessions. JSONL rollout files are a fallback for missing, unreadable, incompatible, or empty databases, and stale JSONL fallback rows are removed after successful SQLite indexing. |
 | Gemini                        | `~/.gemini/tmp/**/logs.json`                       | Groups log rows by session ID and uses message timestamps.                                                                                                                                                                                                  |
-| Installed plugins             | Plugin-declared callback output                    | A plugin can declare an Agent Sessions adapter capability in `omux-plugin.toml`; OpenMUX invokes the callback during reindex and indexes the normalized JSON rows it prints.                                                                                |
+| External (plugin-declared)    | Plugin-declared callback output                    | A plugin can declare an Agent Sessions adapter capability in `omux-plugin.toml`; OpenMUX invokes the callback during reindex and indexes the normalized JSON rows it prints.                                                                                |
 
 You can override built-in agent homes, disable built-in adapters, and enable or disable plugin adapters in `~/.omux/config.toml`; see [Configuration](./configuration.md#agent-sessions-settings).
+Plugin adapter names shown in the UI and config come from plugin manifest metadata (`[agent-sessions].name` when set, otherwise `[plugin].command`).
 
 ## Plugin-provided agents
 

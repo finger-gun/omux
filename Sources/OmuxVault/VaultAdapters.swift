@@ -137,6 +137,7 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
     public let sourceKind: String
     public let resumeCommandTemplate: String?
     public let isExternal = true
+    private let executionTimeoutNanoseconds: UInt64 = 30_000_000_000
 
     public var sourceKindPrefixes: [String] {
         [sourceKind]
@@ -161,22 +162,47 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
+
+        let stdoutHandle = stdout.fileHandleForReading
+        let stderrHandle = stderr.fileHandleForReading
+        let stdoutTask = Task.detached { stdoutHandle.readDataToEndOfFile() }
+        let stderrTask = Task.detached { stderrHandle.readDataToEndOfFile() }
+
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        while process.isRunning {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            if elapsed >= executionTimeoutNanoseconds {
+                process.terminate()
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if process.isRunning {
+                    process.interrupt()
+                }
+                process.waitUntilExit()
+                let stderrOutput = String(decoding: await stderrTask.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                throw NSError(domain: "OmuxVaultExternalAdapter", code: 124, userInfo: [
+                    NSLocalizedDescriptionKey: "external adapter '\(adapterID)' timed out after 30s: \(stderrOutput)"
+                ])
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let message = String(decoding: await stderrTask.value, as: UTF8.self)
             throw NSError(domain: "OmuxVaultExternalAdapter", code: Int(process.terminationStatus), userInfo: [
                 NSLocalizedDescriptionKey: "external adapter '\(adapterID)' failed: \(message.trimmingCharacters(in: .whitespacesAndNewlines))"
             ])
         }
 
-        let payload = stdout.fileHandleForReading.readDataToEndOfFile()
+        let payload = await stdoutTask.value
         guard payload.isEmpty == false else {
             return []
         }
         let sessions = try JSONDecoder().decode(ExternalSessionRecordList.self, from: payload).sessions
-        return mergePreferNewest(sessions.map { record in
-            let rawID = record.sessionID ?? record.id ?? UUID().uuidString
+        return mergePreferNewest(sessions.compactMap { record in
+            guard let rawID = (record.sessionID ?? record.id)?.nilIfBlank else {
+                return nil
+            }
             let updated = record.modifiedAtDate ?? record.updatedAtDate ?? Date()
             let agent = record.agent.flatMap(VaultAgentKind.init(rawValue:)) ?? kind
             let summary = VaultSessionSummary(
@@ -870,6 +896,33 @@ private struct ExternalSessionRecord: Decodable {
         case sourcePath = "source_path"
         case modifiedAt = "modified_at"
         case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
+        agent = try container.decodeIfPresent(String.self, forKey: .agent)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        gitBranch = try container.decodeIfPresent(String.self, forKey: .gitBranch)
+        sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
+        modifiedAt = Self.decodeDateString(from: container, key: .modifiedAt)
+        updatedAt = Self.decodeDateString(from: container, key: .updatedAt)
+    }
+
+    private static func decodeDateString(from container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> String? {
+        if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return String(value)
+        }
+        return nil
     }
 
     var modifiedAtDate: Date? {

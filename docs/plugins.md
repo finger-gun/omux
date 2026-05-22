@@ -216,7 +216,7 @@ The `[files.manifest]` entry matters for registry packages. OpenMUX discovers Ag
 | `[agent-sessions].name`   | No       | Agent Sessions agent name to index and display. Defaults to the plugin command when absent.    |
 | `[agent-sessions].callback` | Yes    | First argument passed to the entrypoint during reindex.                                        |
 | `[agent-sessions].arguments` | No    | Extra callback arguments after `callback`.                                                     |
-| `[agent-sessions].source_kind` | No | Stable source kind stored with indexed rows, useful for diagnostics and future migrations.      |
+| `[agent-sessions].source_kind` | No | Stable source kind stored with indexed rows. Choose a unique, durable namespace (for example `omp_jsonl`) because cleanup and reindex logic use source-kind prefixes; changing it later leaves older indexed rows under the previous namespace. |
 | `[agent-sessions].agent`  | No       | Deprecated alias for `name`.                                                                  |
 | `[agent-sessions].resume_command` | No | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID.        |
 
@@ -257,6 +257,8 @@ Rows use this schema:
 | `git_branch` | No      | Git branch display string.                                                                                 |
 | `agent`      | No       | Per-row agent name. Use this only when one plugin indexes multiple agents.                                  |
 
+Minimum requirement: each row must include `id`. For reliable grouping, filtering, and ordering, include `cwd` and `updated_at` whenever available from the upstream source.
+Indexed session IDs are composed as `<plugin-agent>:<session-id>` (for example `omp:abc123`), where `<plugin-agent>` defaults to the plugin command unless overridden by `[agent-sessions].name`.
 OpenMUX validates rows before indexing. Invalid rows are skipped instead of taking down the whole reindex.
 
 ### Runtime Environment

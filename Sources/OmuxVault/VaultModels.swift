@@ -60,8 +60,14 @@ public enum VaultAgentKind: Codable, Hashable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard let canonical = VaultAgentKind(rawValue: rawValue) else {
+            throw EncodingError.invalidValue(
+                self,
+                EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "Agent kind must be a non-empty string.")
+            )
+        }
         var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
+        try container.encode(canonical.rawValue)
     }
 }
 
