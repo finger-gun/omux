@@ -138,9 +138,45 @@ public final class WorkspaceController: @unchecked Sendable {
         set { controlPlaneEventHandler = newValue }
     }
 
-    public init(
+    public convenience init(
         bridge: GhosttyTerminalBridge,
         hookRunner: ExternalHookRunner,
+        defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
+        persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
+        isolateShellHistory: Bool = OmuxConfigWorkspace.defaultIsolateShellHistory,
+        workspaceShellStateDirectoryURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("OpenMUX-WorkspaceShellHistory", isDirectory: true),
+        paneConfiguration: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
+        markdownPreviewConfiguration: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
+        aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
+        scrollbackReplayStore: ScrollbackReplayStore? = nil,
+        scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
+        progressIdleClearDelay: TimeInterval = 3,
+        terminalStateChangeCoalescingDelay: TimeInterval = 0.05,
+        terminalDisplayTitleUpdateMinimumInterval: TimeInterval = 0.5
+    ) {
+        self.init(
+            bridge: bridge,
+            hookRunner: hookRunner,
+            recentlyClosedStore: .shared,
+            defaultWorkspaceRootPath: defaultWorkspaceRootPath,
+            persistedScrollback: persistedScrollback,
+            isolateShellHistory: isolateShellHistory,
+            workspaceShellStateDirectoryURL: workspaceShellStateDirectoryURL,
+            paneConfiguration: paneConfiguration,
+            markdownPreviewConfiguration: markdownPreviewConfiguration,
+            aiStatusConfiguration: aiStatusConfiguration,
+            scrollbackReplayStore: scrollbackReplayStore,
+            scrollbackReplayWrapperStore: scrollbackReplayWrapperStore,
+            progressIdleClearDelay: progressIdleClearDelay,
+            terminalStateChangeCoalescingDelay: terminalStateChangeCoalescingDelay,
+            terminalDisplayTitleUpdateMinimumInterval: terminalDisplayTitleUpdateMinimumInterval
+        )
+    }
+
+    init(
+        bridge: GhosttyTerminalBridge,
+        hookRunner: ExternalHookRunner,
+        recentlyClosedStore: RecentlyClosedWorkspaceStore,
         defaultWorkspaceRootPath: String = OmuxWorkspacePathResolver.defaultRootPath,
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
         isolateShellHistory: Bool = OmuxConfigWorkspace.defaultIsolateShellHistory,
@@ -166,7 +202,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.aiStatusConfiguration = aiStatusConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
-        self.recentlyClosedStore = .shared
+        self.recentlyClosedStore = recentlyClosedStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.progressIdleClearDelay = progressIdleClearDelay
         self.terminalStateChangeCoalescingDelay = terminalStateChangeCoalescingDelay

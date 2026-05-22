@@ -7639,7 +7639,7 @@ private extension NSEvent.ModifierFlags {
     }
 }
 
-private final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
+final class ActionEmittingGhosttyRuntime: GhosttyRuntime {
     private var sessions: [String: SessionDescriptor] = [:]
     private var transcriptBySurface: [String: String] = [:]
     private var inputBySurface: [String: String] = [:]
