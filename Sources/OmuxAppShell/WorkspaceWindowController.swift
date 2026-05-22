@@ -2156,6 +2156,8 @@ final class WorkspaceShellViewController: NSViewController {
                 } while offset < totalCount
             } catch {
                 fputs("Agent Sessions palette search failed: \(error)\n", stderr)
+                guard let self, self.vaultPaletteLoadGeneration == generation else { return }
+                self.vaultPaletteSessionsLoaded = false
             }
         }
     }
