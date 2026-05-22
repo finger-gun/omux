@@ -35,7 +35,6 @@ extension PaneTests {
     /// Renames a pane tab using inline edit (double-click then type).
     func renamePaneTab(_ tab: XCUIElement, to newTitle: String) {
         XCTAssertTrue(tab.exists, "tab to rename should exist")
-        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         doubleClickCenter(tab)
         app.typeKey("a", modifierFlags: .command)
         app.typeText(newTitle)
