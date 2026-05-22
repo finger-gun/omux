@@ -23,13 +23,20 @@ public actor VaultStore {
         }
 
         var warnings: [String] = []
-        let activeAdapters = adapters.filter { adapter in
-            (adapter.isExternal || configuration.includedAgents.contains(adapter.kind)) && (filter == nil || filter == adapter.kind)
-        }
-        for adapter in activeAdapters {
+        for adapter in adapters {
+            let isInScope = filter == nil || filter == adapter.kind
+            guard isInScope else {
+                continue
+            }
+            let isActive = (adapter.isExternal || configuration.includedAgents.contains(adapter.kind))
             do {
-                let sessions = try await adapter.discoverSessions()
-                let visibleSessions = sessions.filter { shouldExclude($0.summary) == false }
+                let visibleSessions: [VaultIndexedSession]
+                if isActive {
+                    let sessions = try await adapter.discoverSessions()
+                    visibleSessions = sessions.filter { shouldExclude($0.summary) == false }
+                } else {
+                    visibleSessions = []
+                }
                 let indexedSourceKinds = Set(visibleSessions.map(\.summary.sourceKind))
                 try database.inTransaction {
                     for session in visibleSessions {

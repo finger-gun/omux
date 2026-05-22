@@ -1033,6 +1033,49 @@ struct OmuxVaultTests {
         #expect(adapters.isEmpty)
     }
 
+    @Test("Filtered reindex does not delete out-of-scope external adapter rows")
+    func filteredReindexDoesNotDeleteOutOfScopeExternalRows() async throws {
+        let root = try temporaryDirectory()
+        let store = try VaultStore(
+            databaseURL: root.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: VaultConfiguration(enabled: true, includedAgents: [.codex, .copilot, .gemini]),
+            adapters: [
+                StaticVaultAdapter(kind: .codex, sessions: [
+                    VaultSessionSummary(
+                        id: "codex:one",
+                        agent: .codex,
+                        sourceKind: "codex_sqlite",
+                        title: "Codex Session",
+                        workingDirectory: "/tmp/omux",
+                        modifiedAt: Date(timeIntervalSince1970: 10),
+                        previewAvailable: false,
+                        resumeAvailable: true
+                    ),
+                ]),
+                StaticVaultAdapter(kind: .external("omp"), sessions: [
+                    VaultSessionSummary(
+                        id: "omp:one",
+                        agent: .external("omp"),
+                        sourceKind: "omp_jsonl",
+                        title: "OMP Session",
+                        workingDirectory: "/tmp/omux",
+                        modifiedAt: Date(timeIntervalSince1970: 9),
+                        previewAvailable: false,
+                        resumeAvailable: true
+                    ),
+                ], isExternal: true, sourceKindPrefixes: ["omp_"]),
+            ]
+        )
+
+        _ = try await store.reindex(agent: nil)
+        let before = try await store.search(VaultSearchRequest(query: "", agents: [.external("omp")]))
+        #expect(before.totalCount == 1)
+
+        _ = try await store.reindex(agent: .codex)
+        let after = try await store.search(VaultSearchRequest(query: "", agents: [.external("omp")]))
+        #expect(after.totalCount == 1)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("omux-vault-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -1043,6 +1086,15 @@ struct OmuxVaultTests {
 private struct StaticVaultAdapter: VaultAgentAdapter {
     let kind: VaultAgentKind
     let sessions: [VaultSessionSummary]
+    let isExternal: Bool
+    let sourceKindPrefixes: [String]
+
+    init(kind: VaultAgentKind, sessions: [VaultSessionSummary], isExternal: Bool = false, sourceKindPrefixes: [String] = []) {
+        self.kind = kind
+        self.sessions = sessions
+        self.isExternal = isExternal
+        self.sourceKindPrefixes = sourceKindPrefixes
+    }
 
     func discoverSessions() async throws -> [VaultIndexedSession] {
         sessions.map { VaultIndexedSession(summary: $0, resumeSnapshot: nil, turns: []) }

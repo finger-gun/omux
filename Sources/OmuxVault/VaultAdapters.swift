@@ -1,4 +1,5 @@
 import CSQLite
+import Darwin
 import Foundation
 import OmuxConfig
 
@@ -177,10 +178,16 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
                 if process.isRunning {
                     process.interrupt()
                 }
-                process.waitUntilExit()
+                if await waitForExit(process, timeoutNanoseconds: 500_000_000) == false, process.processIdentifier > 0 {
+                    _ = kill(process.processIdentifier, SIGKILL)
+                    _ = await waitForExit(process, timeoutNanoseconds: 1_000_000_000)
+                }
+                if process.isRunning == false {
+                    process.waitUntilExit()
+                }
                 let stderrOutput = String(decoding: await stderrTask.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 throw NSError(domain: "OmuxVaultExternalAdapter", code: 124, userInfo: [
-                    NSLocalizedDescriptionKey: "external adapter '\(adapterID)' timed out after 30s: \(stderrOutput)"
+                    NSLocalizedDescriptionKey: "external adapter '\(adapterID)' timed out after \(executionTimeoutNanoseconds / 1_000_000_000)s: \(stderrOutput)"
                 ])
             }
             try await Task.sleep(nanoseconds: 100_000_000)
@@ -242,6 +249,17 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
             URL(fileURLWithPath: "/Applications/OpenMUX.app/Contents/MacOS/omux", isDirectory: false),
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    private func waitForExit(_ process: Process, timeoutNanoseconds: UInt64) async -> Bool {
+        let start = DispatchTime.now().uptimeNanoseconds
+        while process.isRunning {
+            if DispatchTime.now().uptimeNanoseconds - start >= timeoutNanoseconds {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
     }
 }
 
@@ -900,14 +918,14 @@ private struct ExternalSessionRecord: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(String.self, forKey: .id)
-        sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
-        agent = try container.decodeIfPresent(String.self, forKey: .agent)
-        title = try container.decodeIfPresent(String.self, forKey: .title)
-        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
-        model = try container.decodeIfPresent(String.self, forKey: .model)
-        gitBranch = try container.decodeIfPresent(String.self, forKey: .gitBranch)
-        sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
+        id = try? container.decodeIfPresent(String.self, forKey: .id)
+        sessionID = try? container.decodeIfPresent(String.self, forKey: .sessionID)
+        agent = try? container.decodeIfPresent(String.self, forKey: .agent)
+        title = try? container.decodeIfPresent(String.self, forKey: .title)
+        cwd = try? container.decodeIfPresent(String.self, forKey: .cwd)
+        model = try? container.decodeIfPresent(String.self, forKey: .model)
+        gitBranch = try? container.decodeIfPresent(String.self, forKey: .gitBranch)
+        sourcePath = try? container.decodeIfPresent(String.self, forKey: .sourcePath)
         modifiedAt = Self.decodeDateString(from: container, key: .modifiedAt)
         updatedAt = Self.decodeDateString(from: container, key: .updatedAt)
     }
