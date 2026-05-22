@@ -103,7 +103,7 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertTrue(workspaceMenu?.items.containsShortcut(
             title: "Delete Workspace",
-            key: "n",
+            key: "\u{8}",
             modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertTrue(workspaceMenu?.items.containsShortcut(
