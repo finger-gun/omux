@@ -144,6 +144,8 @@ struct CommandPaletteCommandCatalog {
             return false
         case .workspaceCreate, .paneSplitRight, .paneSplitDown, .paneTabCreate, .sidebarToggle, .agentSessionsToggle:
             return controller.activeWorkspace() != nil
+        case .workspaceRestoreLastClosed:
+            return controller.commandPaletteRecentlyClosedWorkspaces().isEmpty == false
         case .paneTabCreateWorktree:
             return controller.resolveTerminalTarget(.focused) != nil
         case .workspaceClose:
@@ -234,6 +236,10 @@ extension WorkspaceController {
                 return .inert
             case .workspaceCreate:
                 _ = try createWorkspace()
+            case .workspaceRestoreLastClosed:
+                guard try restoreMostRecentlyClosedWorkspace() != nil else {
+                    return .failed("No recently closed workspaces")
+                }
             case .workspaceClose:
                 guard try deleteActiveWorkspace() != nil else { return .failed("Workspace could not be closed") }
             case .workspacePrevious:

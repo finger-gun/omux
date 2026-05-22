@@ -4,6 +4,7 @@ public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
     case commandPaletteWorkspace = "command-palette.workspace"
     case commandPaletteCommand = "command-palette.command"
     case workspaceCreate = "workspace.create"
+    case workspaceRestoreLastClosed = "workspace.restore-last-closed"
     case workspaceClose = "workspace.close"
     case workspacePrevious = "workspace.previous"
     case workspaceMoveUp = "workspace.move-up"
@@ -191,7 +192,8 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+p"), .commandPaletteWorkspace),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+p"), .commandPaletteCommand),
         (try! OpenMUXKeyChord(parsing: "cmd+n"), .workspaceCreate),
-        (try! OpenMUXKeyChord(parsing: "cmd+shift+n"), .workspaceClose),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+n"), .workspaceRestoreLastClosed),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+backspace"), .workspaceClose),
         (try! OpenMUXKeyChord(parsing: "cmd+0"), .workspacePrevious),
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+shift+up"), .workspaceMoveUp),
         (try! OpenMUXKeyChord(parsing: "cmd+ctrl+shift+down"), .workspaceMoveDown),

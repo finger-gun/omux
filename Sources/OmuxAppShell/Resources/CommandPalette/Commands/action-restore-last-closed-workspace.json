@@ -1,0 +1,12 @@
+{
+  "id": "action:workspace.restore-last-closed",
+  "title": "Restore Last Closed Workspace",
+  "subtitle": "Reopen the most recently closed workspace",
+  "category": "action",
+  "matchText": "Restore Last Closed Workspace reopen recently closed workspace restore",
+  "aliases": ["restore workspace", "reopen last workspace", "recently closed workspace"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No recently closed workspaces",
+  "command": { "kind": "action", "target": "workspace.restore-last-closed" }
+}

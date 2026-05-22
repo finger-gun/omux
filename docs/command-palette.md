@@ -100,6 +100,7 @@ action-<verb>-<noun>.json   # for key-binding actions
 
 ```
 workspace.create         workspace.close
+workspace.restore-last-closed
 workspace.move-up        workspace.move-down
 pane.split-right         pane.split-down
 pane.remove              pane.find        pane.next        pane.previous

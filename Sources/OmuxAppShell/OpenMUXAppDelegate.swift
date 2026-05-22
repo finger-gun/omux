@@ -18,6 +18,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private let workspacePersistenceStore: any WorkspacePersistenceStoring
     private var windowController: WorkspaceWindowController?
     private weak var newWorkspaceMenuItem: NSMenuItem?
+    private weak var restoreWorkspaceMenuItem: NSMenuItem?
     private weak var renameWorkspaceMenuItem: NSMenuItem?
     private weak var deleteWorkspaceMenuItem: NSMenuItem?
     private weak var splitRightMenuItem: NSMenuItem?
@@ -655,6 +656,12 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         windowController?.presentCommandPalette(initialQuery: "", keyBindings: keyBindingRegistry)
     }
 
+    @objc private func restoreLastClosedWorkspaceFromMenu(_ sender: Any?) {
+        _ = sender
+        _ = try? workspaceController.restoreMostRecentlyClosedWorkspace()
+        refreshMenuValidation()
+    }
+
     @objc private func openCommandPaletteFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.presentCommandPalette(initialQuery: ">", keyBindings: keyBindingRegistry)
@@ -885,6 +892,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         newWorkspaceMenuItem.target = self
         workspaceMenu.addItem(newWorkspaceMenuItem)
+
+        let restoreWorkspaceMenuItem = NSMenuItem(
+            title: "Restore Last Closed Workspace",
+            action: #selector(restoreLastClosedWorkspaceFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        restoreWorkspaceMenuItem.target = self
+        workspaceMenu.addItem(restoreWorkspaceMenuItem)
 
         let deleteWorkspaceMenuItem = NSMenuItem(
             title: "Delete Workspace",
@@ -1156,6 +1171,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             NSApplication.shared.mainMenu = mainMenu
         }
         self.newWorkspaceMenuItem = newWorkspaceMenuItem
+        self.restoreWorkspaceMenuItem = restoreWorkspaceMenuItem
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
@@ -1219,6 +1235,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace
+        restoreWorkspaceMenuItem?.isEnabled = workspaceController.commandPaletteRecentlyClosedWorkspaces().isEmpty == false
         previousWorkspaceMenuItem?.isEnabled = workspaceController.canFocusPreviousWorkspace()
         moveWorkspaceUpMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceUp()
         moveWorkspaceDownMenuItem?.isEnabled = workspaceController.canMoveActiveWorkspaceDown()
@@ -1245,6 +1262,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     private func applyMenuKeyBindings() {
         setShortcut(for: newWorkspaceMenuItem, action: .workspaceCreate)
+        setShortcut(for: restoreWorkspaceMenuItem, action: .workspaceRestoreLastClosed)
         setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
         setShortcut(for: toggleAgentSessionsMenuItem, action: .agentSessionsToggle)

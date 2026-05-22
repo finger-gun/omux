@@ -784,6 +784,16 @@ public final class WorkspaceController: @unchecked Sendable {
                 payload: .object(["path": .string(restoredWorkspace.rootPath)])
             )
         )
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceRestored,
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
         onChange?(restoredWorkspace)
 
         try hookRunner.emit(
@@ -876,6 +886,16 @@ public final class WorkspaceController: @unchecked Sendable {
                 payload: .object(["path": .string(restoredWorkspace.rootPath)])
             )
         )
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceRestored,
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
         onChange?(restoredWorkspace)
 
         try hookRunner.emit(
@@ -904,6 +924,16 @@ public final class WorkspaceController: @unchecked Sendable {
 
     func clearRecentlyClosedWorkspaces() {
         recentlyClosedStore.clear()
+    }
+
+    @discardableResult
+    func restoreMostRecentlyClosedWorkspace() throws -> Workspace? {
+        guard let entry = commandPaletteRecentlyClosedWorkspaces().first else {
+            return nil
+        }
+        let workspace = try reopenClosedWorkspace(entry)
+        removeRecentlyClosedWorkspace(byID: entry.id)
+        return workspace
     }
 
     func offerRestore(of entry: RecentlyClosedWorkspaceEntry) {

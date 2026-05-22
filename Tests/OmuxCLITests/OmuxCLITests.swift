@@ -2413,7 +2413,7 @@ final class OmuxCLITests: XCTestCase {
         for (chord, action) in OpenMUXKeyBindingRegistry.defaultBindingPairs {
             XCTAssertTrue(contents.contains("\"\(chord.description)\" = \"\(action.rawValue)\""))
         }
-        XCTAssertFalse(contents.contains("cmd+shift+backspace"))
+        XCTAssertTrue(contents.contains("\"cmd+shift+backspace\" = \"workspace.close\""))
 
         output.removeAll()
         XCTAssertEqual(command.run(arguments: ["omux", "config", "init"]), 1)

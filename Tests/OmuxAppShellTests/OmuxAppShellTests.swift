@@ -954,6 +954,26 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.invokeCommandPaletteResult(vaultResult), .inert)
     }
 
+    func testRestoreMostRecentlyClosedWorkspacePublishesWorkspaceRestoredEvent() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+        var publishedEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { publishedEvents.append($0) }
+
+        _ = try controller.openWorkspace(at: "/tmp/restore-a")
+        _ = try controller.openWorkspace(at: "/tmp/restore-b")
+        publishedEvents.removeAll()
+
+        _ = try controller.deleteActiveWorkspace()
+        publishedEvents.removeAll()
+
+        let restored = try controller.restoreMostRecentlyClosedWorkspace()
+        XCTAssertNotNil(restored)
+        XCTAssertTrue(publishedEvents.contains(where: { $0.name == "workspace.restored" }))
+    }
+
     func testWorktreePaneTabActionRunsCLICommandWithGeneratedBranch() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let controller = WorkspaceController(
