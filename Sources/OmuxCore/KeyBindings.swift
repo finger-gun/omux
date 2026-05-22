@@ -20,6 +20,7 @@ public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
     case workspaceFocus9 = "workspace.focus-9"
     case sidebarToggle = "sidebar.toggle"
     case agentSessionsToggle = "agent-sessions.toggle"
+    case agentSessionSearch = "agent-sessions.search"
     case paneSplitRight = "pane.split-right"
     case paneSplitDown = "pane.split-down"
     case paneRemove = "pane.remove"
@@ -208,6 +209,7 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+9"), .workspaceFocus9),
         (try! OpenMUXKeyChord(parsing: "cmd+b"), .sidebarToggle),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+b"), .agentSessionsToggle),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+a"), .agentSessionSearch),
         (try! OpenMUXKeyChord(parsing: "cmd+d"), .paneSplitRight),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+d"), .paneSplitDown),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+w"), .paneRemove),

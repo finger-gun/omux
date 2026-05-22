@@ -62,8 +62,6 @@ struct CommandPaletteCommandCatalog {
                 return .restoreWorkspacePalette
             case "workspace.clear-recently-closed":
                 return .clearRecentlyClosedWorkspaces
-            case "omux.agent-sessions.open":
-                return .vaultSessions
             default:
                 guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else {
                     return nil
@@ -102,8 +100,6 @@ struct CommandPaletteCommandCatalog {
                 return controller.commandPaletteRecentlyClosedWorkspaces().isEmpty == false
             case "workspace.clear-recently-closed":
                 return controller.commandPaletteRecentlyClosedWorkspaces().isEmpty == false
-            case "omux.agent-sessions.open":
-                return true
             default:
                 guard let spec = OpenMUXCLICommandCatalog.command(id: command.target) else { return false }
                 if spec.paletteExecution == .configOpen {
@@ -142,7 +138,7 @@ struct CommandPaletteCommandCatalog {
         switch action {
         case .commandPaletteWorkspace, .commandPaletteCommand:
             return false
-        case .workspaceCreate, .paneSplitRight, .paneSplitDown, .paneTabCreate, .sidebarToggle, .agentSessionsToggle:
+        case .workspaceCreate, .paneSplitRight, .paneSplitDown, .paneTabCreate, .sidebarToggle, .agentSessionsToggle, .agentSessionSearch:
             return controller.activeWorkspace() != nil
         case .workspaceRestoreLastClosed:
             return controller.commandPaletteRecentlyClosedWorkspaces().isEmpty == false
@@ -221,7 +217,7 @@ extension WorkspaceController {
             } catch {
                 return .failed(error.localizedDescription)
             }
-        case .vaultSessions, .vaultSession:
+        case .vaultSession:
             return .inert
         case .configOpen:
             return .inert
@@ -250,8 +246,8 @@ extension WorkspaceController {
                 guard moveActiveWorkspaceDown() != nil else { return .failed("Workspace could not move down") }
             case .workspaceFocus1, .workspaceFocus2, .workspaceFocus3, .workspaceFocus4, .workspaceFocus5, .workspaceFocus6, .workspaceFocus7, .workspaceFocus8, .workspaceFocus9:
                 return .inert
-            case .sidebarToggle, .agentSessionsToggle:
-                return .failed("Sidebar toggle is handled by the app shell")
+            case .sidebarToggle, .agentSessionsToggle, .agentSessionSearch:
+                return .failed("Handled by the app shell")
             case .paneSplitRight:
                 guard try splitFocusedPane(axis: .columns) != nil else { return .failed("Pane could not split right") }
             case .paneSplitDown:
