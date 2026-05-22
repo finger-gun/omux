@@ -1123,9 +1123,12 @@ final class WorkspaceShellViewController: NSViewController {
     private func resumeVaultSession(_ sessionID: String) {
         let allWorkspaces = controller.allWorkspaces()
         pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
+        let focusedPaneID = currentWorkspace?.focusedPane?.id
         if let activePaneID = activePaneID(forVaultSession: sessionID, allWorkspaces: allWorkspaces, sessions: vaultSessions) {
             _ = controller.focus(paneID: activePaneID)
-            return
+            if focusedPaneID != activePaneID {
+                return
+            }
         }
         guard let vaultStore else {
             return
