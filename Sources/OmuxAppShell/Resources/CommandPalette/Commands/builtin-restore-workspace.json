@@ -1,0 +1,15 @@
+{
+  "id": "builtin:restore-workspace",
+  "title": "Restore Workspace",
+  "subtitle": "Reopen a recently closed workspace",
+  "category": "action",
+  "matchText": "restore workspace reopen closed recent",
+  "aliases": ["reopen workspace", "recently closed"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No recently closed workspaces",
+  "command": {
+    "kind": "builtin",
+    "target": "workspace.restore-recently-closed"
+  }
+}

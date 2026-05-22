@@ -1,0 +1,15 @@
+{
+  "id": "builtin:clear-recently-closed-workspaces",
+  "title": "Clear Recently Closed Workspaces",
+  "subtitle": "Remove all saved restore entries",
+  "category": "action",
+  "matchText": "clear recently closed workspaces restore entries remove reset",
+  "aliases": ["clear restore history", "clear recently closed"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No recently closed workspaces",
+  "command": {
+    "kind": "builtin",
+    "target": "workspace.clear-recently-closed"
+  }
+}

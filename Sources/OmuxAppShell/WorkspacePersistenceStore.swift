@@ -132,10 +132,14 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
             .appendingPathComponent("WorkspaceBackups", isDirectory: true)
     }
 
-    private static func appStateFileURL() -> URL {
+    static func appStateDirectoryURL() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenMUX", isDirectory: true)
             .appendingPathComponent("WorkspaceState", isDirectory: true)
+    }
+
+    private static func appStateFileURL() -> URL {
+        appStateDirectoryURL()
             .appendingPathComponent("current.json", isDirectory: false)
     }
 

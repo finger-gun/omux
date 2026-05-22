@@ -90,6 +90,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var workspaceShellEnvironment: WorkspaceShellEnvironment
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
+    private let recentlyClosedStore: RecentlyClosedWorkspaceStore
     private var defaultWorkspaceRootPath: String
     private var workspaces: [Workspace] = [] {
         didSet { lookupIndexesDirty = true }
@@ -106,9 +107,11 @@ public final class WorkspaceController: @unchecked Sendable {
     private var terminalStateChangeUpdateScheduled = false
     private var deliveredTerminalDisplayTitleByPane: [PaneID: String] = [:]
     private var lastTerminalDisplayTitleUpdateByPane: [PaneID: Date] = [:]
+    private var suppressedRestoreOfferPaths = Set<String>()
     private var pendingTerminalDisplayTitlePaneIDs: Set<PaneID> = []
     private var terminalDisplayTitleUpdateScheduled = false
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
+    private var bannersAlreadyOffered = Set<WorkspaceID>()
     private var workspaceIndexByID: [WorkspaceID: Int] = [:]
     private var tabLocationByID: [TabID: (workspaceIndex: Int, tabIndex: Int)] = [:]
     private var paneLocationByID: [PaneID: WorkspaceLookupLocation] = [:]
@@ -125,6 +128,7 @@ public final class WorkspaceController: @unchecked Sendable {
     )
 
     public var onChange: ((Workspace) -> Void)?
+    var onRestoreOffer: ((RecentlyClosedWorkspaceEntry) -> Void)?
     public var onControlPlaneEvent: ((ControlPlaneEvent) -> Void)? {
         get { controlPlaneEventHandler }
         set { controlPlaneEventHandler = newValue }
@@ -162,6 +166,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.aiStatusConfiguration = aiStatusConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
+        self.recentlyClosedStore = .shared
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.progressIdleClearDelay = progressIdleClearDelay
         self.terminalStateChangeCoalescingDelay = terminalStateChangeCoalescingDelay
@@ -237,6 +242,29 @@ public final class WorkspaceController: @unchecked Sendable {
             )
         )
         return workspace
+    }
+
+    public func findWorkspace(byRootPath path: String) -> Workspace? {
+        let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
+        return withControllerLock {
+            workspaces.first { workspace in
+                (OmuxWorkspacePathResolver.resolve(workspace.rootPath) ?? workspace.rootPath) == normalizedPath
+            }
+        }
+    }
+
+    func findWorkspace(containingPath path: String) -> Workspace? {
+        let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
+        return withControllerLock {
+            Self.findWorkspace(containingPath: normalizedPath, in: workspaces)
+        }
+    }
+
+    func findRecentlyClosedWorkspace(byPath path: String) -> RecentlyClosedWorkspaceEntry? {
+        if findWorkspace(containingPath: path) != nil {
+            return nil
+        }
+        return recentlyClosedStore.find(byPath: path)
     }
 
     public func listWorkspaces() -> [WorkspaceSummary] {
@@ -685,6 +713,177 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(workspace)
         return workspace
+    }
+
+    func reopenClosedWorkspace(_ entry: RecentlyClosedWorkspaceEntry) throws -> Workspace {
+        if let existingWorkspace = withControllerLock({ workspaces.first(where: { $0.id == entry.id }) }) {
+            suppressRestoreOffers(matching: entry.workspacePaths)
+            return restore(workspaceID: existingWorkspace.id) ?? existingWorkspace
+        }
+
+        guard let restoredWorkspace = Self.normalizedRestoredWorkspace(entry.workspace) else {
+            throw NSError(
+                domain: "OpenMUX.WorkspaceRestore",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The saved workspace layout is no longer valid."]
+            )
+        }
+
+        try ensureTerminalSurfaces(in: restoredWorkspace)
+
+        withControllerLock {
+            workspaces.append(restoredWorkspace)
+            setActiveWorkspaceID(restoredWorkspace.id)
+        }
+
+        let focusedPane = restoredWorkspace.focusedPane
+        let focusedSessionID = focusedPane?.terminalSession?.id
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceOpened,
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
+        onChange?(restoredWorkspace)
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .lifecycle,
+                name: "workspace-opened",
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
+
+        suppressRestoreOffers(matching: entry.workspacePaths)
+        return restoredWorkspace
+    }
+
+    func restoreClosedWorkspaceInActiveWorkspace(_ entry: RecentlyClosedWorkspaceEntry) throws -> Workspace {
+        guard let restoredWorkspace = Self.normalizedRestoredWorkspace(entry.workspace) else {
+            throw NSError(
+                domain: "OpenMUX.WorkspaceRestore",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The saved workspace layout is no longer valid."]
+            )
+        }
+
+        let outgoingWorkspace: Workspace
+        lock.lock()
+        guard let activeWorkspaceID,
+              let activeWorkspaceIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID })
+        else {
+            lock.unlock()
+            throw NSError(
+                domain: "OpenMUX.WorkspaceRestore",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "No active workspace is available."]
+            )
+        }
+        outgoingWorkspace = workspaces[activeWorkspaceIndex]
+        lock.unlock()
+
+        if outgoingWorkspace.id == entry.id {
+            return try reopenClosedWorkspace(entry)
+        }
+
+        try ensureTerminalSurfaces(in: restoredWorkspace)
+
+        recentlyClosedStore.add(outgoingWorkspace)
+        clearRestoreOfferSuppression(matching: Self.workspacePaths(for: outgoingWorkspace))
+
+        lock.lock()
+        guard let activeWorkspaceIndex = workspaces.firstIndex(where: { $0.id == outgoingWorkspace.id }) else {
+            lock.unlock()
+            throw NSError(
+                domain: "OpenMUX.WorkspaceRestore",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "The active workspace changed before restore completed."]
+            )
+        }
+        workspaces[activeWorkspaceIndex] = restoredWorkspace
+        if previousWorkspaceID == outgoingWorkspace.id {
+            previousWorkspaceID = nil
+        }
+        setActiveWorkspaceID(restoredWorkspace.id, recordPrevious: false)
+        lock.unlock()
+
+        for pane in outgoingWorkspace.panes where pane.isTerminal {
+            try bridge.teardown(paneID: pane.id)
+        }
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .lifecycle,
+                name: "workspace-closed",
+                workspaceID: outgoingWorkspace.id,
+                payload: .object(["path": .string(outgoingWorkspace.rootPath)])
+            )
+        )
+
+        let focusedPane = restoredWorkspace.focusedPane
+        let focusedSessionID = focusedPane?.terminalSession?.id
+        publishControlPlaneEvent(
+            ControlPlaneEvent(
+                name: .workspaceOpened,
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
+        onChange?(restoredWorkspace)
+
+        try hookRunner.emit(
+            HookInvocation(
+                category: .lifecycle,
+                name: "workspace-opened",
+                workspaceID: restoredWorkspace.id,
+                tabID: restoredWorkspace.focusedTabID,
+                paneID: focusedPane?.id,
+                sessionID: focusedSessionID,
+                payload: .object(["path": .string(restoredWorkspace.rootPath)])
+            )
+        )
+
+        suppressRestoreOffers(matching: entry.workspacePaths)
+        return restoredWorkspace
+    }
+
+    func removeRecentlyClosedWorkspace(byID workspaceID: WorkspaceID) {
+        recentlyClosedStore.remove(byID: workspaceID)
+    }
+
+    func commandPaletteRecentlyClosedWorkspaces() -> [RecentlyClosedWorkspaceEntry] {
+        recentlyClosedStore.load()
+    }
+
+    func clearRecentlyClosedWorkspaces() {
+        recentlyClosedStore.clear()
+    }
+
+    func offerRestore(of entry: RecentlyClosedWorkspaceEntry) {
+        let shouldOffer = withControllerLock {
+            guard entry.workspacePaths.allSatisfy({ suppressedRestoreOfferPaths.contains($0) == false }) else {
+                return false
+            }
+            return bannersAlreadyOffered.insert(entry.id).inserted
+        }
+        guard shouldOffer else {
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onRestoreOffer?(entry)
+        }
     }
 
     public func notify(_ request: NotificationRequest) throws {
@@ -3277,6 +3476,7 @@ public final class WorkspaceController: @unchecked Sendable {
         var updatedWorkspace: Workspace?
         var context: ControlPlaneTerminalContext?
         var shouldScheduleTrailingTitleUpdate = false
+        var restoreOfferEntry: RecentlyClosedWorkspaceEntry?
 
         lock.lock()
         guard let location = paneLocationLocked(for: event.paneID),
@@ -3298,22 +3498,28 @@ public final class WorkspaceController: @unchecked Sendable {
 
         switch event.action {
         case .workingDirectoryChanged(let path):
+            let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
             var didChange = false
             _ = workspaces[workspaceIndex].updatePane(event.paneID) { pane in
                 if var session = pane.terminalSession {
-                    if session.workingDirectory != path {
-                        session.workingDirectory = path
+                    if session.workingDirectory != normalizedPath {
+                        session.workingDirectory = normalizedPath
                         pane.terminalSession = session
                         didChange = true
                     }
                 }
-                if pane.terminalState.reportedWorkingDirectory != path {
-                    pane.terminalState.reportedWorkingDirectory = path
+                if pane.terminalState.reportedWorkingDirectory != normalizedPath {
+                    pane.terminalState.reportedWorkingDirectory = normalizedPath
                     didChange = true
                 }
             }
             if didChange {
                 updatedWorkspace = workspaces[workspaceIndex]
+            }
+            if Self.findWorkspace(containingPath: normalizedPath, in: workspaces, excluding: resolved.workspace.id) == nil,
+               let entry = recentlyClosedStore.find(byPath: normalizedPath),
+               bannersAlreadyOffered.contains(entry.id) == false {
+                restoreOfferEntry = entry
             }
         case .titleChanged(let title):
             var shouldUpdateWorkspace = false
@@ -3438,6 +3644,9 @@ public final class WorkspaceController: @unchecked Sendable {
         if shouldScheduleTrailingTitleUpdate {
             scheduleTerminalDisplayTitleUpdate()
         }
+        if let restoreOfferEntry {
+            offerRestore(of: restoreOfferEntry)
+        }
         if let updatedWorkspace {
             scheduleTerminalStateChangeUpdate(for: updatedWorkspace.id)
         }
@@ -3471,6 +3680,53 @@ public final class WorkspaceController: @unchecked Sendable {
         })
         let displayTitle = strippedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         return displayTitle.isEmpty ? trimmedTitle : displayTitle
+    }
+
+    private func suppressRestoreOffers(matching paths: [String]) {
+        guard paths.isEmpty == false else { return }
+        withControllerLock {
+            suppressedRestoreOfferPaths.formUnion(paths)
+        }
+    }
+
+    private func clearRestoreOfferSuppression(matching paths: [String]) {
+        guard paths.isEmpty == false else { return }
+        withControllerLock {
+            for path in paths {
+                suppressedRestoreOfferPaths.remove(path)
+            }
+        }
+    }
+
+    private static func workspacePaths(for workspace: Workspace) -> [String] {
+        let paths = workspace.tabs.compactMap { tab in
+            tab.focusedPane?.terminalState.reportedWorkingDirectory
+                ?? tab.focusedPane?.terminalSession?.workingDirectory
+        }
+        .compactMap { path -> String? in
+            let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
+            return normalizedPath.isEmpty ? nil : normalizedPath
+        }
+
+        var seen = Set<String>()
+        return paths.filter { seen.insert($0).inserted }
+    }
+
+    private static func findWorkspace(
+        containingPath path: String,
+        in workspaces: [Workspace],
+        excluding excludedWorkspaceID: WorkspaceID? = nil
+    ) -> Workspace? {
+        workspaces.first { workspace in
+            if workspace.id == excludedWorkspaceID {
+                return false
+            }
+            let rootPath = OmuxWorkspacePathResolver.resolve(workspace.rootPath) ?? workspace.rootPath
+            if rootPath == path {
+                return true
+            }
+            return workspacePaths(for: workspace).contains(path)
+        }
     }
 
     private func shouldApplyTerminalDisplayTitleUpdateLocked(for paneID: PaneID, at date: Date) -> Bool {
@@ -4096,7 +4352,9 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         for removedWorkspace in removedWorkspaces {
-            for pane in removedWorkspace.tabs.flatMap(\.panes) {
+            recentlyClosedStore.add(removedWorkspace)
+            clearRestoreOfferSuppression(matching: Self.workspacePaths(for: removedWorkspace))
+            for pane in removedWorkspace.panes {
                 if pane.isTerminal {
                     try bridge.teardown(paneID: pane.id)
                 }

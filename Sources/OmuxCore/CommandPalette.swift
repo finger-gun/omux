@@ -33,6 +33,9 @@ public enum CommandPaletteInvocationTarget: Equatable, Sendable {
     case action(OpenMUXKeyBindingAction)
     case cliCommand(String)
     case themeSwitch
+    case restoreWorkspacePalette
+    case clearRecentlyClosedWorkspaces
+    case reopenClosedWorkspace(WorkspaceID)
     case vaultSessions
     case vaultSession(String)
     case configOpen

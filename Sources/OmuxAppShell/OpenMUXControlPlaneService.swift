@@ -225,7 +225,22 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let workspace: Workspace
             if let rawPath, rawPath.isEmpty == false {
-                workspace = try controller.openWorkspace(at: OmuxWorkspacePathResolver.resolve(rawPath) ?? rawPath)
+                let resolvedPath = OmuxWorkspacePathResolver.resolve(rawPath) ?? rawPath
+                if let existingWorkspace = controller.findWorkspace(byRootPath: resolvedPath) {
+                    workspace = controller.restore(workspaceID: existingWorkspace.id) ?? existingWorkspace
+                } else if let closedEntry = controller.findRecentlyClosedWorkspace(byPath: resolvedPath) {
+                    controller.offerRestore(of: closedEntry)
+                    return JSONRPCResponse(
+                        id: request.id,
+                        result: .object([
+                            "restoreOffered": .bool(true),
+                            "workspaceID": .string(closedEntry.id.rawValue),
+                            "path": .string(resolvedPath),
+                        ])
+                    )
+                } else {
+                    workspace = try controller.openWorkspace(at: resolvedPath)
+                }
             } else {
                 workspace = try controller.createWorkspace()
             }

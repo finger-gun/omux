@@ -132,6 +132,12 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 self?.refreshMenuValidation()
             }
         }
+        workspaceController.onRestoreOffer = { [weak self, weak workspaceController] entry in
+            guard let self, let workspaceController else {
+                return
+            }
+            self.windowController?.presentWorkspaceRestoreBanner(entry, controller: workspaceController)
+        }
 
         do {
             let workspace = try restoreInitialWorkspace()

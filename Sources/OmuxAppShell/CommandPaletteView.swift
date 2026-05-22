@@ -8,6 +8,7 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
     enum SubPaletteMode {
         case none
         case theme(originalTheme: WorkspaceShellTheme)
+        case restoreWorkspace
         case vaultSessions
 
         var isActive: Bool {
@@ -21,6 +22,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
                 return nil
             case .theme:
                 return "Themes"
+            case .restoreWorkspace:
+                return "Restore Workspace"
             case .vaultSessions:
                 return "Agent Sessions"
             }
@@ -275,6 +278,16 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
 
     func enterVaultSessionsSubPalette(resultProvider: @escaping (String) -> [CommandPaletteResult]) {
         subPaletteMode = .vaultSessions
+        topLevelResultProvider = self.resultProvider
+        self.resultProvider = resultProvider
+        searchField.stringValue = ""
+        selectedIndex = 0
+        sectionLabel.stringValue = subPaletteMode.sectionTitle ?? ""
+        refreshResults()
+    }
+
+    func enterRestoreWorkspaceSubPalette(resultProvider: @escaping (String) -> [CommandPaletteResult]) {
+        subPaletteMode = .restoreWorkspace
         topLevelResultProvider = self.resultProvider
         self.resultProvider = resultProvider
         searchField.stringValue = ""

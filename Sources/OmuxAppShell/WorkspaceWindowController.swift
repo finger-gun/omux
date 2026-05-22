@@ -280,6 +280,10 @@ final class WorkspaceWindowController: NSWindowController {
         get { rootViewController.themeCommitHandler }
         set { rootViewController.themeCommitHandler = newValue }
     }
+
+    func presentWorkspaceRestoreBanner(_ entry: RecentlyClosedWorkspaceEntry, controller: WorkspaceController) {
+        rootViewController.presentWorkspaceRestoreBanner(entry, controller: controller)
+    }
 }
 
 @MainActor
@@ -707,6 +711,7 @@ final class WorkspaceShellViewController: NSViewController {
             collapsedWorkspaceIDs.remove(workspace.id)
         }
         currentWorkspace = workspace
+        dismissIrrelevantRestoreBanners(for: workspace)
         let focusedPaneID = workspace.focusedPane?.id
         apply(theme: currentTheme)
         let terminalTextCache = TerminalTextRenderCache()
@@ -1193,6 +1198,80 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
         shellOverlayHostView.present(agentSessionPathMismatchView: modal)
+    }
+
+    func presentWorkspaceRestoreBanner(_ entry: RecentlyClosedWorkspaceEntry, controller: WorkspaceController) {
+        let bannerView = WorkspaceRestoreBannerView(entry: entry, theme: currentTheme)
+        bannerView.onChoice = { [weak self, weak bannerView] choice in
+            guard let self else {
+                return
+            }
+            if let bannerView {
+                self.shellOverlayHostView.dismiss(workspaceRestoreBannerView: bannerView)
+            }
+
+            switch choice {
+            case .cancel:
+                break
+            case .restoreHere:
+                do {
+                    _ = try controller.restoreClosedWorkspaceInActiveWorkspace(entry)
+                    controller.removeRecentlyClosedWorkspace(byID: entry.id)
+                } catch {
+                    try? controller.notify(
+                        NotificationRequest(
+                            title: "Restore failed",
+                            body: error.localizedDescription,
+                            severity: .error
+                        )
+                    )
+                }
+            case .restoreAsNewWorkspace:
+                do {
+                    _ = try controller.reopenClosedWorkspace(entry)
+                    controller.removeRecentlyClosedWorkspace(byID: entry.id)
+                } catch {
+                    try? controller.notify(
+                        NotificationRequest(
+                            title: "Restore failed",
+                            body: error.localizedDescription,
+                            severity: .error
+                        )
+                    )
+                }
+            }
+        }
+        shellOverlayHostView.present(workspaceRestoreBannerView: bannerView)
+    }
+
+    private func dismissIrrelevantRestoreBanners(for workspace: Workspace) {
+        let relevantRoots = restoreBannerRelevantRoots(for: workspace)
+        guard relevantRoots.isEmpty == false else {
+            return
+        }
+
+        shellOverlayHostView.dismissWorkspaceRestoreBanners { bannerView in
+            let bannerRoots = Self.restoreBannerRoots(for: bannerView.entry.workspacePaths)
+            return bannerRoots.isDisjoint(with: relevantRoots)
+        }
+    }
+
+    private func restoreBannerRelevantRoots(for workspace: Workspace) -> Set<String> {
+        let focusedPaths = [
+            workspace.focusedPane.flatMap(Self.currentVaultPath(for:)),
+            workspace.focusedFloatingPaneModal?.focusedPane.flatMap(Self.currentVaultPath(for:)),
+        ].compactMap { $0 }
+
+        return Self.restoreBannerRoots(for: focusedPaths)
+    }
+
+    private static func restoreBannerRoots(for paths: [String]) -> Set<String> {
+        Set(
+            paths.compactMap(Self.standardizedVaultPath)
+                .flatMap { standardizedPath in
+                    [standardizedPath, projectLikeRoot(standardizedPath)]
+                }
+        )
     }
 
     private func runVaultResumeCommand(
@@ -1822,6 +1901,15 @@ final class WorkspaceShellViewController: NSViewController {
                 paletteView.enterThemeSubPalette(originalTheme: currentTheme)
                 return .inert
             }
+            if result.invocationTarget == .restoreWorkspacePalette {
+                presentRestoreWorkspaceSubPalette(in: paletteView, controller: controller)
+                return .inert
+            }
+            if result.invocationTarget == .clearRecentlyClosedWorkspaces {
+                controller.clearRecentlyClosedWorkspaces()
+                shellOverlayHostView.dismissAllWorkspaceRestoreBanners()
+                return .invoked
+            }
             if result.invocationTarget == .vaultSessions {
                 presentVaultSessionsSubPalette(in: paletteView)
                 return .inert
@@ -1841,12 +1929,19 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         paletteView.subPaletteCommitHandler = { [weak self] identifier in
-            if self?.vaultPaletteSessions.contains(where: { $0.id == identifier }) == true {
-                self?.resumeVaultSession(identifier)
+            guard let self else { return }
+            if self.vaultPaletteSessions.contains(where: { $0.id == identifier }) {
+                self.resumeVaultSession(identifier)
+                return
+            }
+            if identifier.hasPrefix("recently-closed:") {
+                let workspaceIDRaw = String(identifier.dropFirst("recently-closed:".count))
+                let workspaceID = WorkspaceID(rawValue: workspaceIDRaw)
+                self.restoreClosedWorkspaceFromPalette(workspaceID: workspaceID, controller: self.controller)
                 return
             }
             themeBeforeSubPalette = nil
-            self?.themeCommitHandler?(identifier)
+            self.themeCommitHandler?(identifier)
         }
 
         paletteView.subPaletteRevertHandler = { [weak self] in
@@ -2022,6 +2117,46 @@ final class WorkspaceShellViewController: NSViewController {
             self?.vaultPaletteResults(query: query) ?? []
         }
         loadVaultPaletteSessions(paletteView: paletteView)
+    }
+
+    private func presentRestoreWorkspaceSubPalette(
+        in paletteView: CommandPaletteView,
+        controller: WorkspaceController
+    ) {
+        paletteView.enterRestoreWorkspaceSubPalette { [weak controller] query in
+            guard let controller else { return [] }
+            let entries = controller.commandPaletteRecentlyClosedWorkspaces()
+            return CommandPaletteSearch.recentlyClosedResults(query: query, entries: entries)
+        }
+    }
+
+    private func restoreClosedWorkspaceFromPalette(
+        workspaceID: WorkspaceID,
+        controller: WorkspaceController
+    ) {
+        let entries = controller.commandPaletteRecentlyClosedWorkspaces()
+        guard let entry = entries.first(where: { $0.id == workspaceID }) else {
+            try? controller.notify(
+                NotificationRequest(
+                    title: "Restore failed",
+                    body: "Workspace no longer in recently closed list",
+                    severity: .error
+                )
+            )
+            return
+        }
+        do {
+            _ = try controller.reopenClosedWorkspace(entry)
+            controller.removeRecentlyClosedWorkspace(byID: entry.id)
+        } catch {
+            try? controller.notify(
+                NotificationRequest(
+                    title: "Restore failed",
+                    body: error.localizedDescription,
+                    severity: .error
+                )
+            )
+        }
     }
 
     private func loadVaultPaletteSessions(paletteView: CommandPaletteView) {
@@ -4601,8 +4736,10 @@ final class ShellOverlayHostView: NSView {
         }
     }
 
+    private let bannerHostView = PassthroughOverlayView()
     private let paletteHostView = PassthroughOverlayView()
     private let modalHostView = BlockingOverlayView()
+    private let bannerStackView = NSStackView()
     let floatingModalOverlayView = FloatingModalOverlayView()
     private var currentTheme: WorkspaceShellTheme = .defaultTheme
 
@@ -4612,17 +4749,28 @@ final class ShellOverlayHostView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
 
+        bannerHostView.translatesAutoresizingMaskIntoConstraints = false
         paletteHostView.translatesAutoresizingMaskIntoConstraints = false
         modalHostView.translatesAutoresizingMaskIntoConstraints = false
+        bannerStackView.orientation = .vertical
+        bannerStackView.alignment = .centerX
+        bannerStackView.spacing = 10
+        bannerStackView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(floatingModalOverlayView)
+        addSubview(bannerHostView)
         addSubview(paletteHostView)
         addSubview(modalHostView)
+        bannerHostView.addSubview(bannerStackView)
 
         NSLayoutConstraint.activate([
             floatingModalOverlayView.topAnchor.constraint(equalTo: topAnchor),
             floatingModalOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
             floatingModalOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
             floatingModalOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bannerHostView.topAnchor.constraint(equalTo: topAnchor),
+            bannerHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bannerHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bannerHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
             paletteHostView.topAnchor.constraint(equalTo: topAnchor),
             paletteHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
             paletteHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -4631,6 +4779,10 @@ final class ShellOverlayHostView: NSView {
             modalHostView.leadingAnchor.constraint(equalTo: leadingAnchor),
             modalHostView.trailingAnchor.constraint(equalTo: trailingAnchor),
             modalHostView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bannerStackView.centerXAnchor.constraint(equalTo: bannerHostView.centerXAnchor),
+            bannerStackView.leadingAnchor.constraint(greaterThanOrEqualTo: bannerHostView.leadingAnchor, constant: 16),
+            bannerStackView.trailingAnchor.constraint(lessThanOrEqualTo: bannerHostView.trailingAnchor, constant: -16),
+            bannerStackView.bottomAnchor.constraint(equalTo: bannerHostView.bottomAnchor, constant: -16),
         ])
     }
 
@@ -4647,7 +4799,35 @@ final class ShellOverlayHostView: NSView {
     func apply(theme: WorkspaceShellTheme) {
         currentTheme = theme
         floatingModalOverlayView.apply(theme: theme)
+        bannerStackView.arrangedSubviews.compactMap { $0 as? WorkspaceRestoreBannerView }.forEach { $0.apply(theme: theme) }
         modalHostView.subviews.compactMap { $0 as? AgentSessionPathMismatchModalView }.forEach { $0.apply(theme: theme) }
+    }
+
+    func present(workspaceRestoreBannerView bannerView: WorkspaceRestoreBannerView) {
+        if bannerView.superview == nil {
+            bannerStackView.addArrangedSubview(bannerView)
+            NSLayoutConstraint.activate([
+                bannerView.widthAnchor.constraint(lessThanOrEqualTo: bannerHostView.widthAnchor, constant: -32),
+            ])
+        }
+        bannerView.apply(theme: currentTheme)
+    }
+
+    func dismiss(workspaceRestoreBannerView bannerView: WorkspaceRestoreBannerView) {
+        if bannerView.superview === bannerStackView {
+            bannerStackView.removeArrangedSubview(bannerView)
+            bannerView.removeFromSuperview()
+        }
+    }
+
+    func dismissWorkspaceRestoreBanners(where shouldDismiss: (WorkspaceRestoreBannerView) -> Bool) {
+        let bannersToDismiss = bannerStackView.arrangedSubviews.compactMap { $0 as? WorkspaceRestoreBannerView }
+            .filter(shouldDismiss)
+        bannersToDismiss.forEach(dismiss)
+    }
+
+    func dismissAllWorkspaceRestoreBanners() {
+        dismissWorkspaceRestoreBanners { _ in true }
     }
 
     func present(commandPaletteView: CommandPaletteView) {
@@ -4688,6 +4868,85 @@ final class ShellOverlayHostView: NSView {
         if modalView.superview === modalHostView {
             modalView.removeFromSuperview()
         }
+    }
+}
+
+@MainActor
+enum RestoreBannerChoice {
+    case cancel
+    case restoreHere
+    case restoreAsNewWorkspace
+}
+
+@MainActor
+final class WorkspaceRestoreBannerView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "Restore workspace?")
+    private let messageLabel = NSTextField(labelWithString: "")
+    private let cancelButton = AgentSessionModalButton(title: "Cancel", active: false)
+    private let restoreHereButton = AgentSessionModalButton(title: "Restore Here", active: false)
+    private let restoreNewButton = AgentSessionModalButton(title: "Restore New", active: true)
+    let entry: RecentlyClosedWorkspaceEntry
+    var onChoice: ((RestoreBannerChoice) -> Void)?
+
+    init(entry: RecentlyClosedWorkspaceEntry, theme: WorkspaceShellTheme) {
+        self.entry = entry
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        setAccessibilityRole(.group)
+
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        messageLabel.stringValue = "\(entry.name) - \(entry.workspacePathSummary)"
+        messageLabel.font = .systemFont(ofSize: 12)
+        messageLabel.maximumNumberOfLines = 2
+        messageLabel.lineBreakMode = .byTruncatingMiddle
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        cancelButton.onPress = { [weak self] in self?.onChoice?(.cancel) }
+        restoreHereButton.onPress = { [weak self] in self?.onChoice?(.restoreHere) }
+        restoreNewButton.onPress = { [weak self] in self?.onChoice?(.restoreAsNewWorkspace) }
+
+        let textStack = NSStackView(views: [titleLabel, messageLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 4
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let buttonRow = NSStackView(views: [cancelButton, restoreHereButton, restoreNewButton])
+        buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
+        buttonRow.spacing = 6
+        buttonRow.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(textStack)
+        addSubview(buttonRow)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 560),
+            textStack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            textStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            textStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            buttonRow.leadingAnchor.constraint(greaterThanOrEqualTo: textStack.trailingAnchor, constant: 16),
+            buttonRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            buttonRow.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        apply(theme: theme)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
+        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        titleLabel.textColor = theme.shell.textPrimary
+        messageLabel.textColor = theme.shell.textSecondary
+        cancelButton.apply(theme: theme)
+        restoreHereButton.apply(theme: theme)
+        restoreNewButton.apply(theme: theme)
     }
 }
 
