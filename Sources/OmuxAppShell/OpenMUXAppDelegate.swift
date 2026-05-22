@@ -37,7 +37,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var resizeSplitLeftMenuItem: NSMenuItem?
     private weak var resizeSplitRightMenuItem: NSMenuItem?
     private weak var agentSessionsMenuItem: NSMenuItem?
-    private weak var openAgentSessionsMenuItem: NSMenuItem?
+    private weak var toggleAgentSessionsMenuItem: NSMenuItem?
     private weak var searchAgentSessionsMenuItem: NSMenuItem?
     private weak var reindexAgentSessionsMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
@@ -604,9 +604,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         windowController?.toggleSidebarVisibility()
     }
 
-    @objc private func openAgentSessionsFromMenu(_ sender: Any?) {
+    @objc private func toggleAgentSessionsFromMenu(_ sender: Any?) {
         _ = sender
-        windowController?.setAgentSessionsVisibility(true)
+        windowController?.toggleAgentSessionsVisibility()
     }
 
     @objc private func searchAgentSessionsFromMenu(_ sender: Any?) {
@@ -1092,13 +1092,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let agentSessionsMenuItem = NSMenuItem()
         let agentSessionsMenu = NSMenu(title: "Agents")
 
-        let openAgentSessionsMenuItem = NSMenuItem(
-            title: "Show Agent Sessions",
-            action: #selector(openAgentSessionsFromMenu(_:)),
+        let toggleAgentSessionsMenuItem = NSMenuItem(
+            title: "Toggle Agent Sessions",
+            action: #selector(toggleAgentSessionsFromMenu(_:)),
             keyEquivalent: ""
         )
-        openAgentSessionsMenuItem.target = self
-        agentSessionsMenu.addItem(openAgentSessionsMenuItem)
+        toggleAgentSessionsMenuItem.target = self
+        agentSessionsMenu.addItem(toggleAgentSessionsMenuItem)
 
         let searchAgentSessionsMenuItem = NSMenuItem(
             title: "Search Agent Sessions…",
@@ -1185,7 +1185,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.resizeSplitLeftMenuItem = resizeSplitLeftMenuItem
         self.resizeSplitRightMenuItem = resizeSplitRightMenuItem
         self.agentSessionsMenuItem = agentSessionsMenuItem
-        self.openAgentSessionsMenuItem = openAgentSessionsMenuItem
+        self.toggleAgentSessionsMenuItem = toggleAgentSessionsMenuItem
         self.searchAgentSessionsMenuItem = searchAgentSessionsMenuItem
         self.reindexAgentSessionsMenuItem = reindexAgentSessionsMenuItem
         applyMenuKeyBindings()
@@ -1211,7 +1211,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let hasWorkspace = workspaceController.activeWorkspace() != nil
         let agentSessionsMenuVisible = vaultConfiguration.enabled
         agentSessionsMenuItem?.isHidden = !agentSessionsMenuVisible
-        openAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
+        toggleAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
         searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
         reindexAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible && vaultStore != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
@@ -1248,7 +1248,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: restoreWorkspaceMenuItem, action: .workspaceRestoreLastClosed)
         setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
-        setShortcut(for: openAgentSessionsMenuItem, action: .agentSessionsToggle)
+        setShortcut(for: toggleAgentSessionsMenuItem, action: .agentSessionsToggle)
         setShortcut(for: searchAgentSessionsMenuItem, action: .agentSessionSearch)
         setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)
         setShortcut(for: commandPaletteCommandMenuItem, action: .commandPaletteCommand)

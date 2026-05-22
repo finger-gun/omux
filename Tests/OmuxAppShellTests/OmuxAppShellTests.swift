@@ -201,11 +201,11 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Open" })
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Reload" })
-        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Show Agent Sessions" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
         XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
-            title: "Show Agent Sessions",
+            title: "Toggle Agent Sessions",
             key: "b",
             modifiers: [.command, .shift]
         ) ?? false)
