@@ -12,6 +12,7 @@ Plugins can:
 - create, update, and close extension panes
 - choose whether extension panes open as docked pane tabs or floating modals
 - opt extension panes into host-mediated action callbacks
+- contribute Agent Sessions adapters
 - contribute native app menu items from installed manifests
 - mark terminal pane status with `omux pane-status`
 - call any public `omux` command
@@ -120,19 +121,19 @@ Installing a plugin installs executable local code. OpenMUX prints the source re
 
 When OpenMUX runs a plugin, it passes the remaining CLI arguments through unchanged and adds these environment variables:
 
-| Variable | Meaning |
-| --- | --- |
-| `OMUX_PLUGIN_COMMAND` | Command name the user invoked. |
-| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched. |
-| `OMUX_PLUGINS_DIR` | Directory containing the plugin executable. |
-| `OMUX_CLI` | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
+| Variable                 | Meaning                                                                         |
+|--------------------------|---------------------------------------------------------------------------------|
+| `OMUX_PLUGIN_COMMAND`    | Command name the user invoked.                                                  |
+| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the executable OpenMUX launched.                               |
+| `OMUX_PLUGINS_DIR`       | Directory containing the plugin executable.                                     |
+| `OMUX_CLI`               | Absolute path to the `omux` CLI OpenMUX expects the plugin to call, when known. |
 
 Plugins can call back into `omux extension-pane`, `omux pane-status`, `omux notify`, and other public commands to interact with the running app. Prefer `${OMUX_CLI:-omux}` when launching the CLI so packaged app and Terminal-launched workflows both work.
 
 Installed manifest-based plugin callbacks also receive:
 
-| Variable | Meaning |
-| --- | --- |
+| Variable                | Meaning                                                      |
+|-------------------------|--------------------------------------------------------------|
 | `OMUX_PLUGIN_HOOK_NAME` | Hook name that caused OpenMUX to invoke the plugin callback. |
 
 Registry-installed plugins can subscribe to hooks directly in `omux-plugin.toml`:
@@ -144,6 +145,161 @@ arguments = ["codex", "title"]
 ```
 
 OpenMUX invokes the plugin entrypoint with the callback name and arguments, and writes the normal hook JSON payload to stdin. This lets a plugin stay self-contained instead of asking users to install forwarding scripts under `~/.omux/hooks/`.
+
+## Agent Sessions Adapter Capability
+
+Agent Sessions adapters are normal manifest-based plugins. There is no separate adapter registry, no hardcoded list of third-party agent names, and no in-process plugin API. A plugin opts into indexing by adding an `[agent-sessions]` table to its `omux-plugin.toml`.
+
+OpenMUX uses the same installed plugin manifest that powers CLI commands, menu contributions, and manifest-declared hook callbacks:
+
+```mermaid
+flowchart LR
+    Registry["Plugin registry<br/>catalog.toml"]
+    Install["omux plugins install"]
+    Local["Installed plugin<br/>~/.omux/plugins/name/"]
+    Manifest["omux-plugin.toml<br/>[plugin] + [agent-sessions]"]
+    Callback["Plugin callback<br/>normalizes source data"]
+    Index["Agent Sessions index<br/>~/.omux/agent-sessions.sqlite"]
+    UI["Sidebar, search,<br/>resume flow"]
+
+    Registry --> Install
+    Install --> Local
+    Local --> Manifest
+    Manifest --> Callback
+    Callback --> Index
+    Index --> UI
+```
+
+The plugin does only one job: read whatever source format it owns and print normalized session metadata. OpenMUX owns indexing, filtering, search, delete/hide behavior, workspace matching, sidebar display, and resume execution.
+
+### Manifest Contract
+
+Plugins can contribute Agent Sessions rows by declaring an adapter callback in `omux-plugin.toml`:
+
+```toml
+schema = 1
+id = "omp"
+name = "OMP Agent Sessions"
+description = "Indexes OMP sessions."
+version = "0.1.0"
+license = "Apache-2.0"
+kind = "plugin"
+
+[plugin]
+command = "agent-sessions.omp"
+entrypoint = "plugin"
+
+[agent-sessions]
+name = "omp"
+callback = "__omux_agent_sessions"
+arguments = ["discover"]
+source_kind = "omp_jsonl"
+resume_command = "omp --resume {session_id}"
+
+[files.entrypoint]
+source = "plugin"
+target = "plugin"
+executable = true
+
+[files.manifest]
+source = "omux-plugin.toml"
+target = "omux-plugin.toml"
+executable = false
+```
+
+The `[files.manifest]` entry matters for registry packages. OpenMUX discovers Agent Sessions capabilities from installed manifests under `~/.omux/plugins`, so the package must install its own `omux-plugin.toml`.
+
+| Field                     | Required | Meaning                                                                                       |
+|---------------------------|----------|-----------------------------------------------------------------------------------------------|
+| `[plugin].command`        | Yes      | Local plugin command. Agent Sessions-only plugins should prefer namespaced commands such as `agent-sessions.opencode`. |
+| `[plugin].entrypoint`     | Yes      | Executable file OpenMUX launches for the callback.                                             |
+| `[agent-sessions].name`   | No       | Agent Sessions agent name to index and display. Defaults to the plugin command when absent.    |
+| `[agent-sessions].callback` | Yes    | First argument passed to the entrypoint during reindex.                                        |
+| `[agent-sessions].arguments` | No    | Extra callback arguments after `callback`.                                                     |
+| `[agent-sessions].source_kind` | No | Stable source kind stored with indexed rows. Choose a unique, durable namespace (for example `omp_jsonl`) because cleanup and reindex logic use source-kind prefixes; changing it later leaves older indexed rows under the previous namespace. |
+| `[agent-sessions].agent`  | No       | Deprecated alias for `name`.                                                                  |
+| `[agent-sessions].resume_command` | No | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID.        |
+
+### Callback Contract
+
+OpenMUX invokes the plugin entrypoint with the callback and arguments during `omux agent-sessions reindex`:
+
+```sh
+~/.omux/plugins/agent-sessions.omp/plugin __omux_agent_sessions discover
+```
+
+The callback must write only JSON to stdout. Diagnostics should go to stderr. The top-level value may be either a JSON array or an object with a `sessions` array.
+
+```json
+[
+  {
+    "id": "abc123",
+    "title": "Fix release notes",
+    "cwd": "/Users/example/project",
+    "updated_at": "2026-05-21T18:00:00Z",
+    "source_path": "/Users/example/.omp/agent/sessions/abc123.jsonl",
+    "model": "gpt-5",
+    "git_branch": "main"
+  }
+]
+```
+
+Rows use this schema:
+
+| Field        | Required | Meaning                                                                                                    |
+|--------------|----------|------------------------------------------------------------------------------------------------------------|
+| `id`         | Yes      | Stable upstream session ID. This is the raw value substituted into `{session_id}` for resume commands.      |
+| `title`      | No       | Display title. OpenMUX falls back to the session ID when omitted.                                           |
+| `cwd`        | No       | Working directory or project root associated with the session.                                             |
+| `updated_at` | No       | Last update time. ISO-8601 strings and numeric Unix timestamps are accepted.                                |
+| `source_path` | No      | File or database path the row came from, for diagnostics and deletion bookkeeping.                          |
+| `model`      | No       | Agent model display string.                                                                                |
+| `git_branch` | No      | Git branch display string.                                                                                 |
+| `agent`      | No       | Per-row agent name. Use this only when one plugin indexes multiple agents.                                  |
+
+Minimum requirement: each row must include `id`. For reliable grouping, filtering, and ordering, include `cwd` and `updated_at` whenever available from the upstream source.
+Indexed session IDs are composed as `<plugin-agent>:<session-id>` (for example `omp:abc123`), where `<plugin-agent>` defaults to the plugin command unless overridden by `[agent-sessions].name`.
+OpenMUX validates rows before indexing. Invalid rows are skipped instead of taking down the whole reindex.
+
+### Runtime Environment
+
+Agent Sessions callbacks receive the normal plugin process environment:
+
+| Variable                 | Meaning                                           |
+|--------------------------|---------------------------------------------------|
+| `OMUX_PLUGIN_COMMAND`    | Plugin command name from the manifest.            |
+| `OMUX_PLUGIN_EXECUTABLE` | Absolute path to the launched plugin executable.  |
+| `OMUX_PLUGINS_DIR`       | Directory containing the plugin executable.       |
+| `OMUX_CLI`               | Absolute path to the `omux` CLI, when known.      |
+
+Callbacks should be deterministic, bounded, and local-first. Prefer reading local files or databases, emitting metadata only, and returning `[]` when the upstream agent is not installed.
+
+### Enable, Disable, and Override
+
+External Agent Sessions adapters are enabled by default. Users can turn off all plugin adapters:
+
+```toml
+[agent-sessions]
+external_adapters_enabled = false
+```
+
+Users can also disable or override one plugin adapter by Agent Sessions name:
+
+```toml
+[agent-sessions.external.omp]
+enabled = false
+resume_command = "omp --resume {session_id}"
+```
+
+This works independently from built-in adapters. A community plugin may publish the same agent name as a bundled adapter; users can disable the built-in agent and leave the plugin adapter enabled:
+
+```toml
+[agent-sessions.agents.codex]
+enabled = false
+
+[agent-sessions.external.codex-plus]
+enabled = true
+```
 
 ## AI status host pattern
 
@@ -213,18 +369,18 @@ omux extension-pane close --pane <pane-id>
 
 The control plane accepts these fields:
 
-| Field | Meaning |
-| --- | --- |
-| `--plugin <id>` | Stable plugin identifier. Required for create and update. |
-| `--pane <id>` | Existing extension pane to update or close. |
-| `--title <title>` | User-facing pane title. |
-| `--source <path>` | Local source path represented by the pane. |
-| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host. |
-| `--status ready\|disabled\|error` | Rendering state. Non-ready states show placeholder copy. |
-| `--message <text>` | Placeholder or error message. |
-| `--axis columns\|rows` | Split direction for new panes. |
-| `--presentation pane-tab\|modal` | Initial host presentation for new or updated extension panes. |
-| `--actions` | Opt the pane into the host-mediated JavaScript action bridge. |
+| Field                                  | Meaning                                                       |
+|----------------------------------------|---------------------------------------------------------------|
+| `--plugin <id>`                        | Stable plugin identifier. Required for create and update.     |
+| `--pane <id>`                          | Existing extension pane to update or close.                   |
+| `--title <title>`                      | User-facing pane title.                                       |
+| `--source <path>`                      | Local source path represented by the pane.                    |
+| `--html <html>` / `--html-file <path>` | Local HTML content for the shell-owned preview host.          |
+| `--status ready\|disabled\|error`      | Rendering state. Non-ready states show placeholder copy.      |
+| `--message <text>`                     | Placeholder or error message.                                 |
+| `--axis columns\|rows`                 | Split direction for new panes.                                |
+| `--presentation pane-tab\|modal`       | Initial host presentation for new or updated extension panes. |
+| `--actions`                            | Opt the pane into the host-mediated JavaScript action bridge. |
 
 Extension panes are shell-owned content panes. They are not terminal sessions, do not allocate Ghostty surfaces, and terminal-only actions such as `omux run`, `send-text`, and history operations reject or ignore them.
 
@@ -277,8 +433,8 @@ The official plugin registry includes `settings-ui`, which opens a local extensi
 
 OpenMUX emits an input hook when a user intentionally activates text in a terminal, currently through Command-click. Plugins can listen for this hook and decide whether to act on local paths, URLs, issue IDs, or other recognizable tokens.
 
-| Hook | Payload |
-| --- | --- |
+| Hook                            | Payload                                                                   |
+|---------------------------------|---------------------------------------------------------------------------|
 | `input:terminal-text-activated` | `token`, `row`, `column`, `cwd`, `resolvedPath`, and numeric `modifiers`. |
 
 Plain clicks remain terminal-owned for focus, selection, and TUI mouse reporting.

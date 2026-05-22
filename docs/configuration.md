@@ -105,9 +105,9 @@ plugins = ["https://github.com/finger-gun/omux-plugins"]
 
 ## Root settings
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `schema` | integer | Required config schema version. |
+| Key                 | Type    | Meaning                                                                                                             |
+|---------------------|---------|---------------------------------------------------------------------------------------------------------------------|
+| `schema`            | integer | Required config schema version.                                                                                     |
 | `auto_check_update` | boolean | Enables passive background checks for newer OpenMUX GitHub Releases. Defaults to `true`; set to `false` to opt out. |
 
 Update checks run in the background after app startup. Failed checks do not show user-facing errors.
@@ -116,37 +116,37 @@ Update checks run in the background after app startup. Failed checks do not show
 
 Themes are flat TOML files with a closed token set. Those tokens drive both the AppKit shell chrome and the Ghostty terminal colors.
 
-| Token | AppKit role | Ghostty output |
-| --- | --- | --- |
-| `bg.canvas` | window canvas, terminal background | `background` |
-| `bg.surface` | sidebar and supporting shell surfaces | — |
-| `bg.elevated` | pane headers and compact shell actions | — |
-| `fg.primary` | primary labels | `foreground` |
-| `fg.secondary` | secondary labels | — |
-| `fg.muted` | section labels, subdued copy | — |
-| `border.subtle` | quiet strokes | — |
-| `border.strong` | stronger card/frame strokes | — |
-| `accent` | focus and active accents | — |
-| `cursor` | terminal cursor | `cursor-color` |
-| `cursor.text` | cursor text contrast | `cursor-text` |
-| `selection.bg` | selection / active chrome tint | `selection-background` |
-| `selection.fg` | terminal selection foreground | `selection-foreground` |
-| `ansi.black` | terminal ANSI 0 | `palette = 0=...` |
-| `ansi.red` | terminal ANSI 1 | `palette = 1=...` |
-| `ansi.green` | terminal ANSI 2 | `palette = 2=...` |
-| `ansi.yellow` | terminal ANSI 3 | `palette = 3=...` |
-| `ansi.blue` | terminal ANSI 4 | `palette = 4=...` |
-| `ansi.magenta` | terminal ANSI 5 | `palette = 5=...` |
-| `ansi.cyan` | terminal ANSI 6 | `palette = 6=...` |
-| `ansi.white` | terminal ANSI 7 | `palette = 7=...` |
-| `ansi.brightBlack` | terminal ANSI 8 | `palette = 8=...` |
-| `ansi.brightRed` | terminal ANSI 9 | `palette = 9=...` |
-| `ansi.brightGreen` | terminal ANSI 10 | `palette = 10=...` |
-| `ansi.brightYellow` | terminal ANSI 11 | `palette = 11=...` |
-| `ansi.brightBlue` | terminal ANSI 12 | `palette = 12=...` |
-| `ansi.brightMagenta` | terminal ANSI 13 | `palette = 13=...` |
-| `ansi.brightCyan` | terminal ANSI 14 | `palette = 14=...` |
-| `ansi.brightWhite` | terminal ANSI 15 | `palette = 15=...` |
+| Token                | AppKit role                            | Ghostty output         |
+|----------------------|----------------------------------------|------------------------|
+| `bg.canvas`          | window canvas, terminal background     | `background`           |
+| `bg.surface`         | sidebar and supporting shell surfaces  | —                      |
+| `bg.elevated`        | pane headers and compact shell actions | —                      |
+| `fg.primary`         | primary labels                         | `foreground`           |
+| `fg.secondary`       | secondary labels                       | —                      |
+| `fg.muted`           | section labels, subdued copy           | —                      |
+| `border.subtle`      | quiet strokes                          | —                      |
+| `border.strong`      | stronger card/frame strokes            | —                      |
+| `accent`             | focus and active accents               | —                      |
+| `cursor`             | terminal cursor                        | `cursor-color`         |
+| `cursor.text`        | cursor text contrast                   | `cursor-text`          |
+| `selection.bg`       | selection / active chrome tint         | `selection-background` |
+| `selection.fg`       | terminal selection foreground          | `selection-foreground` |
+| `ansi.black`         | terminal ANSI 0                        | `palette = 0=...`      |
+| `ansi.red`           | terminal ANSI 1                        | `palette = 1=...`      |
+| `ansi.green`         | terminal ANSI 2                        | `palette = 2=...`      |
+| `ansi.yellow`        | terminal ANSI 3                        | `palette = 3=...`      |
+| `ansi.blue`          | terminal ANSI 4                        | `palette = 4=...`      |
+| `ansi.magenta`       | terminal ANSI 5                        | `palette = 5=...`      |
+| `ansi.cyan`          | terminal ANSI 6                        | `palette = 6=...`      |
+| `ansi.white`         | terminal ANSI 7                        | `palette = 7=...`      |
+| `ansi.brightBlack`   | terminal ANSI 8                        | `palette = 8=...`      |
+| `ansi.brightRed`     | terminal ANSI 9                        | `palette = 9=...`      |
+| `ansi.brightGreen`   | terminal ANSI 10                       | `palette = 10=...`     |
+| `ansi.brightYellow`  | terminal ANSI 11                       | `palette = 11=...`     |
+| `ansi.brightBlue`    | terminal ANSI 12                       | `palette = 12=...`     |
+| `ansi.brightMagenta` | terminal ANSI 13                       | `palette = 13=...`     |
+| `ansi.brightCyan`    | terminal ANSI 14                       | `palette = 14=...`     |
+| `ansi.brightWhite`   | terminal ANSI 15                       | `palette = 15=...`     |
 
 ## Built-in themes
 
@@ -217,15 +217,15 @@ The additional imported presets are generated from selected Ghostty-format theme
 
 OpenMUX currently models these terminal settings directly:
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `font_family` | string | Preferred terminal font family. |
-| `font_size` | integer | Terminal font size in points. |
-| `scrollback_lines` | integer | Maximum scrollback preserved by the terminal. |
-| `option_as_alt` | `false` \| `true` \| `"left"` \| `"right"` | OpenMUX-owned macOS Option-key behavior, compiled to Ghostty-compatible `macos-option-as-alt` semantics. |
-| `persist_scrollback` | boolean | Enables OpenMUX persisted pane scrollback across app restarts. Defaults to `true`. |
-| `persist_scrollback_lines` | integer | Maximum lines of per-pane scrollback OpenMUX persists for restart restore. Defaults to `4000`. |
-| `persist_scrollback_bytes` | integer | Maximum bytes of per-pane scrollback OpenMUX persists for restart restore. Defaults to `1048576`. |
+| Key                        | Type                                       | Meaning                                                                                                  |
+|----------------------------|--------------------------------------------|----------------------------------------------------------------------------------------------------------|
+| `font_family`              | string                                     | Preferred terminal font family.                                                                          |
+| `font_size`                | integer                                    | Terminal font size in points.                                                                            |
+| `scrollback_lines`         | integer                                    | Maximum scrollback preserved by the terminal.                                                            |
+| `option_as_alt`            | `false` \| `true` \| `"left"` \| `"right"` | OpenMUX-owned macOS Option-key behavior, compiled to Ghostty-compatible `macos-option-as-alt` semantics. |
+| `persist_scrollback`       | boolean                                    | Enables OpenMUX persisted pane scrollback across app restarts. Defaults to `true`.                       |
+| `persist_scrollback_lines` | integer                                    | Maximum lines of per-pane scrollback OpenMUX persists for restart restore. Defaults to `4000`.           |
+| `persist_scrollback_bytes` | integer                                    | Maximum bytes of per-pane scrollback OpenMUX persists for restart restore. Defaults to `1048576`.        |
 
 Older configs may contain `keyboard_selection`; current OpenMUX ignores that deprecated key and removes it the next time `omux theme` rewrites the config.
 
@@ -285,34 +285,65 @@ enabled = true
 preview_enabled = true
 index_on_launch = true
 collapsed_toggle_visible = true
-included_agents = ["copilot", "codex", "gemini"]
+external_adapters_enabled = true
 excluded_paths = []
 max_preview_bytes = 1048576
 sidebar_rows_per_agent = 10
 
+[agent-sessions.external.omp]
+enabled = true
+resume_command = "omp --resume {session_id}"
+```
+
+| Key                         | Type             | Meaning                                                                                                                                                                                                                                                                   |
+|-----------------------------|------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled`                   | boolean          | Shows Agent Sessions UI and enables indexing. Defaults to `true`.                                                                                                                                                                                                         |
+| `preview_enabled`           | boolean          | Reserved for preview-capable Agent Sessions surfaces. Defaults to `true`.                                                                                                                                                                                                 |
+| `index_on_launch`           | boolean          | Rebuilds the local index when OpenMUX starts. Defaults to `true`.                                                                                                                                                                                                         |
+| `collapsed_toggle_visible`  | boolean          | Shows the collapsed Agent Sessions toggle and reserves a small top-right gutter for it. Set to `false` to remove both the gutter and icon, leaving keyboard shortcuts, menu actions, and `omux agent-sessions open` as the way to reopen the sidebar. Defaults to `true`. |
+| `external_adapters_enabled` | boolean          | Runs installed plugin-declared Agent Sessions adapters during normal reindex. Defaults to `true`.                                                                                                                                                                         |
+| `included_agents`           | array of strings | Optional built-in adapter allowlist. Defaults to bundled built-in agents: `codex`, `copilot`, and `gemini`. External adapters are primarily controlled by `external_adapters_enabled` and `[agent-sessions.external.<name>].enabled`; add names here only when you intentionally want explicit filtering parity with built-ins. |
+| `excluded_paths`            | array of strings | Paths to skip while indexing.                                                                                                                                                                                                                                             |
+| `max_preview_bytes`         | integer          | Maximum bytes reserved for preview-capable Agent Sessions surfaces.                                                                                                                                                                                                       |
+| `sidebar_rows_per_agent`    | integer          | Number of rows to fetch per agent for each sidebar page. Defaults to `10`.                                                                                                                                                                                                |
+
+Per-agent tables live under `[agent-sessions.agents.<agent>]` and apply to built-in adapters only:
+
+| Key              | Type    | Meaning                                                                                 |
+|------------------|---------|-----------------------------------------------------------------------------------------|
+| `enabled`        | boolean | Include or exclude this agent without replacing the whole `included_agents` list.       |
+| `home`           | string  | Override the agent's local home directory.                                              |
+| `resume_command` | string  | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
+
+Example:
+
+```toml
 [agent-sessions.agents.copilot]
+enabled = true
 home = "~/.copilot"
 resume_command = "copilot --resume {session_id}"
 ```
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `enabled` | boolean | Shows Agent Sessions UI and enables indexing. Defaults to `true`. |
-| `preview_enabled` | boolean | Reserved for preview-capable Agent Sessions surfaces. Defaults to `true`. |
-| `index_on_launch` | boolean | Rebuilds the local index when OpenMUX starts. Defaults to `true`. |
-| `collapsed_toggle_visible` | boolean | Shows the collapsed Agent Sessions toggle and reserves a small top-right gutter for it. Set to `false` to remove both the gutter and icon, leaving keyboard shortcuts, menu actions, and `omux agent-sessions open` as the way to reopen the sidebar. Defaults to `true`. |
-| `included_agents` | array of strings | Agents to index. Common values are `copilot`, `codex`, `gemini`, `claude`, `opencode`, `pi`, and `rovodev`. |
-| `excluded_paths` | array of strings | Paths to skip while indexing. |
-| `max_preview_bytes` | integer | Maximum bytes reserved for preview-capable Agent Sessions surfaces. |
-| `sidebar_rows_per_agent` | integer | Number of rows to fetch per agent for each sidebar page. Defaults to `10`. |
+Do not use `[agent-sessions.agents.<name>]` for plugin adapters unless you are intentionally enabling or disabling a built-in adapter with the same agent name.
 
-Per-agent tables live under `[agent-sessions.agents.<agent>]`:
+External plugin adapter overrides live under `[agent-sessions.external.<name>]`:
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `enabled` | boolean | Include or exclude this agent without replacing the whole `included_agents` list. |
-| `home` | string | Override the agent's local home directory. |
-| `resume_command` | string | Resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
+| Key              | Type    | Meaning                                                                                                                 |
+|------------------|---------|-------------------------------------------------------------------------------------------------------------------------|
+| `enabled`        | boolean | Include or exclude this installed plugin-declared adapter.                                                              |
+| `resume_command` | string  | Override the adapter manifest's resume command template. `{session_id}` is replaced with a shell-quoted raw session ID. |
+
+The `<name>` segment is the Agent Sessions name declared by `[agent-sessions] name`, not a fixed OpenMUX-owned list. For example, a plugin with `[plugin] command = "agent-sessions.opencode"` and `[agent-sessions] name = "opencode"` is configured under `[agent-sessions.external.opencode]`.
+
+Built-in and plugin adapters can coexist. If you want a community plugin to replace a bundled adapter for the same agent name, disable the built-in adapter and leave the external adapter enabled:
+
+```toml
+[agent-sessions.agents.codex]
+enabled = false
+
+[agent-sessions.external.codex-plus]
+enabled = true
+```
 
 ## `[plugins]` settings
 
@@ -324,12 +355,12 @@ For the plugin ecosystem and extension-pane contract, see [Plugin ecosystem](./p
 
 The bundled Markdown Preview plugin is enabled by default. It demonstrates extension panes by rendering local Markdown to constrained local HTML and asking the control plane to open or update a neighboring pane.
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `enabled` | boolean | Enables the bundled `omux markdown-preview` command and terminal-path activation. Defaults to `true`. |
-| `renderer` | `"builtin"` | Selects the built-in Markdown renderer. |
-| `theme` | `"auto"` \| `"light"` \| `"dark"` | Chooses preview colors. `auto` follows the system color scheme. |
-| `presentation` | `"pane-tab"` \| `"modal"` | Chooses whether new previews open docked in the pane layout or as a floating modal. Defaults to `"pane-tab"`. |
+| Key            | Type                              | Meaning                                                                                                       |
+|----------------|-----------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `enabled`      | boolean                           | Enables the bundled `omux markdown-preview` command and terminal-path activation. Defaults to `true`.         |
+| `renderer`     | `"builtin"`                       | Selects the built-in Markdown renderer.                                                                       |
+| `theme`        | `"auto"` \| `"light"` \| `"dark"` | Chooses preview colors. `auto` follows the system color scheme.                                               |
+| `presentation` | `"pane-tab"` \| `"modal"`         | Chooses whether new previews open docked in the pane layout or as a floating modal. Defaults to `"pane-tab"`. |
 
 Example:
 
@@ -347,8 +378,8 @@ Run `omux markdown-preview README.md --watch` from an OpenMUX pane to open a pre
 
 The bundled AI Status plugin is enabled by default. It translates supported coding-agent and tool signals into OpenMUX pane status indicators without intercepting terminal input.
 
-| Key | Type | Meaning |
-| --- | --- | --- |
+| Key       | Type    | Meaning                                                                            |
+|-----------|---------|------------------------------------------------------------------------------------|
 | `enabled` | boolean | Enables the bundled `omux ai-status` command and adapter host. Defaults to `true`. |
 
 Example:
@@ -364,9 +395,9 @@ See [AI Status](./plugins/ai-status.md) for hook setup, supported adapters, wrap
 
 Extension registry URLs configure where `omux hooks` and `omux plugins` discover remote packages. Official registries are used by default.
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `hooks` | array of URL strings | Hook registries used by `omux hooks discover/install`. Defaults to `https://github.com/finger-gun/omux-hooks`. |
+| Key       | Type                 | Meaning                                                                                                              |
+|-----------|----------------------|----------------------------------------------------------------------------------------------------------------------|
+| `hooks`   | array of URL strings | Hook registries used by `omux hooks discover/install`. Defaults to `https://github.com/finger-gun/omux-hooks`.       |
 | `plugins` | array of URL strings | Plugin registries used by `omux plugins discover/install`. Defaults to `https://github.com/finger-gun/omux-plugins`. |
 
 Example:
@@ -385,9 +416,9 @@ Registry installs copy package files into `~/.omux/hooks/` or `~/.omux/plugins/`
 
 OpenMUX currently models these workspace settings directly:
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `default_root_path` | string | Default workspace root used when OpenMUX opens a workspace without an explicit path. |
+| Key                     | Type    | Meaning                                                                                               |
+|-------------------------|---------|-------------------------------------------------------------------------------------------------------|
+| `default_root_path`     | string  | Default workspace root used when OpenMUX opens a workspace without an explicit path.                  |
 | `isolate_shell_history` | boolean | Use a workspace-scoped shell history file for OpenMUX-launched terminal sessions. Defaults to `true`. |
 
 ### `workspace.default_root_path`
@@ -428,9 +459,9 @@ Shell startup files can still affect history behavior. For non-zsh shells, or fo
 
 ## `[ui.panes]` settings
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `inactive_opacity` | number from `0.0` to `1.0` | Opacity for inactive pane cards. Defaults to `0.5`; set to `1.0` to disable dimming. |
+| Key                 | Type                                        | Meaning                                                                                                                                                                   |
+|---------------------|---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `inactive_opacity`  | number from `0.0` to `1.0`                  | Opacity for inactive pane cards. Defaults to `0.5`; set to `1.0` to disable dimming.                                                                                      |
 | `idle_status_clear` | `"on-focus"`, `"after-delay"`, or `"never"` | Controls when an idle status orb is removed after a pane reports idle/completed status. Defaults to `"on-focus"` so background panes keep their orb until you focus them. |
 
 Set it from the CLI with:
@@ -443,12 +474,12 @@ omux config inactive-opacity 0.7
 
 OpenMUX can show lightweight project/session icons in workspace rows, terminal rows, and pane tabs. Icons are decorative context; the text title remains the primary identifier.
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `enabled` | boolean | Enables semantic icons. Defaults to `true`. |
-| `provider` | `"nerd-font"` \| `"sf-symbols"` \| `"text"` | Preferred icon rendering provider. Defaults to `"nerd-font"`. |
-| `colors_enabled` | boolean | Tints icons from semantic theme colors. Defaults to `true`; set to `false` to use normal label colors. |
-| `font_family` | string | Optional Nerd Font family override for icon glyphs. |
+| Key              | Type                                        | Meaning                                                                                                |
+|------------------|---------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `enabled`        | boolean                                     | Enables semantic icons. Defaults to `true`.                                                            |
+| `provider`       | `"nerd-font"` \| `"sf-symbols"` \| `"text"` | Preferred icon rendering provider. Defaults to `"nerd-font"`.                                          |
+| `colors_enabled` | boolean                                     | Tints icons from semantic theme colors. Defaults to `true`; set to `false` to use normal label colors. |
+| `font_family`    | string                                      | Optional Nerd Font family override for icon glyphs.                                                    |
 
 The Nerd Font provider uses a bundled `Symbols Nerd Font Mono` resource for common developer contexts such as Node, Swift, Rust, Go, Python, Docker, Git, terminal, workspace, AI/Copilot sessions, and common terminal apps such as Helix, Vim, Neovim, tmux, and SSH. Users do not need to install Nerd Fonts separately. Icons are tinted from the active theme's ANSI palette, such as green for Node/editors, cyan for Docker/Go/SSH, red for Git/Rust/Swift, and magenta for AI sessions, with contrast-safe fallback on selected rows. Set `colors_enabled = false` to keep icons in the same color as surrounding labels. Set `font_family` only if you want OpenMUX to prefer another installed Nerd Font; if that font cannot render a glyph, OpenMUX falls back to the bundled font and then to simple text/SF Symbol-style representations so the UI remains readable. The bundled Nerd Fonts Symbols Only license is included with the app resources.
 
@@ -487,32 +518,32 @@ Chord syntax:
 
 Supported action identifiers:
 
-| Action | Meaning |
-| --- | --- |
-| `command-palette.workspace` | Open the command palette in workspace search mode. |
-| `command-palette.command` | Open the command palette in command search mode with `>` prefilled. |
-| `workspace.create` | Create a workspace. |
-| `workspace.close` | Close/delete the active workspace. |
-| `workspace.previous` | Focus the previously focused workspace. |
-| `workspace.move-up` | Move the active workspace up. |
-| `workspace.move-down` | Move the active workspace down. |
-| `workspace.focus-1` ... `workspace.focus-9` | Focus a workspace by visible order. |
-| `sidebar.toggle` | Toggle the workspace column. |
-| `pane.split-right` | Split the focused pane to the right. |
-| `pane.split-down` | Split the focused pane downward. |
-| `pane.remove` | Remove the active pane. |
-| `pane.next` | Focus the next visible pane. |
-| `pane.previous` | Focus the previous visible pane. |
-| `pane.resize-equalize` | Equalize split sizes in the active tab. |
-| `pane.resize-up` | Move the active split divider up. |
-| `pane.resize-down` | Move the active split divider down. |
-| `pane.resize-left` | Move the active split divider left. |
-| `pane.resize-right` | Move the active split divider right. |
-| `pane-tab.create` | Create a pane-local tab. |
-| `pane-tab.create-worktree` | Create a git worktree branch and open it in a pane-local tab. |
-| `pane-tab.close` | Close the active pane-local tab. |
-| `pane-tab.next` | Focus the next pane-local tab. |
-| `pane-tab.previous` | Focus the previous pane-local tab. |
+| Action                                      | Meaning                                                             |
+|---------------------------------------------|---------------------------------------------------------------------|
+| `command-palette.workspace`                 | Open the command palette in workspace search mode.                  |
+| `command-palette.command`                   | Open the command palette in command search mode with `>` prefilled. |
+| `workspace.create`                          | Create a workspace.                                                 |
+| `workspace.close`                           | Close/delete the active workspace.                                  |
+| `workspace.previous`                        | Focus the previously focused workspace.                             |
+| `workspace.move-up`                         | Move the active workspace up.                                       |
+| `workspace.move-down`                       | Move the active workspace down.                                     |
+| `workspace.focus-1` ... `workspace.focus-9` | Focus a workspace by visible order.                                 |
+| `sidebar.toggle`                            | Toggle the workspace column.                                        |
+| `pane.split-right`                          | Split the focused pane to the right.                                |
+| `pane.split-down`                           | Split the focused pane downward.                                    |
+| `pane.remove`                               | Remove the active pane.                                             |
+| `pane.next`                                 | Focus the next visible pane.                                        |
+| `pane.previous`                             | Focus the previous visible pane.                                    |
+| `pane.resize-equalize`                      | Equalize split sizes in the active tab.                             |
+| `pane.resize-up`                            | Move the active split divider up.                                   |
+| `pane.resize-down`                          | Move the active split divider down.                                 |
+| `pane.resize-left`                          | Move the active split divider left.                                 |
+| `pane.resize-right`                         | Move the active split divider right.                                |
+| `pane-tab.create`                           | Create a pane-local tab.                                            |
+| `pane-tab.create-worktree`                  | Create a git worktree branch and open it in a pane-local tab.       |
+| `pane-tab.close`                            | Close the active pane-local tab.                                    |
+| `pane-tab.next`                             | Focus the next pane-local tab.                                      |
+| `pane-tab.previous`                         | Focus the previous pane-local tab.                                  |
 
 Default bindings are generated by `omux config init`. In the palette, a first-character `>` switches to command search; whitespace before `>` remains workspace search text. Notably, OpenMUX does **not** bind `cmd+shift+backspace` by default; modified Backspace remains terminal-owned unless you explicitly bind it.
 

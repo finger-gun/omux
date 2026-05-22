@@ -125,13 +125,14 @@ struct OmuxCLIPluginRegistry {
 
     static func isValidCommandName(_ value: String) -> Bool {
         guard value.isEmpty == false,
-              value.first != "-"
+              value.first != "-",
+              value.first != "."
         else {
             return false
         }
 
         return value.allSatisfy { character in
-            character.isLetter || character.isNumber || character == "-" || character == "_"
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
         }
     }
 }

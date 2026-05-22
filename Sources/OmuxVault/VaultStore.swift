@@ -23,19 +23,33 @@ public actor VaultStore {
         }
 
         var warnings: [String] = []
-        let activeAdapters = adapters.filter { adapter in
-            configuration.includedAgents.contains(adapter.kind) && (filter == nil || filter == adapter.kind)
-        }
-        for adapter in activeAdapters {
+        for adapter in adapters {
+            let isInScope = filter == nil || filter == adapter.kind
+            guard isInScope else {
+                continue
+            }
+            let isActive = (adapter.isExternal || configuration.includedAgents.contains(adapter.kind))
             do {
-                let sessions = try await adapter.discoverSessions()
-                let visibleSessions = sessions.filter { shouldExclude($0.summary) == false }
+                let visibleSessions: [VaultIndexedSession]
+                if isActive {
+                    let sessions = try await adapter.discoverSessions()
+                    visibleSessions = sessions.filter { shouldExclude($0.summary) == false }
+                } else {
+                    visibleSessions = []
+                }
                 let indexedSourceKinds = Set(visibleSessions.map(\.summary.sourceKind))
                 try database.inTransaction {
                     for session in visibleSessions {
                         try upsert(session.summary)
                     }
                     try cleanupObsoleteSourceKinds(for: adapter.kind, indexedSourceKinds: indexedSourceKinds)
+                    for prefix in adapter.sourceKindPrefixes where prefix.isEmpty == false {
+                        try cleanupObsoleteSourceKindPrefixes(
+                            for: adapter.kind,
+                            prefix: prefix,
+                            indexedSourceKinds: indexedSourceKinds
+                        )
+                    }
                 }
             } catch {
                 warnings.append("\(adapter.kind.rawValue): \(error)")
@@ -141,7 +155,7 @@ public actor VaultStore {
             kind: session.agent,
             sessionID: rawID,
             workingDirectory: session.workingDirectory,
-            resumeCommand: configuration.resumeCommand(for: session.agent, sessionID: rawID)
+            resumeCommand: resumeCommand(for: session.agent, sessionID: rawID, sourceKind: session.sourceKind)
         )
     }
 
@@ -243,6 +257,32 @@ public actor VaultStore {
         }
     }
 
+    private func cleanupObsoleteSourceKindPrefixes(for agent: VaultAgentKind, prefix: String, indexedSourceKinds: Set<String>) throws {
+        let indexed = indexedSourceKinds.filter { $0.hasPrefix(prefix) }
+        if indexed.isEmpty {
+            try database.write(
+                "DELETE FROM agent_sessions WHERE agent = ? AND source_kind LIKE ? ESCAPE '\\'",
+                bindings: [.string(agent.rawValue), .string(sqlLikeEscaped(prefix) + "%")]
+            )
+            return
+        }
+        let placeholders = indexed.map { _ in "?" }.joined(separator: ", ")
+        var bindings: [SQLiteBinding] = [
+            .string(agent.rawValue),
+            .string(sqlLikeEscaped(prefix) + "%"),
+        ]
+        bindings += indexed.map(SQLiteBinding.string)
+        try database.write(
+            """
+            DELETE FROM agent_sessions
+            WHERE agent = ?
+              AND source_kind LIKE ? ESCAPE '\\'
+              AND source_kind NOT IN (\(placeholders))
+            """,
+            bindings: bindings
+        )
+    }
+
     private func count(_ sql: String, bindings: [SQLiteBinding]) throws -> Int {
         try database.query(sql, bindings: bindings) { statement in
             Int(sqliteInt(statement, 0))
@@ -261,8 +301,29 @@ public actor VaultStore {
             workingDirectory: sqliteText(statement, 5),
             modifiedAt: Date(timeIntervalSince1970: TimeInterval(sqliteInt(statement, 6)) / 1000),
             previewAvailable: false,
-            resumeAvailable: configuration.resumeCommand(for: agent, sessionID: rawID) != nil
+            resumeAvailable: resumeCommand(for: agent, sessionID: rawID, sourceKind: sqliteText(statement, 2)) != nil
         )
+    }
+
+    private func resumeCommand(for agent: VaultAgentKind, sessionID: String, sourceKind: String?) -> String? {
+        if let sourceKind,
+           let sourceMatchedAdapter = adapters.first(where: { adapter in
+               adapter.sourceKindPrefixes.contains(where: { prefix in
+                   prefix.isEmpty == false && sourceKind.hasPrefix(prefix)
+               })
+           }),
+           let template = sourceMatchedAdapter.resumeCommandTemplate {
+            return template.replacingOccurrences(of: "{session_id}", with: shellQuoted(sessionID))
+        }
+
+        if let command = configuration.resumeCommand(for: agent, sessionID: sessionID) {
+            return command
+        }
+        let adapter = adapters.first { $0.kind == agent }
+        guard let template = adapter?.resumeCommandTemplate else {
+            return nil
+        }
+        return template.replacingOccurrences(of: "{session_id}", with: shellQuoted(sessionID))
     }
 
     private func shouldExclude(_ summary: VaultSessionSummary) -> Bool {
@@ -305,6 +366,10 @@ private func expandHome(_ path: String) -> String {
         return FileManager.default.homeDirectoryForCurrentUser.path + String(path.dropFirst())
     }
     return path
+}
+
+private func shellQuoted(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
 extension JSONEncoder {

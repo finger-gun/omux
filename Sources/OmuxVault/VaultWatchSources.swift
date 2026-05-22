@@ -36,19 +36,13 @@ public enum VaultWatchSourceFactory {
         switch agent {
         case .codex:
             return [home]
-        case .claude:
-            return [home.appendingPathComponent("projects", isDirectory: true)]
-        case .opencode:
-            return [home]
-        case .pi:
-            return [home]
-        case .rovodev:
-            return [home]
         case .copilot:
             return [home]
         case .gemini:
             return [home.appendingPathComponent("tmp", isDirectory: true)]
         case .custom:
+            return []
+        case .external:
             return []
         }
     }

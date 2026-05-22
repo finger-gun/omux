@@ -170,9 +170,9 @@ enum OmuxExtensionRegistryError: Error, CustomStringConvertible, Equatable {
 
 enum OmuxExtensionPackageValidator {
     static func validatePackageID(_ value: String) -> Bool {
-        guard value.isEmpty == false, value.first != "-" else { return false }
+        guard value.isEmpty == false, value.first != "-", value.first != "." else { return false }
         return value.allSatisfy { character in
-            character.isLetter || character.isNumber || character == "-" || character == "_"
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
         }
     }
 
@@ -237,7 +237,8 @@ struct OmuxExtensionCatalogClient {
             .filter { $0.hasPrefix("packages.") }
             .sorted()
             .map { tableName in
-                let id = String(tableName.dropFirst("packages.".count))
+                let rawID = String(tableName.dropFirst("packages.".count))
+                let id = Self.normalizedCatalogKey(rawID)
                 guard OmuxExtensionPackageValidator.validatePackageID(id) else {
                     throw OmuxExtensionRegistryError.invalidCatalog("invalid package id \(id)")
                 }
@@ -263,6 +264,21 @@ struct OmuxExtensionCatalogClient {
                     tags: tags
                 )
             }
+    }
+
+    private static func normalizedCatalogKey(_ value: String) -> String {
+        let unescapedQuotes = value.replacingOccurrences(of: "\\\"", with: "\"")
+        guard unescapedQuotes.count >= 2,
+              let first = unescapedQuotes.first,
+              let last = unescapedQuotes.last,
+              (first == "\"" && last == "\"") || (first == "'" && last == "'")
+        else {
+            return unescapedQuotes
+        }
+
+        let start = unescapedQuotes.index(after: unescapedQuotes.startIndex)
+        let end = unescapedQuotes.index(before: unescapedQuotes.endIndex)
+        return String(unescapedQuotes[start..<end])
     }
 
     private func parseManifest(data: Data, expected: OmuxExtensionCatalogPackage) throws -> OmuxExtensionPackageManifest {

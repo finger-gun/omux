@@ -811,6 +811,56 @@ struct OmuxConfigTests {
         #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
     }
 
+    @Test
+    func agentSessionsConfigParsesExternalAdapters() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent-sessions]
+            external_adapters_enabled = false
+
+            [agent-sessions.external.omp]
+            enabled = true
+            resume_command = "omp --resume {session_id}"
+
+            [agent-sessions.external.experimental]
+            enabled = false
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agentSessions.externalAdaptersEnabled == false)
+        #expect(result.config.agentSessions.externalAdapters["omp"]?.enabled == true)
+        #expect(result.config.agentSessions.externalAdapters["omp"]?.resumeCommand == "omp --resume {session_id}")
+        #expect(result.config.agentSessions.externalAdapters["experimental"]?.enabled == false)
+    }
+
+    @Test
+    func agentSessionsIncludedAgentsRejectsPluginNames() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent-sessions]
+            included_agents = ["codex", "omp"]
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == true)
+        #expect(result.diagnostics.contains { $0.message.contains("included_agents contains unsupported built-in agent 'omp'") })
+    }
+
 }
 
 private func temporaryMissingConfigURL() -> URL {
