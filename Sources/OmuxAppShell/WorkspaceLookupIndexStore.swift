@@ -81,10 +81,16 @@ struct WorkspaceLookupIndexStore: WorkspaceStateIndexing {
         in workspaces: [Workspace]
     ) -> Int? {
         ensureIndexes(in: workspaces)
-        guard let index = workspaceIndexByID[workspaceID], workspaces.indices.contains(index) else {
+        guard let index = workspaceIndexByID[workspaceID],
+              workspaces.indices.contains(index),
+              workspaces[index].id == workspaceID
+        else {
             invalidate()
             ensureIndexes(in: workspaces)
-            guard let rebuilt = workspaceIndexByID[workspaceID], workspaces.indices.contains(rebuilt) else {
+            guard let rebuilt = workspaceIndexByID[workspaceID],
+                  workspaces.indices.contains(rebuilt),
+                  workspaces[rebuilt].id == workspaceID
+            else {
                 return nil
             }
             return rebuilt

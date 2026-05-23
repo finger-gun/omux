@@ -23,7 +23,15 @@ enum WorkspaceWindowFloatingModalDropResolver {
 }
 
 enum WorkspaceSidebarDragPlanner {
+    /// Returns the insertion index for `pointerY` in `candidateCenterYs`.
+    ///
+    /// - Precondition: `candidateCenterYs` is sorted in descending (high-to-low) Y order.
     static func insertionIndex(candidateCenterYs: [CGFloat], pointerY: CGFloat) -> Int {
+        assert(
+            zip(candidateCenterYs, candidateCenterYs.dropFirst()).allSatisfy { $0 >= $1 },
+            "candidateCenterYs must be sorted in descending Y order"
+        )
+
         for (index, centerY) in candidateCenterYs.enumerated() {
             if pointerY >= centerY {
                 return index
