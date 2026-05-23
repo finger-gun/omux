@@ -245,7 +245,7 @@ Key boundary rules:
 - Control-plane event names are OpenMUX-native (`terminal.cwdChanged`, `workspace.opened`, `command.started`, and so on) and are defined without committing to a long-lived streaming transport.
 - Unsupported and app-shell ownership actions remain rejected by default.
 
-For user-facing surface coverage, see [Open by Design](./open-by-design.md). For the complete hook catalog and payload contracts, see [Hooks](./hooks.md).
+For user-facing surface coverage, see [Open by Design](./open-by-design.md). For the full event catalog, see [Events](./events.md). For the complete hook catalog and payload contracts, see [Hooks](./hooks.md).
 
 ## User hook directories
 

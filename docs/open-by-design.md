@@ -10,7 +10,7 @@ OpenMUX exposes three complementary automation surfaces. A fully open transition
 
 **Hooks** are push notifications to user-installed executables under `~/.omux/hooks/`. When a transition happens, OpenMUX launches registered handlers and pipes a JSON payload to stdin. Hooks are for reactions: "when a command fails, notify me." See the [hook reference](./hooks.md).
 
-**Control plane events** are structured messages on the `omux events` JSON-RPC stream. A long-running process (dashboard, status widget, monitoring script) subscribes once and filters the stream. Events are for observation without per-occurrence process overhead. See the [development notes](./development.md#control-plane-event-stream).
+**Control plane events** are structured messages on the `omux events` JSON-RPC stream. A long-running process (dashboard, status widget, monitoring script) subscribes once and filters the stream. Events are for observation without per-occurrence process overhead. See the [event reference](./events.md).
 
 **CLI verbs** are the pull interface: query state, trigger actions, inspect the workspace. `omux split`, `omux run`, `omux config get`. CLI verbs are for scripts and tools that want to make something happen or inspect current state on demand.
 
