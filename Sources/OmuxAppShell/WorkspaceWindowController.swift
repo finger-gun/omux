@@ -2954,20 +2954,11 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func floatingModalRootSplitDirection(for frame: NSRect) -> PaneSplitDropDirection? {
-        let bounds = floatingModalOverlayView.bounds
-        guard bounds.width > 0, bounds.height > 0 else {
-            return nil
-        }
-
-        let threshold = PaneSplitDropIntentResolver.outerEdgeThreshold
-        let candidates: [(PaneSplitDropDirection, CGFloat)] = [
-            (.left, frame.minX),
-            (.right, bounds.maxX - frame.maxX),
-            (.up, frame.minY),
-            (.down, bounds.maxY - frame.maxY),
-        ].filter { $0.1 <= threshold }
-
-        return candidates.min { $0.1 < $1.1 }?.0
+        WorkspaceWindowFloatingModalDropResolver.rootSplitDirection(
+            frame: frame,
+            overlayBounds: floatingModalOverlayView.bounds,
+            threshold: PaneSplitDropIntentResolver.outerEdgeThreshold
+        )
     }
 
     // MARK: - Pane Tab Drag
@@ -3885,13 +3876,13 @@ private final class WorkspaceSidebarSectionView: NSView {
         }
 
         let candidateButtons = workspaceButtons.filter { $0.workspaceID != draggingWorkspaceID }
-        for (index, button) in candidateButtons.enumerated() {
-            let center = button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
-            if event.locationInWindow.y >= center.y {
-                return index
-            }
+        let candidateCenterYs = candidateButtons.map { button in
+            button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil).y
         }
-        return candidateButtons.count
+        return WorkspaceSidebarDragPlanner.insertionIndex(
+            candidateCenterYs: candidateCenterYs,
+            pointerY: event.locationInWindow.y
+        )
     }
 
     private func updateWorkspaceDragAppearance() {

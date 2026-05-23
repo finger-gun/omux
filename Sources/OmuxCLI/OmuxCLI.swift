@@ -2465,18 +2465,7 @@ struct ThemePickerSearch {
     }
 
     private static func matches(term: String, in candidate: String) -> Bool {
-        if candidate.contains(term) {
-            return true
-        }
-
-        var remaining = term[...]
-        for character in candidate where remaining.first == character {
-            remaining.removeFirst()
-            if remaining.isEmpty {
-                return true
-            }
-        }
-        return remaining.isEmpty
+        TerminalInteractivePickerSearchMatcher.matches(term: term, in: candidate)
     }
 }
 
@@ -2586,6 +2575,8 @@ private struct VaultResumeChoiceRequest {
     }
 }
 
+// Kept separate from TerminalInteractivePickerEngine because this picker has
+// fixed actions, no search filtering, and mismatch-specific context framing.
 private struct TerminalVaultResumeChoicePicker {
     enum PickerError: Error, LocalizedError {
         case terminalUnavailable
@@ -2787,306 +2778,50 @@ private struct TerminalVaultResumeChoicePicker {
 }
 
 private struct TerminalThemePicker {
-    enum PickerError: Error, LocalizedError {
-        case terminalUnavailable
-        case unableToReadTerminalAttributes
-        case unableToEnterRawMode
-        case unableToRestoreTerminalMode
-
-        var errorDescription: String? {
-            switch self {
-            case .terminalUnavailable:
-                return "interactive terminal is not available"
-            case .unableToReadTerminalAttributes:
-                return "unable to read terminal attributes"
-            case .unableToEnterRawMode:
-                return "unable to enter raw terminal mode"
-            case .unableToRestoreTerminalMode:
-                return "unable to restore terminal mode"
-            }
-        }
-    }
-
-    private enum Key {
-        case up
-        case down
-        case enter
-        case cancel
-        case backspace
-        case character(Character)
-        case other
-    }
-
     static func isAvailable() -> Bool {
-        isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+        TerminalInteractivePickerEngine<OmuxTheme>.isAvailable()
     }
 
     func selectTheme(themes: [OmuxTheme], currentThemeName: String?) throws -> OmuxTheme? {
-        guard Self.isAvailable() else {
-            throw PickerError.terminalUnavailable
-        }
         guard themes.isEmpty == false else {
             return nil
         }
 
-        var selectedIndex = themes.firstIndex(where: { $0.name == currentThemeName }) ?? 0
-        var query = ""
-        var filteredThemes = ThemePickerSearch.filteredThemes(themes, query: query)
-        var renderedLineCount = 0
-
-        return try withRawTerminalMode {
-            write("\u{1B}[?25l")
-            defer {
-                clearRenderedLines(renderedLineCount)
-                write("\u{1B}[?25h")
-            }
-
-            render(
-                themes: filteredThemes,
-                totalThemeCount: themes.count,
-                selectedIndex: selectedIndex,
-                currentThemeName: currentThemeName,
-                searchQuery: query,
-                previousLineCount: &renderedLineCount
-            )
-
-            while true {
-                switch readKey() {
-                case .up:
-                    guard filteredThemes.isEmpty == false else {
-                        continue
-                    }
-                    selectedIndex = selectedIndex == 0 ? filteredThemes.count - 1 : selectedIndex - 1
-                    render(
-                        themes: filteredThemes,
-                        totalThemeCount: themes.count,
-                        selectedIndex: selectedIndex,
-                        currentThemeName: currentThemeName,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .down:
-                    guard filteredThemes.isEmpty == false else {
-                        continue
-                    }
-                    selectedIndex = selectedIndex == filteredThemes.count - 1 ? 0 : selectedIndex + 1
-                    render(
-                        themes: filteredThemes,
-                        totalThemeCount: themes.count,
-                        selectedIndex: selectedIndex,
-                        currentThemeName: currentThemeName,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .enter:
-                    guard filteredThemes.isEmpty == false else {
-                        continue
-                    }
-                    return filteredThemes[selectedIndex]
-                case .cancel:
-                    return nil
-                case .backspace:
-                    guard query.isEmpty == false else {
-                        continue
-                    }
-                    query.removeLast()
-                    filteredThemes = ThemePickerSearch.filteredThemes(themes, query: query)
-                    selectedIndex = min(selectedIndex, max(0, filteredThemes.count - 1))
-                    render(
-                        themes: filteredThemes,
-                        totalThemeCount: themes.count,
-                        selectedIndex: selectedIndex,
-                        currentThemeName: currentThemeName,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .character(let character):
-                    query.append(character)
-                    filteredThemes = ThemePickerSearch.filteredThemes(themes, query: query)
-                    selectedIndex = 0
-                    render(
-                        themes: filteredThemes,
-                        totalThemeCount: themes.count,
-                        selectedIndex: selectedIndex,
-                        currentThemeName: currentThemeName,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .other:
-                    continue
-                }
-            }
-        }
-    }
-
-    private func withRawTerminalMode<Result>(_ body: () throws -> Result) throws -> Result {
-        var original = termios()
-        guard tcgetattr(STDIN_FILENO, &original) == 0 else {
-            throw PickerError.unableToReadTerminalAttributes
-        }
-
-        var raw = original
-        cfmakeraw(&raw)
-        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
-            throw PickerError.unableToEnterRawMode
-        }
-
-        do {
-            let result = try body()
-            guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) == 0 else {
-                throw PickerError.unableToRestoreTerminalMode
-            }
-            return result
-        } catch {
-            _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
-            throw error
-        }
-    }
-
-    private func render(
-        themes: [OmuxTheme],
-        totalThemeCount: Int,
-        selectedIndex: Int,
-        currentThemeName: String?,
-        searchQuery: String,
-        previousLineCount: inout Int
-    ) {
-        clearRenderedLines(previousLineCount)
-
-        let viewport = ThemePickerViewport.make(
-            itemCount: themes.count,
-            selectedIndex: selectedIndex,
-            terminalRows: terminalRowCount(),
-            reservedRows: 3
-        )
-        let selectedOrdinal = themes.isEmpty ? 0 : min(max(0, selectedIndex), themes.count - 1) + 1
-        let searchHint = searchQuery.isEmpty
+        let engine = TerminalInteractivePickerEngine<OmuxTheme>(
+            allItems: themes,
+            initialSelectedIndex: themes.firstIndex(where: { $0.name == currentThemeName }) ?? 0,
+            filterItems: ThemePickerSearch.filteredThemes,
+            renderLines: { state in
+                let selectedOrdinal = state.items.isEmpty ? 0 : min(max(0, state.selectedIndex), state.items.count - 1) + 1
+                let searchHint = state.searchQuery.isEmpty
             ? "type to search, Up/Down, Enter, Esc"
             : "type to search, Backspace, Enter, Esc"
-        let countLabel = themes.count == totalThemeCount
-            ? "\(selectedOrdinal)/\(themes.count)"
-            : "\(selectedOrdinal)/\(themes.count) of \(totalThemeCount)"
-        var lines = ["Available themes \(countLabel) (\(searchHint)):"]
-        lines.append("Search: \(searchQuery)")
+                let countLabel = state.items.count == state.totalItemCount
+                    ? "\(selectedOrdinal)/\(state.items.count)"
+                    : "\(selectedOrdinal)/\(state.items.count) of \(state.totalItemCount)"
+                var lines = ["Available themes \(countLabel) (\(searchHint)):"]
+                lines.append("Search: \(state.searchQuery)")
 
-        if themes.isEmpty {
-            lines.append("  No matching themes")
-        } else {
-            for index in viewport.startIndex..<viewport.endIndex {
-                let theme = themes[index]
-                let currentMarker = theme.name == currentThemeName ? "*" : " "
-                let pointer = index == selectedIndex ? ">" : " "
-                let line = "\(pointer)\(currentMarker) \(theme.name) — \(theme.displayName)"
-                lines.append(index == selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
-            }
-        }
-
-        if viewport.visibleCount < themes.count {
-            lines.append("Showing \(viewport.startIndex + 1)-\(viewport.endIndex) of \(themes.count)")
-        }
-
-        write(lines.map { "\u{1B}[2K\r\($0)" }.joined(separator: "\n") + "\n")
-        previousLineCount = lines.count
-    }
-
-    private func terminalRowCount() -> Int {
-        var size = winsize()
-        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0 else {
-            return 24
-        }
-        return Int(size.ws_row)
-    }
-
-    private func clearRenderedLines(_ lineCount: Int) {
-        guard lineCount > 0 else {
-            return
-        }
-
-        write("\u{1B}[\(lineCount)A")
-        for index in 0..<lineCount {
-            write("\u{1B}[2K\r")
-            if index < lineCount - 1 {
-                write("\u{1B}[1B")
-            }
-        }
-        write("\u{1B}[\(lineCount - 1)A")
-    }
-
-    private func readKey() -> Key {
-        guard let byte = readByte() else {
-            return .cancel
-        }
-
-        switch byte {
-        case 0x03:
-            return .cancel
-        case 0x0A, 0x0D:
-            return .enter
-        case 0x08, 0x7F:
-            return .backspace
-        case 0x1B:
-            guard let second = readByte(timeoutMicroseconds: 50_000) else {
-                return .cancel
-            }
-            guard second == 0x5B, let third = readByte(timeoutMicroseconds: 50_000) else {
-                return .cancel
-            }
-            if third == 0x41 {
-                return .up
-            }
-            if third == 0x42 {
-                return .down
-            }
-            return .other
-        case 0x6A:
-            return .down
-        case 0x6B:
-            return .up
-        case 0x20...0x7E:
-            guard let scalar = UnicodeScalar(Int(byte)) else {
-                return .other
-            }
-            return .character(Character(scalar))
-        default:
-            return .other
-        }
-    }
-
-    private func readByte(timeoutMicroseconds: Int? = nil) -> UInt8? {
-        if let timeoutMicroseconds {
-            let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
-            guard flags >= 0 else {
-                return nil
-            }
-            guard fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-                return nil
-            }
-            defer {
-                _ = fcntl(STDIN_FILENO, F_SETFL, flags)
-            }
-
-            let deadline = Date().addingTimeInterval(Double(timeoutMicroseconds) / 1_000_000)
-            while Date() < deadline {
-                var byte: UInt8 = 0
-                let count = Darwin.read(STDIN_FILENO, &byte, 1)
-                if count == 1 {
-                    return byte
+                if state.items.isEmpty {
+                    lines.append("  No matching themes")
+                } else {
+                    for index in state.viewport.startIndex..<state.viewport.endIndex {
+                        let theme = state.items[index]
+                        let currentMarker = theme.name == currentThemeName ? "*" : " "
+                        let pointer = index == state.selectedIndex ? ">" : " "
+                        let line = "\(pointer)\(currentMarker) \(theme.name) — \(theme.displayName)"
+                        lines.append(index == state.selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
+                    }
                 }
-                if errno != EAGAIN && errno != EWOULDBLOCK {
-                    return nil
+
+                if state.viewport.visibleCount < state.items.count {
+                    lines.append("Showing \(state.viewport.startIndex + 1)-\(state.viewport.endIndex) of \(state.items.count)")
                 }
-                usleep(1_000)
+
+                return lines
             }
-            return nil
-        }
-
-        var byte: UInt8 = 0
-        let count = Darwin.read(STDIN_FILENO, &byte, 1)
-        return count == 1 ? byte : nil
-    }
-
-    private func write(_ text: String) {
-        FileHandle.standardOutput.write(Data(text.utf8))
+        )
+        return try engine.select()
     }
 }
 
@@ -3175,315 +2910,54 @@ struct PluginPickerSearch {
     }
 
     private static func matches(term: String, in candidate: String) -> Bool {
-        if candidate.contains(term) {
-            return true
-        }
-
-        var remaining = term[...]
-        for character in candidate where remaining.first == character {
-            remaining.removeFirst()
-            if remaining.isEmpty {
-                return true
-            }
-        }
-        return remaining.isEmpty
+        TerminalInteractivePickerSearchMatcher.matches(term: term, in: candidate)
     }
 }
 
 private struct TerminalPluginPicker {
-    enum PickerError: Error, LocalizedError {
-        case terminalUnavailable
-        case unableToReadTerminalAttributes
-        case unableToEnterRawMode
-        case unableToRestoreTerminalMode
-
-        var errorDescription: String? {
-            switch self {
-            case .terminalUnavailable:
-                return "interactive terminal is not available"
-            case .unableToReadTerminalAttributes:
-                return "unable to read terminal attributes"
-            case .unableToEnterRawMode:
-                return "unable to enter raw terminal mode"
-            case .unableToRestoreTerminalMode:
-                return "unable to restore terminal mode"
-            }
-        }
-    }
-
-    private enum Key {
-        case up
-        case down
-        case enter
-        case cancel
-        case backspace
-        case character(Character)
-        case other
-    }
-
     static func isAvailable() -> Bool {
-        isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
+        TerminalInteractivePickerEngine<PluginPickerItem>.isAvailable()
     }
 
     func selectPlugin(items: [PluginPickerItem]) throws -> PluginPickerItem? {
-        guard Self.isAvailable() else {
-            throw PickerError.terminalUnavailable
-        }
         guard items.isEmpty == false else {
             return nil
         }
 
-        var selectedIndex = 0
-        var query = ""
-        var filteredItems = PluginPickerSearch.filteredItems(items, query: query)
-        var renderedLineCount = 0
-
-        return try withRawTerminalMode {
-            write("\u{1B}[?25l")
-            defer {
-                clearRenderedLines(renderedLineCount)
-                write("\u{1B}[?25h")
-            }
-
-            render(
-                items: filteredItems,
-                totalItemCount: items.count,
-                selectedIndex: selectedIndex,
-                searchQuery: query,
-                previousLineCount: &renderedLineCount
-            )
-
-            while true {
-                switch readKey() {
-                case .up:
-                    guard filteredItems.isEmpty == false else {
-                        continue
-                    }
-                    selectedIndex = selectedIndex == 0 ? filteredItems.count - 1 : selectedIndex - 1
-                    render(
-                        items: filteredItems,
-                        totalItemCount: items.count,
-                        selectedIndex: selectedIndex,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .down:
-                    guard filteredItems.isEmpty == false else {
-                        continue
-                    }
-                    selectedIndex = selectedIndex == filteredItems.count - 1 ? 0 : selectedIndex + 1
-                    render(
-                        items: filteredItems,
-                        totalItemCount: items.count,
-                        selectedIndex: selectedIndex,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .enter:
-                    guard filteredItems.isEmpty == false else {
-                        continue
-                    }
-                    return filteredItems[selectedIndex]
-                case .cancel:
-                    return nil
-                case .backspace:
-                    guard query.isEmpty == false else {
-                        continue
-                    }
-                    query.removeLast()
-                    filteredItems = PluginPickerSearch.filteredItems(items, query: query)
-                    selectedIndex = min(selectedIndex, max(0, filteredItems.count - 1))
-                    render(
-                        items: filteredItems,
-                        totalItemCount: items.count,
-                        selectedIndex: selectedIndex,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .character(let character):
-                    query.append(character)
-                    filteredItems = PluginPickerSearch.filteredItems(items, query: query)
-                    selectedIndex = 0
-                    render(
-                        items: filteredItems,
-                        totalItemCount: items.count,
-                        selectedIndex: selectedIndex,
-                        searchQuery: query,
-                        previousLineCount: &renderedLineCount
-                    )
-                case .other:
-                    continue
-                }
-            }
-        }
-    }
-
-    private func withRawTerminalMode<Result>(_ body: () throws -> Result) throws -> Result {
-        var original = termios()
-        guard tcgetattr(STDIN_FILENO, &original) == 0 else {
-            throw PickerError.unableToReadTerminalAttributes
-        }
-
-        var raw = original
-        cfmakeraw(&raw)
-        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
-            throw PickerError.unableToEnterRawMode
-        }
-
-        do {
-            let result = try body()
-            guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) == 0 else {
-                throw PickerError.unableToRestoreTerminalMode
-            }
-            return result
-        } catch {
-            _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
-            throw error
-        }
-    }
-
-    private func render(
-        items: [PluginPickerItem],
-        totalItemCount: Int,
-        selectedIndex: Int,
-        searchQuery: String,
-        previousLineCount: inout Int
-    ) {
-        clearRenderedLines(previousLineCount)
-
-        let viewport = ThemePickerViewport.make(
-            itemCount: items.count,
-            selectedIndex: selectedIndex,
-            terminalRows: terminalRowCount(),
-            reservedRows: 3
-        )
-        let selectedOrdinal = items.isEmpty ? 0 : min(max(0, selectedIndex), items.count - 1) + 1
-        let searchHint = searchQuery.isEmpty
+        let engine = TerminalInteractivePickerEngine<PluginPickerItem>(
+            allItems: items,
+            initialSelectedIndex: 0,
+            filterItems: PluginPickerSearch.filteredItems,
+            renderLines: { state in
+                let selectedOrdinal = state.items.isEmpty ? 0 : min(max(0, state.selectedIndex), state.items.count - 1) + 1
+                let searchHint = state.searchQuery.isEmpty
             ? "type to search, Up/Down, Enter toggles, Esc"
             : "type to search, Backspace, Enter toggles, Esc"
-        let countLabel = items.count == totalItemCount
-            ? "\(selectedOrdinal)/\(items.count)"
-            : "\(selectedOrdinal)/\(items.count) of \(totalItemCount)"
-        var lines = ["Available plugins \(countLabel) (\(searchHint)):"]
-        lines.append("Search: \(searchQuery)")
+                let countLabel = state.items.count == state.totalItemCount
+                    ? "\(selectedOrdinal)/\(state.items.count)"
+                    : "\(selectedOrdinal)/\(state.items.count) of \(state.totalItemCount)"
+                var lines = ["Available plugins \(countLabel) (\(searchHint)):"]
+                lines.append("Search: \(state.searchQuery)")
 
-        if items.isEmpty {
-            lines.append("  No matching plugins")
-        } else {
-            for index in viewport.startIndex..<viewport.endIndex {
-                let item = items[index]
-                let pointer = index == selectedIndex ? ">" : " "
-                let line = "\(pointer) \(item.statusLabel) \(item.commandName) — \(item.displayPath)"
-                lines.append(index == selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
-            }
-        }
-
-        if viewport.visibleCount < items.count {
-            lines.append("Showing \(viewport.startIndex + 1)-\(viewport.endIndex) of \(items.count)")
-        }
-
-        write(lines.map { "\u{1B}[2K\r\($0)" }.joined(separator: "\n") + "\n")
-        previousLineCount = lines.count
-    }
-
-    private func terminalRowCount() -> Int {
-        var size = winsize()
-        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0 else {
-            return 24
-        }
-        return Int(size.ws_row)
-    }
-
-    private func clearRenderedLines(_ lineCount: Int) {
-        guard lineCount > 0 else {
-            return
-        }
-
-        write("\u{1B}[\(lineCount)A")
-        for index in 0..<lineCount {
-            write("\u{1B}[2K\r")
-            if index < lineCount - 1 {
-                write("\u{1B}[1B")
-            }
-        }
-        write("\u{1B}[\(lineCount - 1)A")
-    }
-
-    private func readKey() -> Key {
-        guard let byte = readByte() else {
-            return .cancel
-        }
-
-        switch byte {
-        case 0x03:
-            return .cancel
-        case 0x0A, 0x0D:
-            return .enter
-        case 0x08, 0x7F:
-            return .backspace
-        case 0x1B:
-            guard let second = readByte(timeoutMicroseconds: 50_000) else {
-                return .cancel
-            }
-            guard second == 0x5B, let third = readByte(timeoutMicroseconds: 50_000) else {
-                return .cancel
-            }
-            if third == 0x41 {
-                return .up
-            }
-            if third == 0x42 {
-                return .down
-            }
-            return .other
-        case 0x6A:
-            return .down
-        case 0x6B:
-            return .up
-        case 0x20...0x7E:
-            guard let scalar = UnicodeScalar(Int(byte)) else {
-                return .other
-            }
-            return .character(Character(scalar))
-        default:
-            return .other
-        }
-    }
-
-    private func readByte(timeoutMicroseconds: Int? = nil) -> UInt8? {
-        if let timeoutMicroseconds {
-            let flags = fcntl(STDIN_FILENO, F_GETFL, 0)
-            guard flags >= 0 else {
-                return nil
-            }
-            guard fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-                return nil
-            }
-            defer {
-                _ = fcntl(STDIN_FILENO, F_SETFL, flags)
-            }
-
-            let deadline = Date().addingTimeInterval(Double(timeoutMicroseconds) / 1_000_000)
-            while Date() < deadline {
-                var byte: UInt8 = 0
-                let count = Darwin.read(STDIN_FILENO, &byte, 1)
-                if count == 1 {
-                    return byte
+                if state.items.isEmpty {
+                    lines.append("  No matching plugins")
+                } else {
+                    for index in state.viewport.startIndex..<state.viewport.endIndex {
+                        let item = state.items[index]
+                        let pointer = index == state.selectedIndex ? ">" : " "
+                        let line = "\(pointer) \(item.statusLabel) \(item.commandName) — \(item.displayPath)"
+                        lines.append(index == state.selectedIndex ? "\u{1B}[7m\(line)\u{1B}[0m" : line)
+                    }
                 }
-                if errno != EAGAIN && errno != EWOULDBLOCK {
-                    return nil
+
+                if state.viewport.visibleCount < state.items.count {
+                    lines.append("Showing \(state.viewport.startIndex + 1)-\(state.viewport.endIndex) of \(state.items.count)")
                 }
-                usleep(1_000)
+
+                return lines
             }
-            return nil
-        }
-
-        var byte: UInt8 = 0
-        let count = Darwin.read(STDIN_FILENO, &byte, 1)
-        return count == 1 ? byte : nil
-    }
-
-    private func write(_ text: String) {
-        FileHandle.standardOutput.write(Data(text.utf8))
+        )
+        return try engine.select()
     }
 }
 

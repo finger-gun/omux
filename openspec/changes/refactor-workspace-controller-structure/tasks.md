@@ -15,20 +15,20 @@
 
 ## 3. Workspace Window Shell Boundary Extraction
 
-- [ ] 3.1 Identify the first shell/view-host extraction seam inside `WorkspaceWindowController` and split it into a dedicated shell-owned module without changing behavior.
-- [ ] 3.2 Extract at least one additional shell subdomain from `WorkspaceWindowController` such as sidebar/canvas composition, floating modal hosting, or pane chrome helpers.
-- [ ] 3.3 Add or reorganize shell parity tests so extracted shell/view-host slices are validated without relying only on one monolithic app-shell test file.
-- [ ] 3.4 Verify shell extraction preserves AppKit-first behavior, terminal host continuity, accessibility IDs, and terminal-bridge ownership boundaries.
+- [x] 3.1 Identify the first shell/view-host extraction seam inside `WorkspaceWindowController` and split it into a dedicated shell-owned module without changing behavior.
+- [x] 3.2 Extract at least one additional shell subdomain from `WorkspaceWindowController` such as sidebar/canvas composition, floating modal hosting, or pane chrome helpers.
+- [x] 3.3 Add or reorganize shell parity tests so extracted shell/view-host slices are validated without relying only on one monolithic app-shell test file.
+- [x] 3.4 Verify shell extraction preserves AppKit-first behavior, terminal host continuity, accessibility IDs, and terminal-bridge ownership boundaries.
 
 ## 4. CLI Picker Unification
 
-- [ ] 4.1 Extract shared terminal picker engine (raw mode lifecycle, rendering, key parsing, filtering).
-- [ ] 4.2 Rewire theme and plugin picker implementations to the shared engine while preserving command UX semantics.
-- [ ] 4.3 Decide whether the vault resume choice picker joins the same engine or stays separate with explicit rationale.
-- [ ] 4.4 Add tests for shared key handling and terminal cleanup on success/cancel/error exits.
+- [x] 4.1 Extract shared terminal picker engine (raw mode lifecycle, rendering, key parsing, filtering).
+- [x] 4.2 Rewire theme and plugin picker implementations to the shared engine while preserving command UX semantics.
+- [x] 4.3 Decide whether the vault resume choice picker joins the same engine or stays separate with explicit rationale.
+- [x] 4.4 Add tests for shared key handling and terminal cleanup on success/cancel/error exits.
 
 ## 5. Documentation and Validation
 
-- [ ] 5.1 Update developer documentation describing new controller and shell module boundaries and extension points.
+- [x] 5.1 Update developer documentation describing new controller and shell module boundaries and extension points.
 - [x] 5.2 Update planning/documentation notes to reference the publication seam as the prerequisite for open-by-design parity follow-up work.
 - [x] 5.3 Run existing AppShell/CLI/ControlPlane tests to verify no keyboard/input or control-plane regressions.

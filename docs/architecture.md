@@ -186,3 +186,13 @@ flowchart LR
 ```
 
 If a change crosses those boundaries, it should do so intentionally and through shared contracts, not by reaching around them.
+
+## Shell and CLI seams
+
+OpenMUX keeps core shell and CLI interaction logic behind focused internal seams:
+
+- `WorkspaceWindowFloatingModalDropResolver` owns floating-modal root-edge drop resolution.
+- `WorkspaceSidebarDragPlanner` owns sidebar workspace drag insertion planning.
+- `TerminalInteractivePickerEngine` owns CLI interactive picker raw-mode lifecycle, key parsing, viewport rendering, and search-loop behavior.
+
+Theme and plugin pickers are thin adapters over `TerminalInteractivePickerEngine`. The vault resume-choice picker stays separate because it is a fixed action menu with mismatch-specific context framing (not a searchable list picker).
