@@ -3899,6 +3899,53 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testConfigurationCoordinatorReloadCompletionOnlyPublishesOnSuccess() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        var observations: [OpenMUXConfigurationReloadObservation] = []
+        coordinator.onReloadCompleted = { observations.append($0) }
+
+        let success = coordinator.reload(source: "command")
+        XCTAssertTrue(success.completed)
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].source, "command")
+
+        try """
+        schema = 1
+
+        [theme]
+        name = ""
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+        let failure = coordinator.reload(source: "watch")
+        XCTAssertFalse(failure.completed)
+        XCTAssertEqual(observations.count, 1)
+    }
+
+    @MainActor
     func testConfigurationCoordinatorReloadPublishesKeyBindingChange() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let configURL = home.appendingPathComponent("config.toml")

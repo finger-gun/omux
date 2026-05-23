@@ -221,6 +221,16 @@ final class OmuxControlPlaneTests: XCTestCase {
         )
     }
 
+    func testFollowUpParityActionEventNamesAreStable() {
+        let names = Set(ControlPlaneActionEventName.allCases.map(\.rawValue))
+
+        XCTAssertTrue(names.contains("workspace.closed"))
+        XCTAssertTrue(names.contains("pane.removed"))
+        XCTAssertTrue(names.contains("pane.aliasSet"))
+        XCTAssertTrue(names.contains("pane.aliasCleared"))
+        XCTAssertTrue(names.contains("config.reloaded"))
+    }
+
     func testTerminalEventUsesOpenMUXNativePayloads() {
         let event = ControlPlaneEvent(
             name: .commandFinished,

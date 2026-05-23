@@ -728,12 +728,16 @@ public final class WorkspaceController: @unchecked Sendable {
         setActiveWorkspaceID(workspace.id)
         lock.unlock()
 
-        publishControlPlaneEvent(
-            ControlPlaneEvent(
-                name: .workspaceRestored,
-                workspaceID: workspace.id,
-                payload: .object([:])
-            )
+        try? publication.emitHook(
+            category: .lifecycle,
+            name: "workspace-restored",
+            workspaceID: workspace.id,
+            payload: .object(["path": .string(workspace.rootPath)])
+        )
+        publication.emitActionEvent(
+            name: .workspaceRestored,
+            workspaceID: workspace.id,
+            payload: .object(["path": .string(workspace.rootPath)])
         )
         onChange?(workspace)
         return workspace
@@ -794,6 +798,15 @@ public final class WorkspaceController: @unchecked Sendable {
                 sessionID: focusedSessionID,
                 payload: .object(["path": .string(restoredWorkspace.rootPath)])
             )
+        )
+        try publication.emitHook(
+            category: .lifecycle,
+            name: "workspace-restored",
+            workspaceID: restoredWorkspace.id,
+            tabID: restoredWorkspace.focusedTabID,
+            paneID: focusedPane?.id,
+            sessionID: focusedSessionID,
+            payload: .object(["path": .string(restoredWorkspace.rootPath)])
         )
 
         suppressRestoreOffers(matching: entry.workspacePaths)
@@ -861,6 +874,11 @@ public final class WorkspaceController: @unchecked Sendable {
                 payload: .object(["path": .string(outgoingWorkspace.rootPath)])
             )
         )
+        publication.emitActionEvent(
+            name: .workspaceClosed,
+            workspaceID: outgoingWorkspace.id,
+            payload: .object(["path": .string(outgoingWorkspace.rootPath)])
+        )
 
         let focusedPane = restoredWorkspace.focusedPane
         let focusedSessionID = focusedPane?.terminalSession?.id
@@ -896,6 +914,15 @@ public final class WorkspaceController: @unchecked Sendable {
                 sessionID: focusedSessionID,
                 payload: .object(["path": .string(restoredWorkspace.rootPath)])
             )
+        )
+        try publication.emitHook(
+            category: .lifecycle,
+            name: "workspace-restored",
+            workspaceID: restoredWorkspace.id,
+            tabID: restoredWorkspace.focusedTabID,
+            paneID: focusedPane?.id,
+            sessionID: focusedSessionID,
+            payload: .object(["path": .string(restoredWorkspace.rootPath)])
         )
 
         suppressRestoreOffers(matching: entry.workspacePaths)
@@ -1642,6 +1669,19 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         lock.unlock()
 
+        try? publication.emitHook(
+            category: .lifecycle,
+            name: "extension-pane-created",
+            workspaceID: updatedWorkspace.id,
+            tabID: result.tabID,
+            paneID: pane.id,
+            payload: .object([
+                "pluginID": .string(descriptor.pluginID),
+                "contentKind": .string(descriptor.contentKind.rawValue),
+                "source": descriptor.source.map(OmuxValue.string) ?? .null,
+                "paneStackID": result.paneStackID.map { .string($0.rawValue) } ?? .null,
+            ])
+        )
         publishControlPlaneEvent(
             ControlPlaneEvent(
                 name: .extensionPaneCreated,
@@ -1730,6 +1770,19 @@ public final class WorkspaceController: @unchecked Sendable {
         guard let result else {
             return nil
         }
+        try? publication.emitHook(
+            category: .lifecycle,
+            name: "extension-pane-updated",
+            workspaceID: result.workspace.id,
+            tabID: result.tabID,
+            paneID: result.pane.id,
+            payload: .object([
+                "pluginID": .string(descriptor.pluginID),
+                "contentKind": .string(descriptor.contentKind.rawValue),
+                "source": descriptor.source.map(OmuxValue.string) ?? .null,
+                "paneStackID": result.paneStackID.map { .string($0.rawValue) } ?? .null,
+            ])
+        )
         publishControlPlaneEvent(
             ControlPlaneEvent(
                 name: .extensionPaneUpdated,
@@ -1790,6 +1843,17 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         cancelMarkdownPreviewWatch(paneID: result.pane.id)
+        try publication.emitHook(
+            category: .lifecycle,
+            name: "extension-pane-closed",
+            workspaceID: result.workspace.id,
+            tabID: result.tabID,
+            paneID: result.pane.id,
+            payload: .object([
+                "pluginID": .string(result.pane.extensionPane?.pluginID ?? ""),
+                "paneStackID": result.paneStackID.map { .string($0.rawValue) } ?? .null,
+            ])
+        )
         try publication.emitHook(
             HookInvocation(
                 category: .session,
@@ -2071,6 +2135,17 @@ public final class WorkspaceController: @unchecked Sendable {
                     ])
                 )
             )
+        } else {
+            publication.emitActionEvent(
+                name: .paneRemoved,
+                workspaceID: workspaceID,
+                tabID: tabID,
+                paneID: removedPane.id,
+                sessionID: removedPane.terminalSession?.id,
+                payload: .object([
+                    "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+                ])
+            )
         }
 
         onChange?(updatedWorkspace)
@@ -2126,6 +2201,8 @@ public final class WorkspaceController: @unchecked Sendable {
             return nil
         }
 
+        let paneStackID = focusedTab.rootLayout.paneStack(containingPaneID: focusedPane.id)?.id
+
         let removedPane: Pane
         if focusedTab.panes.count == 1 {
             guard workspaces[index].tabs.count > 1,
@@ -2163,6 +2240,16 @@ public final class WorkspaceController: @unchecked Sendable {
                 paneID: removedPane.id,
                 sessionID: removedPane.terminalSession?.id
             )
+        )
+        publication.emitActionEvent(
+            name: .paneRemoved,
+            workspaceID: updatedWorkspace.id,
+            tabID: updatedWorkspace.focusedTabID,
+            paneID: removedPane.id,
+            sessionID: removedPane.terminalSession?.id,
+            payload: .object([
+                "paneStackID": paneStackID.map { .string($0.rawValue) } ?? .null,
+            ])
         )
 
         onChange?(updatedWorkspace)
@@ -2312,6 +2399,14 @@ public final class WorkspaceController: @unchecked Sendable {
                     payload: .object(["paneID": .string(paneID.rawValue), "alias": .string(trimmed)])
                 )
             )
+            publication.emitActionEvent(
+                name: .paneAliasSet,
+                workspaceID: updatedWorkspace.id,
+                paneID: paneID,
+                payload: .object([
+                    "alias": .string(trimmed),
+                ])
+            )
             onChange?(updatedWorkspace)
         }
         return updatedWorkspace
@@ -2344,6 +2439,12 @@ public final class WorkspaceController: @unchecked Sendable {
                     workspaceID: updatedWorkspace.id,
                     payload: .object(["paneID": .string(paneID.rawValue)])
                 )
+            )
+            publication.emitActionEvent(
+                name: .paneAliasCleared,
+                workspaceID: updatedWorkspace.id,
+                paneID: paneID,
+                payload: .object([:])
             )
             onChange?(updatedWorkspace)
         }
@@ -2523,6 +2624,16 @@ public final class WorkspaceController: @unchecked Sendable {
             label: request.label,
             message: request.message,
             source: source
+        )
+
+        try? publication.emitHook(
+            category: .lifecycle,
+            name: "pane-status-updated",
+            workspaceID: context.workspaceID,
+            tabID: context.tabID,
+            paneID: context.paneID,
+            sessionID: context.sessionID,
+            payload: payload
         )
 
         publishControlPlaneEvent(
@@ -3376,6 +3487,28 @@ public final class WorkspaceController: @unchecked Sendable {
                     source: source
                 )
             )
+        )
+    }
+
+    func publishConfigReloadCompletion(source: String, applied: Bool) {
+        let payload: OmuxValue = .object([
+            "source": .string(source),
+            "applied": .bool(applied),
+        ])
+
+        do {
+            try publication.emitHook(
+                category: .lifecycle,
+                name: "config-reloaded",
+                payload: payload
+            )
+        } catch {
+            fputs("warning: failed to emit config-reloaded hook: \(error)\n", stderr)
+        }
+
+        publication.emitActionEvent(
+            name: .configReloaded,
+            payload: payload
         )
     }
 
@@ -4295,6 +4428,11 @@ public final class WorkspaceController: @unchecked Sendable {
                     workspaceID: removedWorkspace.id,
                     payload: .object(["path": .string(removedWorkspace.rootPath)])
                 )
+            )
+            publication.emitActionEvent(
+                name: .workspaceClosed,
+                workspaceID: removedWorkspace.id,
+                payload: .object(["path": .string(removedWorkspace.rootPath)])
             )
         }
 

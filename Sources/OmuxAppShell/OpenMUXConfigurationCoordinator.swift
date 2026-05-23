@@ -56,8 +56,14 @@ struct OpenMUXPreparedConfiguration: Sendable {
 }
 
 struct OpenMUXConfigurationReloadResult: Sendable {
+    let completed: Bool
     let applied: Bool
     let diagnostics: [OmuxConfigDiagnostic]
+}
+
+struct OpenMUXConfigurationReloadObservation: Sendable {
+    let source: String
+    let applied: Bool
 }
 
 @MainActor
@@ -73,6 +79,7 @@ final class OpenMUXConfigurationCoordinator {
     var onAgentSessionsConfigurationChange: ((VaultConfiguration) -> Void)?
     var onKeyBindingsChange: ((OpenMUXKeyBindingRegistry) -> Void)?
     var onDiagnosticsChange: (([OmuxConfigDiagnostic]) -> Void)?
+    var onReloadCompleted: ((OpenMUXConfigurationReloadObservation) -> Void)?
 
     private let bridge: GhosttyTerminalBridge
     private let evaluator: OmuxConfigurationEvaluator
@@ -319,19 +326,19 @@ final class OpenMUXConfigurationCoordinator {
     }
 
     @discardableResult
-    func reload() -> OpenMUXConfigurationReloadResult {
+    func reload(source: String = "command") -> OpenMUXConfigurationReloadResult {
         reloadLock.lock()
         defer { reloadLock.unlock() }
 
         let evaluation = evaluator.evaluate()
         guard let theme = evaluation.theme, let output = evaluation.compilerOutput else {
             updateDiagnostics(evaluation.diagnostics)
-            return OpenMUXConfigurationReloadResult(applied: false, diagnostics: evaluation.diagnostics)
+            return OpenMUXConfigurationReloadResult(completed: false, applied: false, diagnostics: evaluation.diagnostics)
         }
 
         guard evaluation.hasErrors == false else {
             updateDiagnostics(evaluation.diagnostics)
-            return OpenMUXConfigurationReloadResult(applied: false, diagnostics: evaluation.diagnostics)
+            return OpenMUXConfigurationReloadResult(completed: false, applied: false, diagnostics: evaluation.diagnostics)
         }
 
         do {
@@ -409,7 +416,8 @@ final class OpenMUXConfigurationCoordinator {
                 keyBindingRegistry: keyBindingRegistry,
                 diagnostics: diagnostics
             )
-            return OpenMUXConfigurationReloadResult(applied: shouldApply, diagnostics: diagnostics)
+            onReloadCompleted?(OpenMUXConfigurationReloadObservation(source: source, applied: shouldApply))
+            return OpenMUXConfigurationReloadResult(completed: true, applied: shouldApply, diagnostics: diagnostics)
         } catch {
             let diagnostics = evaluation.diagnostics + [
                 OmuxConfigDiagnostic(
@@ -418,7 +426,7 @@ final class OpenMUXConfigurationCoordinator {
                 ),
             ]
             updateDiagnostics(diagnostics)
-            return OpenMUXConfigurationReloadResult(applied: false, diagnostics: diagnostics)
+            return OpenMUXConfigurationReloadResult(completed: false, applied: false, diagnostics: diagnostics)
         }
     }
 

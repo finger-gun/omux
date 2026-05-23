@@ -738,7 +738,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     @objc private func reloadConfigFromMenu(_ sender: Any?) {
         _ = sender
-        _ = configurationCoordinator.reload()
+        let result = configurationCoordinator.reload(source: "command")
+        if result.completed {
+            workspaceController.publishConfigReloadCompletion(source: "command", applied: result.applied)
+        }
         refreshMenuValidation()
     }
 
@@ -755,7 +758,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             case "config.open":
                 NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
             case "config.reload":
-                _ = configurationCoordinator.reload()
+                let result = configurationCoordinator.reload(source: "command")
+                if result.completed {
+                    workspaceController.publishConfigReloadCompletion(source: "command", applied: result.applied)
+                }
             default:
                 return
             }

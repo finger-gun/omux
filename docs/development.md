@@ -197,15 +197,20 @@ Explicit OpenMUX input actions such as `omux run` and `send-text` publish `termi
 Current first-wave shared action event names:
 
 - `workspace.opened`
+- `workspace.closed`
 - `tab.created`
 - `pane.split`
+- `pane.removed`
 - `paneTab.created`
 - `paneTab.focused`
 - `paneTab.closed`
 - `session.focused`
+- `pane.aliasSet`
+- `pane.aliasCleared`
 - `command.started`
 - `notification.raised`
 - `workspace.restored`
+- `config.reloaded`
 - `extensionPane.created`
 - `extensionPane.updated`
 - `extensionPane.closed`
