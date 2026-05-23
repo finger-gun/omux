@@ -91,11 +91,11 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 
 ## How to wire a new transition
 
-When adding a state transition or noticing an empty cell in the table above, the wiring pattern is consistent. The `pane-created` / `pane.split` transition is a good reference because it covers all three surfaces.
+When adding a state transition or noticing an empty cell in the table above, the wiring pattern is consistent. The `pane-created` / `pane.split` transition is a good reference because it covers all three surfaces. Controller-owned wiring should attach through `WorkspaceControllerPublication` in `Sources/OmuxAppShell/WorkspaceControllerPublication.swift` so new hook and event surfaces do not drift back into ad hoc inline emission paths.
 
-1. **Hook invocation.** In `WorkspaceController.swift`, call `hookRunner.emit(HookInvocation(...))` with the appropriate category, hook name, context IDs, and an `OmuxValue` payload. Follow the naming convention: lifecycle hooks use `workspace-*` or `pane-*` prefixes, terminal hooks use `terminal-*` prefixes.
+1. **Hook invocation.** In `WorkspaceController.swift`, route hook emission through the publication seam with `publication.emitHook(HookInvocation(...))`. Follow the naming convention: lifecycle hooks use `workspace-*` or `pane-*` prefixes, terminal hooks use `terminal-*` prefixes.
 
-2. **Control plane event.** In the same method, call `publishControlPlaneEvent(ControlPlaneEvent(name: ..., ...))`. If the event name does not exist yet, add it to `ControlPlaneTerminalEventName` or `ControlPlaneActionEventName` in `Sources/OmuxControlPlane/TerminalEvents.swift`.
+2. **Control plane event.** In the same method, call `publishControlPlaneEvent(ControlPlaneEvent(name: ..., ...))`, which now routes through the same publication seam. If the event name does not exist yet, add it to `ControlPlaneTerminalEventName` or `ControlPlaneActionEventName` in `Sources/OmuxControlPlane/TerminalEvents.swift`.
 
 3. **CLI verb.** If the transition can be triggered by external tools (not just observed), add a case to `ControlMethod` in `Sources/OmuxControlPlane/JSONRPC.swift` and handle it in `OpenMUXControlPlaneService`. Wire the corresponding `omux` subcommand in `Sources/OmuxCLI/OmuxCLI.swift`.
 

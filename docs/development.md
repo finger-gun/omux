@@ -265,7 +265,8 @@ The current shell is usable, but it is still intentionally narrow:
 ## Performance invariants
 
 - Workspace layout persistence in `OpenMUXAppDelegate` must be scheduled through `WorkspaceLayoutPersistenceCoordinator` so bursty `onChange` updates are coalesced. Lifecycle boundaries that need durability (quit, power-off, full-state writes) should call the coordinator flush path.
-- `WorkspaceController` pane/session/tab/workspace target resolution should prefer the internal lookup indexes and keep index invalidation hooks aligned with every state mutation. If new mutations are added, update index dirtiness/rebuild wiring in the same change.
+- `WorkspaceController` pane/session/tab/workspace target resolution should prefer `WorkspaceLookupIndexStore` and keep its invalidation aligned with every state mutation. If new mutations are added, update lookup-store invalidation in the same change.
+- Controller-owned hook invocation and control-plane event emission should attach through `WorkspaceControllerPublication` so future open-by-design work extends one seam instead of reintroducing scattered inline wiring.
 
 ## Runtime power profile
 

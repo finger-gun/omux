@@ -26,20 +26,6 @@ private struct PaneHistoryTarget: Sendable {
     let persistedHistory: PaneScrollbackSnapshot?
 }
 
-private struct WorkspaceLookupLocation: Sendable {
-    let workspaceIndex: Int
-    let tabIndex: Int?
-    let floatingPaneModalIndex: Int?
-    let paneIndex: Int
-}
-
-private struct WorkspacePaneResolution: Sendable {
-    let workspace: Workspace
-    let tab: Tab?
-    let floatingPaneModal: FloatingPaneModal?
-    let pane: Pane
-}
-
 public struct PaneTabCloseCandidate: Equatable, Sendable {
     public let paneID: PaneID
     public let workingDirectory: String
@@ -93,7 +79,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private let recentlyClosedStore: RecentlyClosedWorkspaceStore
     private var defaultWorkspaceRootPath: String
     private var workspaces: [Workspace] = [] {
-        didSet { lookupIndexesDirty = true }
+        didSet { lookupIndexes.invalidate() }
     }
     private var activeWorkspaceID: WorkspaceID?
     private var previousWorkspaceID: WorkspaceID?
@@ -112,15 +98,17 @@ public final class WorkspaceController: @unchecked Sendable {
     private var terminalDisplayTitleUpdateScheduled = false
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var bannersAlreadyOffered = Set<WorkspaceID>()
-    private var workspaceIndexByID: [WorkspaceID: Int] = [:]
-    private var tabLocationByID: [TabID: (workspaceIndex: Int, tabIndex: Int)] = [:]
-    private var paneLocationByID: [PaneID: WorkspaceLookupLocation] = [:]
-    private var sessionLocationByID: [SessionID: WorkspaceLookupLocation] = [:]
-    private var lookupIndexesDirty = true
+    private var lookupIndexes = WorkspaceLookupIndexStore()
     private let progressIdleClearDelay: TimeInterval
     private let terminalStateChangeCoalescingDelay: TimeInterval
     private let terminalDisplayTitleUpdateMinimumInterval: TimeInterval
     private var controlPlaneEventHandler: ((ControlPlaneEvent) -> Void)?
+    private lazy var publication = WorkspaceControllerPublication(
+        hookRunner: hookRunner,
+        controlPlaneEventSink: { [weak self] event in
+            self?.controlPlaneEventHandler?(event)
+        }
+    )
     private lazy var terminalActionCoordinator = TerminalActionCoordinator(
         bridge: bridge,
         controller: self,
@@ -266,7 +254,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(workspace)
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-opened",
@@ -694,7 +682,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         let focusedPane = updatedWorkspace.focusedPane
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-focused",
@@ -796,7 +784,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(restoredWorkspace)
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-opened",
@@ -865,7 +853,7 @@ public final class WorkspaceController: @unchecked Sendable {
             try bridge.teardown(paneID: pane.id)
         }
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-closed",
@@ -898,7 +886,7 @@ public final class WorkspaceController: @unchecked Sendable {
         )
         onChange?(restoredWorkspace)
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-opened",
@@ -955,7 +943,7 @@ public final class WorkspaceController: @unchecked Sendable {
     public func notify(_ request: NotificationRequest) throws {
         deliverNotification(request)
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .ui,
                 name: "notification-raised",
@@ -1264,7 +1252,7 @@ public final class WorkspaceController: @unchecked Sendable {
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .lifecycle,
                 name: "workspace-renamed",
@@ -1330,7 +1318,7 @@ public final class WorkspaceController: @unchecked Sendable {
             to: pane
         )
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "tab-created",
@@ -1392,7 +1380,7 @@ public final class WorkspaceController: @unchecked Sendable {
             to: pane
         )
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-created",
@@ -1802,7 +1790,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         cancelMarkdownPreviewWatch(paneID: result.pane.id)
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-removed",
@@ -1885,7 +1873,7 @@ public final class WorkspaceController: @unchecked Sendable {
             to: pane
         )
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-tab-created",
@@ -1969,7 +1957,7 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if removedPane.extensionPane != nil {
             cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-tab-closed",
@@ -2056,7 +2044,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
 
         let hookName = closedPaneTab ? "pane-tab-closed" : "pane-removed"
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: hookName,
@@ -2166,7 +2154,7 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if removedPane.extensionPane != nil {
             cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .session,
                 name: "pane-removed",
@@ -2316,7 +2304,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         if let updatedWorkspace {
-            try hookRunner.emit(
+            try publication.emitHook(
                 HookInvocation(
                     category: .lifecycle,
                     name: "pane-alias-set",
@@ -2349,7 +2337,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
 
         if let updatedWorkspace {
-            try hookRunner.emit(
+            try publication.emitHook(
                 HookInvocation(
                     category: .lifecycle,
                     name: "pane-alias-cleared",
@@ -2411,7 +2399,7 @@ public final class WorkspaceController: @unchecked Sendable {
         commandContextBySession[context.sessionID] = CommandAutomationContext(command: command, cwd: cwd)
         lock.unlock()
 
-        try hookRunner.emit(
+        try publication.emitHook(
             HookInvocation(
                 category: .command,
                 name: "command-started",
@@ -2759,160 +2747,31 @@ public final class WorkspaceController: @unchecked Sendable {
         onChange?(workspace)
     }
 
-    private func rebuildLookupIndexesLocked() {
-        workspaceIndexByID.removeAll(keepingCapacity: true)
-        tabLocationByID.removeAll(keepingCapacity: true)
-        paneLocationByID.removeAll(keepingCapacity: true)
-        sessionLocationByID.removeAll(keepingCapacity: true)
-
-        for (workspaceIndex, workspace) in workspaces.enumerated() {
-            workspaceIndexByID[workspace.id] = workspaceIndex
-            for (tabIndex, tab) in workspace.tabs.enumerated() {
-                tabLocationByID[tab.id] = (workspaceIndex: workspaceIndex, tabIndex: tabIndex)
-                for (paneIndex, pane) in tab.panes.enumerated() {
-                    let location = WorkspaceLookupLocation(
-                        workspaceIndex: workspaceIndex,
-                        tabIndex: tabIndex,
-                        floatingPaneModalIndex: nil,
-                        paneIndex: paneIndex
-                    )
-                    paneLocationByID[pane.id] = location
-                    if let sessionID = pane.terminalSession?.id {
-                        sessionLocationByID[sessionID] = location
-                    }
-                }
-            }
-            for (modalIndex, modal) in workspace.floatingPaneModals.enumerated() {
-                for (paneIndex, pane) in modal.paneStack.panes.enumerated() {
-                    let location = WorkspaceLookupLocation(
-                        workspaceIndex: workspaceIndex,
-                        tabIndex: nil,
-                        floatingPaneModalIndex: modalIndex,
-                        paneIndex: paneIndex
-                    )
-                    paneLocationByID[pane.id] = location
-                    if let sessionID = pane.terminalSession?.id {
-                        sessionLocationByID[sessionID] = location
-                    }
-                }
-            }
-        }
-        lookupIndexesDirty = false
-    }
-
-    private func ensureLookupIndexesLocked() {
-        guard lookupIndexesDirty else {
-            return
-        }
-        rebuildLookupIndexesLocked()
-    }
-
     private func workspacePaneLocked(
         at location: WorkspaceLookupLocation
     ) -> WorkspacePaneResolution? {
-        guard workspaces.indices.contains(location.workspaceIndex) else {
-            return nil
-        }
-        let workspace = workspaces[location.workspaceIndex]
-        if let tabIndex = location.tabIndex {
-            guard workspace.tabs.indices.contains(tabIndex) else {
-                return nil
-            }
-            let tab = workspace.tabs[tabIndex]
-            guard tab.panes.indices.contains(location.paneIndex) else {
-                return nil
-            }
-            let pane = tab.panes[location.paneIndex]
-            return WorkspacePaneResolution(workspace: workspace, tab: tab, floatingPaneModal: nil, pane: pane)
-        }
-        if let floatingPaneModalIndex = location.floatingPaneModalIndex {
-            guard workspace.floatingPaneModals.indices.contains(floatingPaneModalIndex) else {
-                return nil
-            }
-            let modal = workspace.floatingPaneModals[floatingPaneModalIndex]
-            guard modal.paneStack.panes.indices.contains(location.paneIndex) else {
-                return nil
-            }
-            let pane = modal.paneStack.panes[location.paneIndex]
-            return WorkspacePaneResolution(workspace: workspace, tab: nil, floatingPaneModal: modal, pane: pane)
-        }
-        return nil
+        lookupIndexes.paneResolution(at: location, in: workspaces)
     }
 
     private func paneLocationLocked(for paneID: PaneID) -> WorkspaceLookupLocation? {
-        ensureLookupIndexesLocked()
-        guard let location = paneLocationByID[paneID],
-              workspacePaneLocked(at: location)?.pane.id == paneID
-        else {
-            lookupIndexesDirty = true
-            ensureLookupIndexesLocked()
-            guard let rebuilt = paneLocationByID[paneID],
-                  workspacePaneLocked(at: rebuilt)?.pane.id == paneID
-            else {
-                return nil
-            }
-            return rebuilt
-        }
-        return location
+        lookupIndexes.paneLocation(for: paneID, in: workspaces)
     }
 
     private func sessionLocationLocked(for sessionID: SessionID) -> WorkspaceLookupLocation? {
-        ensureLookupIndexesLocked()
-        guard let location = sessionLocationByID[sessionID],
-              workspacePaneLocked(at: location)?.pane.terminalSession?.id == sessionID
-        else {
-            lookupIndexesDirty = true
-            ensureLookupIndexesLocked()
-            guard let rebuilt = sessionLocationByID[sessionID],
-                  workspacePaneLocked(at: rebuilt)?.pane.terminalSession?.id == sessionID
-            else {
-                return nil
-            }
-            return rebuilt
-        }
-        return location
+        lookupIndexes.sessionLocation(for: sessionID, in: workspaces)
     }
 
     private func workspaceIndexLocked(for workspaceID: WorkspaceID) -> Int? {
-        ensureLookupIndexesLocked()
-        guard let index = workspaceIndexByID[workspaceID], workspaces.indices.contains(index) else {
-            lookupIndexesDirty = true
-            ensureLookupIndexesLocked()
-            guard let rebuilt = workspaceIndexByID[workspaceID], workspaces.indices.contains(rebuilt) else {
-                return nil
-            }
-            return rebuilt
-        }
-        return index
+        lookupIndexes.workspaceIndex(for: workspaceID, in: workspaces)
     }
 
     private func tabLocationLocked(for tabID: TabID) -> (workspaceIndex: Int, tabIndex: Int)? {
-        ensureLookupIndexesLocked()
-        guard let location = tabLocationByID[tabID],
-              workspaces.indices.contains(location.workspaceIndex),
-              workspaces[location.workspaceIndex].tabs.indices.contains(location.tabIndex),
-              workspaces[location.workspaceIndex].tabs[location.tabIndex].id == tabID
-        else {
-            lookupIndexesDirty = true
-            ensureLookupIndexesLocked()
-            guard let rebuilt = tabLocationByID[tabID],
-                  workspaces.indices.contains(rebuilt.workspaceIndex),
-                  workspaces[rebuilt.workspaceIndex].tabs.indices.contains(rebuilt.tabIndex),
-                  workspaces[rebuilt.workspaceIndex].tabs[rebuilt.tabIndex].id == tabID
-            else {
-                return nil
-            }
-            return rebuilt
-        }
-        return location
+        lookupIndexes.tabLocation(for: tabID, in: workspaces)
     }
 
     private var activeWorkspaceIndex: Int? {
         // Lock must be held by caller.
-        guard let activeWorkspaceID else {
-            return nil
-        }
-        return workspaceIndexLocked(for: activeWorkspaceID)
+        lookupIndexes.activeWorkspaceIndex(activeWorkspaceID: activeWorkspaceID, in: workspaces)
     }
 
     private func setActiveWorkspaceID(_ workspaceID: WorkspaceID, recordPrevious: Bool = true) {
@@ -3165,7 +3024,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private func emitTerminalTextActivationHook(_ context: TerminalTextActivationContext) {
         let terminalContext = terminalContext(for: context.request.paneID)
         do {
-            try hookRunner.emit(
+            try publication.emitHook(
                 HookInvocation(
                     category: .input,
                     name: "terminal-text-activated",
@@ -3521,7 +3380,7 @@ public final class WorkspaceController: @unchecked Sendable {
     }
 
     func publishControlPlaneEvent(_ event: ControlPlaneEvent) {
-        controlPlaneEventHandler?(event)
+        publication.emitControlPlaneEvent(event)
     }
 
     func publishTerminalEvent(_ event: ControlPlaneEvent) {
@@ -4429,7 +4288,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 }
             }
 
-            try hookRunner.emit(
+            try publication.emitHook(
                 HookInvocation(
                     category: .lifecycle,
                     name: "workspace-closed",
@@ -4499,7 +4358,7 @@ public final class WorkspaceController: @unchecked Sendable {
             if removedPane.isTerminal {
                 try bridge.teardown(paneID: removedPane.id)
             }
-            try hookRunner.emit(
+            try publication.emitHook(
                 HookInvocation(
                     category: .session,
                     name: "pane-tab-closed",
