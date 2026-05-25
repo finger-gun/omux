@@ -302,6 +302,7 @@ These hooks are emitted from terminal runtime action dispatch after libghostty-s
 | `terminal-cwd-changed` | The terminal runtime reports a current working directory change. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "path": string }` |
 | `terminal-title-changed` | The terminal runtime reports a pane title change. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "title": string }` |
 | `terminal-tab-title-changed` | The terminal runtime reports a tab title change. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "title": string }` |
+| `pane-metadata-changed` | OpenMUX recomputes pane display metadata used by sidebar rows. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "displayTitle": string, "title": string, "userAlias": string \| null, "path": string \| null, "abbreviatedPath": string \| null, "isGitRepo": boolean, "gitBranch": string \| null, "isWorktree": boolean, "subtitle": string \| null }` |
 | `terminal-progress-reported` | The terminal runtime reports progress state. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "state": "removed" \| "active" \| "error" \| "indeterminate" \| "paused", "progress": integer \| null }` |
 | `terminal-child-exited` | The terminal runtime reports child process exit state. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "exitCode": integer, "elapsedMilliseconds": integer \| double }` |
 | `terminal-renderer-health-changed` | The terminal runtime reports renderer health. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "isHealthy": boolean }` |

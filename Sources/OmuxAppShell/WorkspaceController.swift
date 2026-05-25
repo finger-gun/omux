@@ -26,6 +26,23 @@ private struct PaneHistoryTarget: Sendable {
     let persistedHistory: PaneScrollbackSnapshot?
 }
 
+private struct PaneMetadataSnapshot: Equatable {
+    let displayTitle: String
+    let title: String
+    let userAlias: String?
+    let path: String?
+    let abbreviatedPath: String?
+    let gitBranch: String?
+    let isGitRepo: Bool
+    let isWorktree: Bool
+    let subtitle: String?
+}
+
+private struct PaneMetadataPublication {
+    let hook: HookInvocation
+    let event: ControlPlaneEvent
+}
+
 public struct PaneTabCloseCandidate: Equatable, Sendable {
     public let paneID: PaneID
     public let workingDirectory: String
@@ -99,6 +116,8 @@ public final class WorkspaceController: @unchecked Sendable {
     private var markdownPreviewWatchTasks: [PaneID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var bannersAlreadyOffered = Set<WorkspaceID>()
     private var lookupIndexes = WorkspaceLookupIndexStore()
+    private let paneMetadataResolver = TerminalSidebarMetadataResolver()
+    private var paneMetadataSnapshotByPaneID: [PaneID: PaneMetadataSnapshot] = [:]
     private let progressIdleClearDelay: TimeInterval
     private let terminalStateChangeCoalescingDelay: TimeInterval
     private let terminalDisplayTitleUpdateMinimumInterval: TimeInterval
@@ -2265,9 +2284,20 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.lock()
         var updatedWorkspace: Workspace?
+        var paneMetadataPublication: PaneMetadataPublication?
         for workspaceIndex in workspaces.indices {
             if workspaces[workspaceIndex].updatePane(paneID, transform: { $0.title = trimmedName }) {
                 updatedWorkspace = workspaces[workspaceIndex]
+                if let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }) {
+                    let tabID = workspaces[workspaceIndex].tabs.first(where: { tab in
+                        tab.panes.contains(where: { $0.id == paneID })
+                    })?.id
+                    paneMetadataPublication = paneMetadataPublicationLocked(
+                        workspaceID: workspaces[workspaceIndex].id,
+                        tabID: tabID,
+                        pane: pane
+                    )
+                }
                 break
             }
         }
@@ -2275,6 +2305,9 @@ public final class WorkspaceController: @unchecked Sendable {
 
         if let updatedWorkspace {
             onChange?(updatedWorkspace)
+        }
+        if let paneMetadataPublication {
+            publishPaneMetadataChanges([paneMetadataPublication])
         }
         return updatedWorkspace
     }
@@ -2288,6 +2321,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.lock()
         var updatedWorkspace: Workspace?
+        var paneMetadataPublication: PaneMetadataPublication?
         for workspaceIndex in workspaces.indices {
             guard let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }) else {
                 continue
@@ -2298,6 +2332,16 @@ public final class WorkspaceController: @unchecked Sendable {
             }
             if workspaces[workspaceIndex].updatePane(paneID, transform: { $0.userAlias = trimmed }) {
                 updatedWorkspace = workspaces[workspaceIndex]
+                if let updatedPane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }) {
+                    let tabID = workspaces[workspaceIndex].tabs.first(where: { tab in
+                        tab.panes.contains(where: { $0.id == paneID })
+                    })?.id
+                    paneMetadataPublication = paneMetadataPublicationLocked(
+                        workspaceID: workspaces[workspaceIndex].id,
+                        tabID: tabID,
+                        pane: updatedPane
+                    )
+                }
                 break
             }
         }
@@ -2313,6 +2357,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 )
             )
             onChange?(updatedWorkspace)
+            if let paneMetadataPublication {
+                publishPaneMetadataChanges([paneMetadataPublication])
+            }
         }
         return updatedWorkspace
     }
@@ -2321,6 +2368,7 @@ public final class WorkspaceController: @unchecked Sendable {
     public func clearPaneAlias(_ paneID: PaneID) throws -> Workspace? {
         lock.lock()
         var updatedWorkspace: Workspace?
+        var paneMetadataPublication: PaneMetadataPublication?
         for workspaceIndex in workspaces.indices {
             guard let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }) else {
                 continue
@@ -2331,6 +2379,16 @@ public final class WorkspaceController: @unchecked Sendable {
             }
             if workspaces[workspaceIndex].updatePane(paneID, transform: { $0.userAlias = nil }) {
                 updatedWorkspace = workspaces[workspaceIndex]
+                if let updatedPane = workspaces[workspaceIndex].panes.first(where: { $0.id == paneID }) {
+                    let tabID = workspaces[workspaceIndex].tabs.first(where: { tab in
+                        tab.panes.contains(where: { $0.id == paneID })
+                    })?.id
+                    paneMetadataPublication = paneMetadataPublicationLocked(
+                        workspaceID: workspaces[workspaceIndex].id,
+                        tabID: tabID,
+                        pane: updatedPane
+                    )
+                }
                 break
             }
         }
@@ -2346,6 +2404,9 @@ public final class WorkspaceController: @unchecked Sendable {
                 )
             )
             onChange?(updatedWorkspace)
+            if let paneMetadataPublication {
+                publishPaneMetadataChanges([paneMetadataPublication])
+            }
         }
         return updatedWorkspace
     }
@@ -3387,6 +3448,75 @@ public final class WorkspaceController: @unchecked Sendable {
         publishControlPlaneEvent(event)
     }
 
+    private func paneMetadataPayload(from snapshot: PaneMetadataSnapshot) -> OmuxValue {
+        .object([
+            "displayTitle": .string(snapshot.displayTitle),
+            "title": .string(snapshot.title),
+            "userAlias": snapshot.userAlias.map(OmuxValue.string) ?? .null,
+            "path": snapshot.path.map(OmuxValue.string) ?? .null,
+            "abbreviatedPath": snapshot.abbreviatedPath.map(OmuxValue.string) ?? .null,
+            "isGitRepo": .bool(snapshot.isGitRepo),
+            "gitBranch": snapshot.gitBranch.map(OmuxValue.string) ?? .null,
+            "isWorktree": .bool(snapshot.isWorktree),
+            "subtitle": snapshot.subtitle.map(OmuxValue.string) ?? .null,
+        ])
+    }
+
+    private func paneMetadataPublicationLocked(
+        workspaceID: WorkspaceID,
+        tabID: TabID?,
+        pane: Pane
+    ) -> PaneMetadataPublication? {
+        let metadata = paneMetadataResolver.metadata(for: pane)
+        let snapshot = PaneMetadataSnapshot(
+            displayTitle: pane.displayTitle,
+            title: pane.title,
+            userAlias: pane.userAlias,
+            path: metadata.path,
+            abbreviatedPath: metadata.abbreviatedPath,
+            gitBranch: metadata.gitBranch,
+            isGitRepo: metadata.isGitRepo,
+            isWorktree: metadata.isWorktree,
+            subtitle: metadata.subtitle
+        )
+        if paneMetadataSnapshotByPaneID[pane.id] == snapshot {
+            return nil
+        }
+        paneMetadataSnapshotByPaneID[pane.id] = snapshot
+        let sessionID = pane.terminalSession?.id
+        let payload = paneMetadataPayload(from: snapshot)
+        return PaneMetadataPublication(
+            hook: HookInvocation(
+                category: .session,
+                name: "pane-metadata-changed",
+                workspaceID: workspaceID,
+                tabID: tabID,
+                paneID: pane.id,
+                sessionID: sessionID,
+                payload: payload
+            ),
+            event: ControlPlaneEvent(
+                name: .paneMetadataChanged,
+                workspaceID: workspaceID,
+                tabID: tabID,
+                paneID: pane.id,
+                sessionID: sessionID,
+                payload: payload
+            )
+        )
+    }
+
+    private func publishPaneMetadataChanges(_ publications: [PaneMetadataPublication]) {
+        for publication in publications {
+            do {
+                try self.publication.emitHook(publication.hook)
+            } catch {
+                fputs("warning: failed to emit pane metadata hook pane-metadata-changed: \(error)\n", stderr)
+            }
+            publishControlPlaneEvent(publication.event)
+        }
+    }
+
     func deliverNotification(_ request: NotificationRequest) {
         lock.lock()
         lastNotification = request
@@ -3402,6 +3532,8 @@ public final class WorkspaceController: @unchecked Sendable {
         var context: ControlPlaneTerminalContext?
         var shouldScheduleTrailingTitleUpdate = false
         var restoreOfferEntry: RecentlyClosedWorkspaceEntry?
+        var paneMetadataPublications: [PaneMetadataPublication] = []
+        var shouldEvaluatePaneMetadata = false
 
         lock.lock()
         guard let location = paneLocationLocked(for: event.paneID),
@@ -3440,6 +3572,7 @@ public final class WorkspaceController: @unchecked Sendable {
             }
             if didChange {
                 updatedWorkspace = workspaces[workspaceIndex]
+                shouldEvaluatePaneMetadata = true
             }
             if Self.findWorkspace(containingPath: normalizedPath, in: workspaces, excluding: resolved.workspace.id) == nil,
                let entry = recentlyClosedStore.find(byPath: normalizedPath),
@@ -3493,6 +3626,7 @@ public final class WorkspaceController: @unchecked Sendable {
             if shouldUpdateWorkspace {
                 updatedWorkspace = workspaces[workspaceIndex]
             }
+            shouldEvaluatePaneMetadata = true
         case .tabTitleChanged(let title):
             if let tabIndex = location.tabIndex,
                workspaces[workspaceIndex].tabs[tabIndex].title != title {
@@ -3565,6 +3699,18 @@ public final class WorkspaceController: @unchecked Sendable {
             break
         }
 
+        if shouldEvaluatePaneMetadata,
+           let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == event.paneID }) {
+            let tabID = location.tabIndex.map { workspaces[workspaceIndex].tabs[$0].id }
+            if let publication = paneMetadataPublicationLocked(
+                workspaceID: workspaces[workspaceIndex].id,
+                tabID: tabID,
+                pane: pane
+            ) {
+                paneMetadataPublications.append(publication)
+            }
+        }
+
         lock.unlock()
         if shouldScheduleTrailingTitleUpdate {
             scheduleTerminalDisplayTitleUpdate()
@@ -3574,6 +3720,9 @@ public final class WorkspaceController: @unchecked Sendable {
         }
         if let updatedWorkspace {
             scheduleTerminalStateChangeUpdate(for: updatedWorkspace.id)
+        }
+        if paneMetadataPublications.isEmpty == false {
+            publishPaneMetadataChanges(paneMetadataPublications)
         }
         return context
     }
@@ -3697,6 +3846,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     private func flushTerminalDisplayTitleUpdates() {
         var updatedWorkspaceIDs = Set<WorkspaceID>()
+        var paneMetadataPublications: [PaneMetadataPublication] = []
         let now = Date()
 
         lock.lock()
@@ -3728,6 +3878,16 @@ public final class WorkspaceController: @unchecked Sendable {
                     deliveredTerminalDisplayTitleByPane[paneID] = displayTitle
                 }
             }
+            if let pane = workspaces[location.workspaceIndex].panes.first(where: { $0.id == paneID }) {
+                let tabID = location.tabIndex.map { workspaces[location.workspaceIndex].tabs[$0].id }
+                if let publication = paneMetadataPublicationLocked(
+                    workspaceID: workspaces[location.workspaceIndex].id,
+                    tabID: tabID,
+                    pane: pane
+                ) {
+                    paneMetadataPublications.append(publication)
+                }
+            }
             updatedWorkspaceIDs.insert(workspaces[location.workspaceIndex].id)
         }
         let shouldReschedule = pendingTerminalDisplayTitlePaneIDs.isEmpty == false
@@ -3738,6 +3898,9 @@ public final class WorkspaceController: @unchecked Sendable {
         }
         for workspaceID in updatedWorkspaceIDs {
             scheduleTerminalStateChangeUpdate(for: workspaceID)
+        }
+        if paneMetadataPublications.isEmpty == false {
+            publishPaneMetadataChanges(paneMetadataPublications)
         }
     }
 

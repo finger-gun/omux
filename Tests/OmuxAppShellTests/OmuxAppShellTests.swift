@@ -4726,6 +4726,99 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
     }
 
+    func testPaneMetadataChangedHookAndEventEmitOnWorkingDirectoryUpdate() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.paneID, pane.id)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["path"], .string("/var/tmp"))
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["isGitRepo"], .bool(false))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(launcher.invocations.count, 1)
+    }
+
+    func testPaneMetadataChangedHookAndEventEmitOnPaneAliasUpdate() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        _ = try controller.setPaneAlias(paneID, to: "Plugins")
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.paneID, paneID)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["displayTitle"], .string("Plugins"))
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["userAlias"], .string("Plugins"))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
+    }
+
+    func testTerminalSidebarMetadataUsesPaneDisplayTitle() {
+        let pane = Pane(
+            title: "path-like-title",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        )
+
+        let metadata = TerminalSidebarMetadataResolver().metadata(for: pane, icon: .terminal)
+
+        XCTAssertEqual(metadata.title, pane.displayTitle)
+        XCTAssertEqual(metadata.path, "/tmp/project")
+        XCTAssertEqual(metadata.abbreviatedPath, "/tmp/project")
+    }
+
     func testTerminalActionStateChangesCoalesceWorkspaceUpdates() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -5854,7 +5947,8 @@ final class OmuxAppShellTests: XCTestCase {
 
         runtime.emit(.titleChanged("ls"), on: runtimeSurfaceID)
 
-        XCTAssertEqual(publishedEvents.map(\.name), ["terminal.titleChanged"])
+        XCTAssertTrue(publishedEvents.contains(where: { $0.name == "terminal.titleChanged" }))
+        XCTAssertTrue(publishedEvents.contains(where: { $0.name == "pane.metadataChanged" }))
         XCTAssertTrue(launcher.invocations.isEmpty)
     }
 

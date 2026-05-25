@@ -25,6 +25,7 @@ public enum ControlPlaneActionEventName: String, Codable, CaseIterable, Sendable
     case paneTabClosed = "paneTab.closed"
     case sessionFocused = "session.focused"
     case paneStatusChanged = "pane.statusChanged"
+    case paneMetadataChanged = "pane.metadataChanged"
     case commandStarted = "command.started"
     case notificationRaised = "notification.raised"
     case workspaceRestored = "workspace.restored"

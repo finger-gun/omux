@@ -1658,6 +1658,16 @@ final class WorkspaceShellViewController: NSViewController {
                         let paneIcon = iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))
                         let metadata = metadataResolver.metadata(for: pane, icon: paneIcon)
                         let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
+                        let subtitleAccentPrefixLength: Int? = {
+                            guard metadata.isWorktree,
+                                  let branch = metadata.gitBranch,
+                                  let subtitle = metadata.subtitle,
+                                  subtitle.hasPrefix(branch + " - ")
+                            else {
+                                return nil
+                            }
+                            return branch.count
+                        }()
                         return SidebarItem(
                             kind: .terminal,
                             identifier: pane.id.rawValue,
@@ -1665,6 +1675,7 @@ final class WorkspaceShellViewController: NSViewController {
                             progress: pane.terminalState.progress,
                             title: metadata.title,
                             subtitle: metadata.subtitle,
+                            subtitleAccentPrefixLength: subtitleAccentPrefixLength,
                             isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
                             isExpanded: nil,
                             action: .pane(pane.id),
@@ -3402,6 +3413,7 @@ struct SidebarItem {
     let progress: PaneProgress?
     let title: String
     let subtitle: String?
+    let subtitleAccentPrefixLength: Int?
     let isActive: Bool
     let isExpanded: Bool?
     let action: Action
@@ -3414,6 +3426,7 @@ struct SidebarItem {
         progress: PaneProgress?,
         title: String,
         subtitle: String?,
+        subtitleAccentPrefixLength: Int? = nil,
         isActive: Bool,
         isExpanded: Bool? = nil,
         action: Action,
@@ -3425,6 +3438,7 @@ struct SidebarItem {
         self.progress = progress
         self.title = title
         self.subtitle = subtitle
+        self.subtitleAccentPrefixLength = subtitleAccentPrefixLength
         self.isActive = isActive
         self.isExpanded = isExpanded
         self.action = action
@@ -7610,6 +7624,25 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         disclosureImageView.contentTintColor = item.isActive ? theme.shell.selectedText : theme.shell.textMuted
         subtitleField.stringValue = item.subtitle ?? ""
         subtitleField.textColor = theme.shell.textMuted
+        if let subtitle = item.subtitle {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .foregroundColor: theme.shell.textMuted,
+                .font: subtitleField.font as Any,
+            ]
+            let attributed = NSMutableAttributedString(string: subtitle, attributes: attributes)
+            if let accentLength = item.subtitleAccentPrefixLength,
+               accentLength > 0,
+               accentLength <= subtitle.utf16.count {
+                attributed.addAttribute(
+                    .foregroundColor,
+                    value: theme.shell.accent,
+                    range: NSRange(location: 0, length: accentLength)
+                )
+            }
+            subtitleField.attributedStringValue = attributed
+        } else {
+            subtitleField.attributedStringValue = NSAttributedString(string: "")
+        }
         subtitleField.isHidden = item.subtitle == nil
         switch item.kind {
         case .workspace:

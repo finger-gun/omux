@@ -5,98 +5,84 @@ struct TerminalSidebarMetadata: Equatable {
     let icon: OmuxSemanticIcon
     let title: String
     let subtitle: String?
+    let path: String?
+    let abbreviatedPath: String?
+    let gitBranch: String?
+    let isGitRepo: Bool
+    let isWorktree: Bool
 }
 
 final class TerminalSidebarMetadataResolver {
     private struct GitInfo {
         let branchName: String?
+        let isWorktree: Bool
     }
 
     private var gitInfoByPath: [String: GitInfo?] = [:]
 
-    func metadata(for pane: Pane, icon: OmuxSemanticIcon) -> TerminalSidebarMetadata {
-        // When the user has set an alias, always prefer it in the sidebar without
-        // applying the path/branch heuristics — mirrors what the tab strip shows.
-        if let alias = pane.userAlias {
-            guard let session = pane.terminalSession else {
-                return TerminalSidebarMetadata(
-                    icon: icon,
-                    title: alias,
-                    subtitle: pane.extensionPane?.pluginID
-                )
-            }
-
-            let path = pane.terminalState.reportedWorkingDirectory ?? session.workingDirectory
-            let abbreviatedPath = abbreviate(path: path)
-            let gitInfo = resolveGitInfo(for: path)
-            let subtitle = gitInfo.map { info in
-                gitAwareSubtitle(branchName: info.branchName, abbreviatedPath: abbreviatedPath, preferredTitle: alias)
-            } ?? abbreviatedPath
-            return TerminalSidebarMetadata(icon: icon, title: alias, subtitle: subtitle)
-        }
-
+    func metadata(for pane: Pane, icon: OmuxSemanticIcon = .terminal) -> TerminalSidebarMetadata {
         guard let session = pane.terminalSession else {
             return TerminalSidebarMetadata(
                 icon: icon,
-                title: pane.title,
-                subtitle: pane.extensionPane?.pluginID
+                title: pane.displayTitle,
+                subtitle: pane.extensionPane?.pluginID,
+                path: nil,
+                abbreviatedPath: nil,
+                gitBranch: nil,
+                isGitRepo: false,
+                isWorktree: false
             )
         }
 
         let path = pane.terminalState.reportedWorkingDirectory ?? session.workingDirectory
         let abbreviatedPath = abbreviate(path: path)
-        let preferredPaneTitle = preferredPaneTitle(for: pane, session: session, abbreviatedPath: abbreviatedPath)
-
-        guard let gitInfo = resolveGitInfo(for: path) else {
-            return TerminalSidebarMetadata(
-                icon: icon,
-                title: preferredPaneTitle ?? abbreviatedPath,
-                subtitle: preferredPaneTitle == nil ? nil : abbreviatedPath
-            )
-        }
-
-        if let preferredPaneTitle {
-            let subtitle = gitAwareSubtitle(
-                branchName: gitInfo.branchName,
-                abbreviatedPath: abbreviatedPath,
-                preferredTitle: preferredPaneTitle
-            )
-            return TerminalSidebarMetadata(
-                icon: icon,
-                title: preferredPaneTitle,
-                subtitle: subtitle
-            )
-        }
-
-        let metadataTitle: String
-        if let branchName = gitInfo.branchName {
-            metadataTitle = branchName
-        } else {
-            metadataTitle = abbreviatedPath
-        }
+        let gitInfo = resolveGitInfo(for: path)
+        let subtitle = gitAwareSubtitle(
+            branchName: gitInfo?.branchName,
+            abbreviatedPath: abbreviatedPath
+        )
 
         return TerminalSidebarMetadata(
             icon: icon,
-            title: metadataTitle,
-            subtitle: abbreviatedPath
+            title: pane.displayTitle,
+            subtitle: subtitle,
+            path: path,
+            abbreviatedPath: abbreviatedPath,
+            gitBranch: gitInfo?.branchName,
+            isGitRepo: gitInfo != nil,
+            isWorktree: gitInfo?.isWorktree == true
         )
     }
 
     private func resolveGitInfo(for path: String) -> GitInfo? {
-        if let cached = gitInfoByPath[path] {
+        let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        if let cached = gitInfoByPath[normalizedPath] {
             return cached
         }
 
-        guard runGit(["-C", path, "rev-parse", "--show-toplevel"]) != nil else {
-            gitInfoByPath[path] = nil
+        guard runGit(["-C", normalizedPath, "rev-parse", "--show-toplevel"]) != nil else {
+            gitInfoByPath[normalizedPath] = nil
             return nil
         }
 
-        let symbolicBranch = runGit(["-C", path, "symbolic-ref", "--quiet", "--short", "HEAD"])
-        let detachedBranch = runGit(["-C", path, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
-        let gitInfo = GitInfo(branchName: symbolicBranch ?? detachedBranch)
-        gitInfoByPath[path] = gitInfo
+        let symbolicBranch = runGit(["-C", normalizedPath, "symbolic-ref", "--quiet", "--short", "HEAD"])
+        let detachedBranch = runGit(["-C", normalizedPath, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
+        let gitDir = runGit(["-C", normalizedPath, "rev-parse", "--git-dir"])
+        let gitCommonDir = runGit(["-C", normalizedPath, "rev-parse", "--git-common-dir"])
+        let isWorktree = Self.resolvedGitDirectoryPath(gitDir, relativeTo: normalizedPath)
+            != Self.resolvedGitDirectoryPath(gitCommonDir, relativeTo: normalizedPath)
+        let gitInfo = GitInfo(branchName: symbolicBranch ?? detachedBranch, isWorktree: isWorktree)
+        gitInfoByPath[normalizedPath] = gitInfo
         return gitInfo
+    }
+
+    private static func resolvedGitDirectoryPath(_ path: String?, relativeTo workingDirectory: String) -> String? {
+        guard let path else {
+            return nil
+        }
+        return URL(fileURLWithPath: path, relativeTo: URL(fileURLWithPath: workingDirectory, isDirectory: true))
+            .standardizedFileURL
+            .path
     }
 
     private func runGit(_ arguments: [String]) -> String? {
@@ -135,36 +121,14 @@ final class TerminalSidebarMetadataResolver {
         return suffix.isEmpty ? "~" : "~\(suffix)"
     }
 
-    private func preferredPaneTitle(for pane: Pane, session: SessionDescriptor, abbreviatedPath: String) -> String? {
-        let title = pane.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard title.isEmpty == false else {
-            return nil
-        }
-
-        let normalizedPath = session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultPathTitle = URL(fileURLWithPath: normalizedPath).lastPathComponent
-        let fallbackTitles = Set(["OpenMUX", "Shell"])
-
-        guard title != normalizedPath,
-              title != abbreviatedPath,
-              title != defaultPathTitle,
-              fallbackTitles.contains(title) == false
-        else {
-            return nil
-        }
-
-        return title
-    }
-
     private func gitAwareSubtitle(
         branchName: String?,
-        abbreviatedPath: String,
-        preferredTitle: String
+        abbreviatedPath: String
     ) -> String {
-        guard let branchName, branchName != preferredTitle else {
+        guard let branchName else {
             return abbreviatedPath
         }
 
-        return "\(branchName) · \(abbreviatedPath)"
+        return "\(branchName) - \(abbreviatedPath)"
     }
 }

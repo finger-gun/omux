@@ -52,6 +52,7 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Change working directory | ✅ | ✅ | n/a | Terminal process owns its cwd. |
 | Set title | ✅ | ✅ | | Hook and event exist. No CLI verb to set a pane title. |
 | Set tab title | ✅ | ✅ | | Hook and event exist. No CLI verb to set a tab title. |
+| Update pane metadata | ✅ | ✅ | n/a | Derived sidebar metadata (display title/git/path/worktree) now emits hook and event on change. |
 | Start command | ✅ | ✅ | ✅ | Fully wired. |
 | Finish command | ✅ | ✅ | | External tools could report command completion to OpenMUX. |
 | Fail command | ✅ | | | External tools could report command failure to OpenMUX. |
