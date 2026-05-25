@@ -5653,7 +5653,8 @@ final class OmuxAppShellTests: XCTestCase {
         let expectedTitle = repositoryURL.lastPathComponent
 
         XCTAssertTrue(findLabel(withString: expectedTitle, in: sidebar))
-        XCTAssertTrue(findLabel(withString: "main - \(repositoryURL.path)", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
+        XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
     }
 
     @MainActor
@@ -5678,7 +5679,8 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
         XCTAssertTrue(findLabel(withString: "hx", in: sidebar))
-        XCTAssertTrue(findLabel(withString: "main - \(repositoryURL.path)", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
+        XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
     }
 
     @MainActor

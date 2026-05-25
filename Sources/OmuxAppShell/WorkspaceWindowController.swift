@@ -1658,11 +1658,22 @@ final class WorkspaceShellViewController: NSViewController {
                         let paneIcon = iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))
                         let metadata = metadataResolver.metadata(for: pane, icon: paneIcon)
                         let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
+                        let subtitle: String?
+                        let detail: String?
+                        if metadata.isGitRepo,
+                           let branch = metadata.gitBranch,
+                           let abbreviatedPath = metadata.abbreviatedPath {
+                            subtitle = branch
+                            detail = abbreviatedPath
+                        } else {
+                            subtitle = metadata.subtitle
+                            detail = nil
+                        }
                         let subtitleAccentPrefixLength: Int? = {
                             guard metadata.isWorktree,
                                   let branch = metadata.gitBranch,
-                                  let subtitle = metadata.subtitle,
-                                  subtitle.hasPrefix(branch + " - ")
+                                  let subtitle,
+                                  subtitle.hasPrefix(branch)
                             else {
                                 return nil
                             }
@@ -1674,7 +1685,8 @@ final class WorkspaceShellViewController: NSViewController {
                             icon: renderedIcon(for: metadata.icon, pointSize: 11, weight: .medium),
                             progress: pane.terminalState.progress,
                             title: metadata.title,
-                            subtitle: metadata.subtitle,
+                            subtitle: subtitle,
+                            detail: detail,
                             subtitleAccentPrefixLength: subtitleAccentPrefixLength,
                             isActive: workspace.id == activeWorkspace.id && pane.id == activeWorkspace.focusedPane?.id,
                             isExpanded: nil,
@@ -3413,6 +3425,7 @@ struct SidebarItem {
     let progress: PaneProgress?
     let title: String
     let subtitle: String?
+    let detail: String?
     let subtitleAccentPrefixLength: Int?
     let isActive: Bool
     let isExpanded: Bool?
@@ -3426,6 +3439,7 @@ struct SidebarItem {
         progress: PaneProgress?,
         title: String,
         subtitle: String?,
+        detail: String? = nil,
         subtitleAccentPrefixLength: Int? = nil,
         isActive: Bool,
         isExpanded: Bool? = nil,
@@ -3438,6 +3452,7 @@ struct SidebarItem {
         self.progress = progress
         self.title = title
         self.subtitle = subtitle
+        self.detail = detail
         self.subtitleAccentPrefixLength = subtitleAccentPrefixLength
         self.isActive = isActive
         self.isExpanded = isExpanded
@@ -3457,7 +3472,13 @@ struct SidebarItem {
         case .workspace:
             return 28
         case .terminal:
-            return subtitle == nil ? 26 : 34
+            if detail != nil {
+                return 50
+            }
+            if subtitle == nil {
+                return 26
+            }
+            return 34
         }
     }
 }
@@ -7511,6 +7532,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
     }
     private let titleField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
+    private let detailField = NSTextField(labelWithString: "")
     private let disclosureImageView = NSImageView()
     private let iconField = NSTextField(labelWithString: "")
     private let iconImageView = NSImageView()
@@ -7563,6 +7585,14 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         subtitleField.isEditable = false
         subtitleField.isSelectable = false
         addSubview(subtitleField)
+
+        detailField.maximumNumberOfLines = 1
+        detailField.lineBreakMode = .byTruncatingMiddle
+        detailField.isBezeled = false
+        detailField.drawsBackground = false
+        detailField.isEditable = false
+        detailField.isSelectable = false
+        addSubview(detailField)
     }
 
     @available(*, unavailable)
@@ -7576,9 +7606,15 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
             titleField.font = .systemFont(ofSize: 13, weight: .semibold)
             leadingInset = 6
             subtitleField.font = .systemFont(ofSize: 11, weight: .regular)
+            subtitleField.maximumNumberOfLines = 1
+            subtitleField.lineBreakMode = .byTruncatingMiddle
+            detailField.font = .systemFont(ofSize: 10, weight: .regular)
         case .terminal:
             titleField.font = .systemFont(ofSize: 10, weight: .regular)
             subtitleField.font = .systemFont(ofSize: 10, weight: .regular)
+            subtitleField.maximumNumberOfLines = 1
+            subtitleField.lineBreakMode = .byTruncatingTail
+            detailField.font = .systemFont(ofSize: 10, weight: .regular)
             leadingInset = 22
         }
 
@@ -7644,6 +7680,9 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
             subtitleField.attributedStringValue = NSAttributedString(string: "")
         }
         subtitleField.isHidden = item.subtitle == nil
+        detailField.stringValue = item.detail ?? ""
+        detailField.textColor = theme.shell.textMuted.withAlphaComponent(0.85)
+        detailField.isHidden = item.detail == nil
         switch item.kind {
         case .workspace:
             layer?.backgroundColor = item.isActive
@@ -7727,6 +7766,30 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
                 height: titleHeight
             )
             subtitleField.frame = .zero
+            detailField.frame = .zero
+        } else if detailField.isHidden == false {
+            let subtitleHeight = subtitleField.intrinsicContentSize.height
+            let detailHeight = detailField.intrinsicContentSize.height
+            let totalHeight = titleHeight + subtitleHeight + detailHeight + 2
+            let startY = (bounds.height - totalHeight) / 2
+            titleField.frame = NSRect(
+                x: textLeadingInset,
+                y: startY + subtitleHeight + detailHeight + 2,
+                width: max(labelWidth, 0),
+                height: titleHeight
+            )
+            subtitleField.frame = NSRect(
+                x: textLeadingInset,
+                y: startY + detailHeight,
+                width: max(labelWidth, 0),
+                height: subtitleHeight
+            )
+            detailField.frame = NSRect(
+                x: textLeadingInset,
+                y: startY,
+                width: max(labelWidth, 0),
+                height: detailHeight
+            )
         } else {
             let subtitleHeight = subtitleField.intrinsicContentSize.height
             let totalHeight = titleHeight + subtitleHeight + 2
@@ -7743,6 +7806,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
                 width: max(labelWidth, 0),
                 height: subtitleHeight
             )
+            detailField.frame = .zero
         }
     }
 
