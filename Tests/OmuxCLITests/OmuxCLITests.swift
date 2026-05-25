@@ -775,6 +775,74 @@ final class OmuxCLITests: XCTestCase {
         ])
     }
 
+    func testCLISendsPaneMetadataRowsSetAndClearRequests() throws {
+        let socketPath = "/tmp/omux-pane-metadata-\(UUID().uuidString).sock"
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "pane-metadata", "set",
+                "--pane", "pane-1",
+                "--row1", "build",
+                "--row2", "main",
+                "--row3", "~/src/app",
+                "--source", "plugin.test",
+            ]),
+            0
+        )
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "pane-metadata", "clear",
+                "--pane", "pane-1",
+                "--source", "plugin.test",
+            ]),
+            0
+        )
+        XCTAssertEqual(command.run(arguments: ["omux", "pane-metadata", "set", "--pane", "pane-1"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.setPaneMetadataRows.rawValue,
+            ControlMethod.clearPaneMetadataRows.rawValue,
+        ])
+
+        guard case .object(let setParams)? = requests.value.first?.params,
+              case .object(let setTarget)? = setParams["target"],
+              case .string("pane")? = setTarget["type"],
+              case .string("pane-1")? = setTarget["id"],
+              case .string("build")? = setParams["row1"],
+              case .string("main")? = setParams["row2"],
+              case .string("~/src/app")? = setParams["row3"],
+              case .string("plugin.test")? = setParams["source"] else {
+            return XCTFail("expected pane metadata set params")
+        }
+
+        guard case .object(let clearParams)? = requests.value.last?.params,
+              case .object(let clearTarget)? = clearParams["target"],
+              case .string("pane")? = clearTarget["type"],
+              case .string("pane-1")? = clearTarget["id"],
+              case .string("plugin.test")? = clearParams["source"] else {
+            return XCTFail("expected pane metadata clear params")
+        }
+
+        XCTAssertEqual(output, [
+            "ok",
+            "ok",
+            "usage: omux pane-metadata set --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]",
+        ])
+    }
+
     func testCLIBundledAIStatusPluginSendsPaneStatus() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

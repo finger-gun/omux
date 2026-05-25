@@ -148,6 +148,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 initialTheme: initialTheme,
                 initialPanes: configurationCoordinator.paneConfiguration(),
                 initialIcons: configurationCoordinator.iconConfiguration(),
+                initialSidebar: configurationCoordinator.sidebarConfiguration(),
                 vaultStore: self.vaultStore,
                 vaultConfiguration: vaultConfiguration,
                 onClosePaneTab: { [weak self] paneID in
@@ -175,6 +176,34 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                     return .object(["ok": .bool(false), "error": .string("unsupported action")])
                 }
                 return .object(["ok": .bool(true), "action": .string(action)])
+            }
+            controlPlaneService.paneMetadataRowsHandler = { [weak self] action in
+                guard let self, let windowController = self.windowController else {
+                    return .object(["ok": .bool(false), "error": .string("window unavailable")])
+                }
+                switch action {
+                case .set(let paneID, let row1, let row2, let row3, let source):
+                    guard windowController.setPaneMetadataRows(paneID: paneID, row1: row1, row2: row2, row3: row3) else {
+                        return .object(["ok": .bool(false), "error": .string("pane not found")])
+                    }
+                    return .object([
+                        "ok": .bool(true),
+                        "paneID": .string(paneID.rawValue),
+                        "row1": row1.map(RPCValue.string) ?? .null,
+                        "row2": row2.map(RPCValue.string) ?? .null,
+                        "row3": row3.map(RPCValue.string) ?? .null,
+                        "source": source.map(RPCValue.string) ?? .null,
+                    ])
+                case .clear(let paneID, let source):
+                    guard windowController.clearPaneMetadataRows(paneID: paneID) else {
+                        return .object(["ok": .bool(false), "error": .string("pane not found")])
+                    }
+                    return .object([
+                        "ok": .bool(true),
+                        "paneID": .string(paneID.rawValue),
+                        "source": source.map(RPCValue.string) ?? .null,
+                    ])
+                }
             }
             windowController.window?.delegate = self
             windowController.showWindow(self)
@@ -204,6 +233,9 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
             configurationCoordinator.onIconConfigurationChange = { [weak self] icons in
                 self?.windowController?.updateIcons(icons)
+            }
+            configurationCoordinator.onSidebarConfigurationChange = { [weak self] sidebar in
+                self?.windowController?.updateSidebar(sidebar)
             }
             configurationCoordinator.onMarkdownPreviewConfigurationChange = { [weak self] configuration in
                 self?.workspaceController.updateMarkdownPreviewConfiguration(configuration)

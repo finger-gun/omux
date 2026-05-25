@@ -510,6 +510,26 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.pane-metadata.set",
+            usage: "omux pane-metadata set --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]",
+            title: "omux: Set Pane Metadata Rows",
+            summary: "Override sidebar metadata rows for a pane",
+            aliases: ["pane metadata", "sidebar rows"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
+            id: "omux.pane-metadata.clear",
+            usage: "omux pane-metadata clear --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--source <name>]",
+            title: "omux: Clear Pane Metadata Rows",
+            summary: "Clear sidebar metadata row overrides for a pane",
+            aliases: ["clear pane metadata", "reset sidebar rows"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.notify",
             usage: "omux notify <title> [body]",
             title: "omux: Send Notification",

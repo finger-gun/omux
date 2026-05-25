@@ -166,6 +166,7 @@ final class WorkspaceWindowController: NSWindowController {
         initialTheme: WorkspaceShellTheme = .defaultTheme,
         initialPanes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         initialIcons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
+        initialSidebar: OmuxConfigUI.Sidebar = OmuxConfigUI.Sidebar(),
         vaultStore: VaultStore? = nil,
         vaultConfiguration: VaultConfiguration = VaultConfiguration(enabled: false),
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring = WorkspaceSidebarVisibilityStore.shared,
@@ -178,6 +179,7 @@ final class WorkspaceWindowController: NSWindowController {
             initialTheme: initialTheme,
             initialPanes: initialPanes,
             initialIcons: initialIcons,
+            initialSidebar: initialSidebar,
             vaultStore: vaultStore,
             vaultConfiguration: vaultConfiguration,
             sidebarVisibilityStore: sidebarVisibilityStore,
@@ -244,6 +246,23 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.updatePanes(panes)
     }
 
+    func updateSidebar(_ sidebar: OmuxConfigUI.Sidebar) {
+        rootViewController.updateSidebar(sidebar)
+    }
+
+    func setPaneMetadataRows(
+        paneID: PaneID,
+        row1: String?,
+        row2: String?,
+        row3: String?
+    ) -> Bool {
+        rootViewController.setPaneMetadataRows(paneID: paneID, row1: row1, row2: row2, row3: row3)
+    }
+
+    func clearPaneMetadataRows(paneID: PaneID) -> Bool {
+        rootViewController.clearPaneMetadataRows(paneID: paneID)
+    }
+
     func toggleSidebarVisibility() {
         rootViewController.toggleSidebarVisibility()
     }
@@ -298,6 +317,22 @@ final class WorkspaceShellViewController: NSViewController {
         case loaded(String?)
     }
 
+    private struct SidebarRowValues {
+        let row1: String?
+        let row2: String?
+        let row3: String?
+    }
+
+    private struct PaneMetadataRowsOverride {
+        var row1: String?
+        var row2: String?
+        var row3: String?
+
+        var isEmpty: Bool {
+            row1 == nil && row2 == nil && row3 == nil
+        }
+    }
+
     private final class TerminalTextRenderCache {
         private var cachedTextByPaneID: [PaneID: CachedTerminalText] = [:]
 
@@ -332,6 +367,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var currentTheme: WorkspaceShellTheme
     private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
+    private var currentSidebar: OmuxConfigUI.Sidebar
     private var isSidebarVisible: Bool
     private var applicationIsActive: Bool = NSApplication.shared.isActive
     private var windowIsKey: Bool = false
@@ -361,6 +397,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultSourceEventWatcher: VaultSourceEventWatcher?
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
+    private var paneMetadataRowsOverridesByPaneID: [PaneID: PaneMetadataRowsOverride] = [:]
     private let onClosePaneTab: @MainActor (PaneID) -> Void
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
 
@@ -375,6 +412,7 @@ final class WorkspaceShellViewController: NSViewController {
         initialTheme: WorkspaceShellTheme,
         initialPanes: OmuxConfigUI.Panes,
         initialIcons: OmuxConfigUI.Icons,
+        initialSidebar: OmuxConfigUI.Sidebar,
         vaultStore: VaultStore?,
         vaultConfiguration: VaultConfiguration,
         sidebarVisibilityStore: any WorkspaceSidebarVisibilityStoring,
@@ -385,6 +423,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.currentTheme = initialTheme
         self.currentPanes = initialPanes
         self.currentIcons = initialIcons
+        self.currentSidebar = initialSidebar
         self.vaultStore = vaultStore
         self.vaultConfiguration = vaultConfiguration
         self.sidebarVisibilityStore = sidebarVisibilityStore
@@ -710,6 +749,8 @@ final class WorkspaceShellViewController: NSViewController {
         if previousWorkspaceID != nil, previousWorkspaceID != workspace.id {
             collapsedWorkspaceIDs.remove(workspace.id)
         }
+        let allPaneIDs = Set(allWorkspaces.flatMap { $0.tabs.flatMap(\.panes) }.map(\.id))
+        paneMetadataRowsOverridesByPaneID = paneMetadataRowsOverridesByPaneID.filter { allPaneIDs.contains($0.key) }
         currentWorkspace = workspace
         dismissIrrelevantRestoreBanners(for: workspace)
         let focusedPaneID = workspace.focusedPane?.id
@@ -902,6 +943,50 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    func updateSidebar(_ sidebar: OmuxConfigUI.Sidebar) {
+        currentSidebar = sidebar
+        if let currentWorkspace {
+            update(workspace: currentWorkspace)
+        }
+    }
+
+    @discardableResult
+    func setPaneMetadataRows(
+        paneID: PaneID,
+        row1: String?,
+        row2: String?,
+        row3: String?
+    ) -> Bool {
+        guard controller.pane(paneID) != nil else {
+            return false
+        }
+        var override = PaneMetadataRowsOverride()
+        override.row1 = Self.normalizedPaneMetadataOverrideValue(row1)
+        override.row2 = Self.normalizedPaneMetadataOverrideValue(row2)
+        override.row3 = Self.normalizedPaneMetadataOverrideValue(row3)
+        if override.isEmpty {
+            paneMetadataRowsOverridesByPaneID.removeValue(forKey: paneID)
+        } else {
+            paneMetadataRowsOverridesByPaneID[paneID] = override
+        }
+        if let currentWorkspace = controller.activeWorkspace() ?? currentWorkspace {
+            update(workspace: currentWorkspace)
+        }
+        return true
+    }
+
+    @discardableResult
+    func clearPaneMetadataRows(paneID: PaneID) -> Bool {
+        guard controller.pane(paneID) != nil else {
+            return false
+        }
+        paneMetadataRowsOverridesByPaneID.removeValue(forKey: paneID)
+        if let currentWorkspace = controller.activeWorkspace() ?? currentWorkspace {
+            update(workspace: currentWorkspace)
+        }
+        return true
+    }
+
     private func invalidateIconCacheForChangedPaths(from previousWorkspace: Workspace?, to workspace: Workspace) {
         guard let previousWorkspace else {
             return
@@ -929,6 +1014,14 @@ final class WorkspaceShellViewController: NSViewController {
             ?? pane.terminalSession?.workingDirectory
             ?? pane.extensionPane?.source
             ?? pane.id.rawValue
+    }
+
+    private static func normalizedPaneMetadataOverrideValue(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func apply(theme: WorkspaceShellTheme) {
@@ -1658,17 +1751,10 @@ final class WorkspaceShellViewController: NSViewController {
                         let paneIcon = iconResolver.icon(for: pane, terminalText: terminalTextProvider(pane))
                         let metadata = metadataResolver.metadata(for: pane, icon: paneIcon)
                         let paneStack = tab.rootLayout.paneStack(containingPaneID: pane.id)
-                        let subtitle: String?
-                        let detail: String?
-                        if metadata.isGitRepo,
-                           let branch = metadata.gitBranch,
-                           let abbreviatedPath = metadata.abbreviatedPath {
-                            subtitle = branch
-                            detail = abbreviatedPath
-                        } else {
-                            subtitle = metadata.subtitle
-                            detail = nil
-                        }
+                        let rows = resolvedSidebarRows(for: pane, metadata: metadata)
+                        let title = rows.row1 ?? metadata.title
+                        let subtitle = rows.row2
+                        let detail = rows.row3
                         let subtitleAccentPrefixLength: Int? = {
                             guard metadata.isWorktree,
                                   let branch = metadata.gitBranch,
@@ -1684,7 +1770,7 @@ final class WorkspaceShellViewController: NSViewController {
                             identifier: pane.id.rawValue,
                             icon: renderedIcon(for: metadata.icon, pointSize: 11, weight: .medium),
                             progress: pane.terminalState.progress,
-                            title: metadata.title,
+                            title: title,
                             subtitle: subtitle,
                             detail: detail,
                             subtitleAccentPrefixLength: subtitleAccentPrefixLength,
@@ -1704,6 +1790,60 @@ final class WorkspaceShellViewController: NSViewController {
                 } : []
 
             return [workspaceItem] + terminalItems
+        }
+    }
+
+    private func resolvedSidebarRows(for pane: Pane, metadata: TerminalSidebarMetadata) -> SidebarRowValues {
+        let configuredRows = currentSidebar.terminalRows
+        var resolvedRows: [String?] = [
+            sidebarRowValue(for: configuredRows.row1, metadata: metadata),
+            sidebarRowValue(for: configuredRows.row2, metadata: metadata),
+            sidebarRowValue(for: configuredRows.row3, metadata: metadata),
+        ]
+        if let override = paneMetadataRowsOverridesByPaneID[pane.id] {
+            if let row1 = override.row1 {
+                resolvedRows[0] = row1
+            }
+            if let row2 = override.row2 {
+                resolvedRows[1] = row2
+            }
+            if let row3 = override.row3 {
+                resolvedRows[2] = row3
+            }
+        }
+
+        let compactRows = resolvedRows.compactMap { value -> String? in
+            guard let value else {
+                return nil
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        return SidebarRowValues(
+            row1: compactRows.indices.contains(0) ? compactRows[0] : nil,
+            row2: compactRows.indices.contains(1) ? compactRows[1] : nil,
+            row3: compactRows.indices.contains(2) ? compactRows[2] : nil
+        )
+    }
+
+    private func sidebarRowValue(
+        for source: OmuxConfigUI.Sidebar.TerminalRowSource,
+        metadata: TerminalSidebarMetadata
+    ) -> String? {
+        switch source {
+        case .title:
+            return metadata.title
+        case .subtitle:
+            return metadata.subtitle
+        case .path:
+            return metadata.path
+        case .abbreviatedPath:
+            return metadata.abbreviatedPath
+        case .gitBranch:
+            return metadata.gitBranch
+        case .none:
+            return nil
         }
     }
 

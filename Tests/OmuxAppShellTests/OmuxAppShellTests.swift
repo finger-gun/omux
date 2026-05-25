@@ -5337,6 +5337,29 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowAppliesPaneMetadataRowOverridesInSidebar() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        XCTAssertTrue(windowController.setPaneMetadataRows(paneID: paneID, row1: "build", row2: "main", row3: "~/src"))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: "build", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "~/src", in: sidebar))
+
+        XCTAssertTrue(windowController.clearPaneMetadataRows(paneID: paneID))
+    }
+
+    @MainActor
     func testWorkspaceSidebarDragRegionsDoNotMoveWindow() {
         XCTAssertFalse(WorkspaceSidebarView().mouseDownCanMoveWindow)
         XCTAssertFalse(SidebarItemButton().mouseDownCanMoveWindow)
@@ -6718,6 +6741,96 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(invalidResponse.error?.code, 404)
+    }
+
+    @MainActor
+    func testControlPlanePaneMetadataRowsSetAndClear() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pane-meta.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+        let workspace = try controller.openWorkspace(at: "/tmp/pane-meta")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        var invocations: [String] = []
+        service.paneMetadataRowsHandler = { action in
+            switch action {
+            case .set(let paneID, let row1, let row2, let row3, let source):
+                invocations.append("set")
+                XCTAssertEqual(paneID.rawValue.isEmpty, false)
+                XCTAssertEqual(row1, "build")
+                XCTAssertEqual(row2, "main")
+                XCTAssertEqual(row3, "~/src")
+                XCTAssertEqual(source, "test")
+                return .object(["ok": .bool(true), "paneID": .string(paneID.rawValue)])
+            case .clear(let paneID, let source):
+                invocations.append("clear")
+                XCTAssertEqual(paneID.rawValue.isEmpty, false)
+                XCTAssertEqual(source, "test")
+                return .object(["ok": .bool(true), "paneID": .string(paneID.rawValue)])
+            }
+        }
+
+        let setResponse = try await Self.requestControlMethod(
+            .setPaneMetadataRows,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "target": .object(["type": .string("pane"), "id": .string(paneID.rawValue)]),
+                "row1": .string("build"),
+                "row2": .string("main"),
+                "row3": .string("~/src"),
+                "source": .string("test"),
+            ])
+        )
+        XCTAssertNil(setResponse.error)
+        if case .object(let setResult)? = setResponse.result {
+            XCTAssertEqual(setResult["ok"], .bool(true))
+        } else {
+            XCTFail("expected set pane metadata response object")
+        }
+
+        let clearResponse = try await Self.requestControlMethod(
+            .clearPaneMetadataRows,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "target": .object(["type": .string("pane"), "id": .string(paneID.rawValue)]),
+                "source": .string("test"),
+            ])
+        )
+        XCTAssertNil(clearResponse.error)
+        if case .object(let clearResult)? = clearResponse.result {
+            XCTAssertEqual(clearResult["ok"], .bool(true))
+        } else {
+            XCTFail("expected clear pane metadata response object")
+        }
+        XCTAssertEqual(invocations, ["set", "clear"])
     }
 
 

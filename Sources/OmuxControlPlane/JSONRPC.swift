@@ -83,4 +83,6 @@ public enum ControlMethod: String, Sendable {
     case getPaneAlias = "pane.alias.get"
     case setPaneAlias = "pane.alias.set"
     case clearPaneAlias = "pane.alias.clear"
+    case setPaneMetadataRows = "pane.metadata.rows.set"
+    case clearPaneMetadataRows = "pane.metadata.rows.clear"
 }
