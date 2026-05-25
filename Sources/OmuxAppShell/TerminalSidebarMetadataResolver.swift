@@ -96,12 +96,15 @@ final class TerminalSidebarMetadataResolver {
         process.standardError = errorPipe
 
         do {
+            let finished = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in
+                finished.signal()
+            }
             try process.run()
+            finished.wait()
         } catch {
             return nil
         }
-
-        process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             return nil
         }

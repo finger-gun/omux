@@ -182,9 +182,6 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
                     _ = kill(process.processIdentifier, SIGKILL)
                     _ = await waitForExit(process, timeoutNanoseconds: 1_000_000_000)
                 }
-                if process.isRunning == false {
-                    process.waitUntilExit()
-                }
                 let stderrOutput = String(decoding: await stderrTask.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 throw NSError(domain: "OmuxVaultExternalAdapter", code: 124, userInfo: [
                     NSLocalizedDescriptionKey: "external adapter '\(adapterID)' timed out after \(executionTimeoutNanoseconds / 1_000_000_000)s: \(stderrOutput)"
@@ -192,7 +189,6 @@ public struct ExternalCommandVaultAdapter: VaultAgentAdapter {
             }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
             let message = String(decoding: await stderrTask.value, as: UTF8.self)

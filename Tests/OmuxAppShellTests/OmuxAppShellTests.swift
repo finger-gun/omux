@@ -5650,10 +5650,10 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
-        let expectedTitle = "main"
+        let expectedTitle = repositoryURL.lastPathComponent
 
         XCTAssertTrue(findLabel(withString: expectedTitle, in: sidebar))
-        XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main - \(repositoryURL.path)", in: sidebar))
     }
 
     @MainActor
@@ -5678,7 +5678,7 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
         XCTAssertTrue(findLabel(withString: "hx", in: sidebar))
-        XCTAssertTrue(findLabel(withString: "main · \(repositoryURL.path)", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main - \(repositoryURL.path)", in: sidebar))
     }
 
     @MainActor
