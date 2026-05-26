@@ -623,7 +623,10 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 result: .array(configurationCoordinator.diagnostics().map(\.rpcValue))
             )
         case .configReload:
-            let result = configurationCoordinator.reload()
+            let result = configurationCoordinator.reload(source: "command")
+            if result.completed {
+                controller.publishConfigReloadCompletion(source: "command", applied: result.applied)
+            }
             return JSONRPCResponse(
                 id: request.id,
                 result: .object([
@@ -641,7 +644,10 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
             if result.diagnostics.contains(where: { $0.severity.isError }) {
                 return JSONRPCResponse(id: request.id, result: try rpcValue(for: result))
             }
-            let reloadResult = configurationCoordinator.reload()
+            let reloadResult = configurationCoordinator.reload(source: "apply")
+            if reloadResult.completed {
+                controller.publishConfigReloadCompletion(source: "apply", applied: reloadResult.applied)
+            }
             var value = try rpcValue(for: result).objectValue ?? [:]
             value["reload"] = .object([
                 "applied": .bool(reloadResult.applied),

@@ -248,6 +248,9 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | `workspace-opened` | A workspace is opened. | `workspaceID`, `sessionID` | `{ "path": string }` |
 | `workspace-renamed` | A workspace custom name changes. | `workspaceID` | `{ "name": string }` |
 | `workspace-closed` | A workspace is closed. | `workspaceID` | `{ "path": string }` |
+| `workspace-restored` | A workspace is restored into focus. | `workspaceID`, `tabID`, `paneID`, `sessionID` when available | `{ "path": string }` |
+| `pane-status-updated` | A pane status is set, changed, or cleared through `omux pane-status`. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "state": string, "value": integer \| null, "label": string \| null, "message": string \| null, "source": string }` |
+| `config-reloaded` | Config apply/reload completes successfully. | none | `{ "source": string, "applied": boolean }` |
 
 ### Session and pane hooks
 
@@ -259,6 +262,9 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | `pane-tab-created` | A local pane tab is created inside a pane stack. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "paneStackID": string }` |
 | `pane-tab-closed` | A local pane tab is closed. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "paneStackID": string \| null }` |
 | `pane-removed` | A pane is removed from the workspace layout. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{}` |
+| `extension-pane-created` | An extension pane is created. | `workspaceID`, `tabID`, `paneID` | `{ "pluginID": string, "contentKind": string, "source": string \| null, "paneStackID": string \| null }` |
+| `extension-pane-updated` | An extension pane is updated. | `workspaceID`, `tabID`, `paneID` | `{ "pluginID": string, "contentKind": string, "source": string \| null, "paneStackID": string \| null }` |
+| `extension-pane-closed` | An extension pane is closed. | `workspaceID`, `tabID`, `paneID` | `{ "pluginID": string, "paneStackID": string \| null }` |
 
 ### Command hooks
 

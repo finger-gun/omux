@@ -188,31 +188,36 @@ This keeps the shell AppKit-first while preserving one narrow terminal-engine se
 
 ## Control-plane event stream
 
-`omux events` now streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events for the first wave of short `omux` commands.
+`omux events` streams a mixed local event feed: OpenMUX-native `terminal.*` runtime events plus successful shared action events from `omux` commands.
 
 Control-plane terminal event subscriptions now use a FIFO queue with head-indexed dequeue semantics (instead of repeated front-removal on an array). This preserves publish order and cancellation behavior while avoiding O(n) churn under sustained streams.
 
 Explicit OpenMUX input actions such as `omux run` and `send-text` publish `terminal.inputSent` after successful delivery. Native pane typing is intentionally not streamed as `terminal.inputSent`, because per-key input is noisy, sensitive, and not an authoritative shell command record; terminal title updates remain presentation metadata and are not used as command text.
 
-Current first-wave shared action event names:
+Current shared action event names:
 
 - `workspace.opened`
+- `workspace.closed`
 - `tab.created`
 - `pane.split`
+- `pane.removed`
 - `paneTab.created`
 - `paneTab.focused`
 - `paneTab.closed`
 - `session.focused`
+- `pane.aliasSet`
+- `pane.aliasCleared`
 - `command.started`
 - `notification.raised`
 - `workspace.restored`
+- `config.reloaded`
 - `extensionPane.created`
 - `extensionPane.updated`
 - `extensionPane.closed`
 
 ## Terminal action dispatch
 
-OpenMUX still translates a focused first wave of Ghostty action callbacks into OpenMUX-native terminal events instead of rejecting every upcall.
+OpenMUX translates a focused set of Ghostty action callbacks into OpenMUX-native terminal events instead of rejecting every upcall.
 
 The dispatch path is intentionally layered:
 
@@ -220,7 +225,7 @@ The dispatch path is intentionally layered:
 2. `GhosttyTerminalBridge` enriches them with `paneID` and `sessionID` and publishes typed `TerminalActionEvent` values to observers.
 3. `OmuxAppShell.TerminalActionCoordinator` resolves workspace/tab context, updates pane state, performs native host-side behavior, emits structured hooks, and publishes `terminal.*` events into the shared control-plane event stream.
 
-Supported first-wave actions:
+Supported terminal runtime actions:
 
 - `PWD`
 - `SET_TITLE`
@@ -239,6 +244,8 @@ Key boundary rules:
 - Hook payloads now use `OmuxValue` instead of string-only metadata.
 - Control-plane event names are OpenMUX-native (`terminal.cwdChanged`, `workspace.opened`, `command.started`, and so on) and are defined without committing to a long-lived streaming transport.
 - Unsupported and app-shell ownership actions remain rejected by default.
+
+For user-facing surface coverage, see [Open by Design](./open-by-design.md). For the full event catalog, see [Events](./events.md). For the complete hook catalog and payload contracts, see [Hooks](./hooks.md).
 
 ## User hook directories
 
