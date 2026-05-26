@@ -1763,7 +1763,7 @@ final class WorkspaceShellViewController: NSViewController {
                             else {
                                 return nil
                             }
-                            return branch.count
+                            return branch.utf16.count
                         }()
                         return SidebarItem(
                             kind: .terminal,
@@ -7749,11 +7749,13 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
             subtitleField.maximumNumberOfLines = 1
             subtitleField.lineBreakMode = .byTruncatingMiddle
             detailField.font = .systemFont(ofSize: 10, weight: .regular)
+            titleField.lineBreakMode = .byTruncatingTail
         case .terminal:
             titleField.font = .systemFont(ofSize: 10, weight: .regular)
+            titleField.lineBreakMode = .byTruncatingMiddle
             subtitleField.font = .systemFont(ofSize: 10, weight: .regular)
             subtitleField.maximumNumberOfLines = 1
-            subtitleField.lineBreakMode = .byTruncatingTail
+            subtitleField.lineBreakMode = .byTruncatingMiddle
             detailField.font = .systemFont(ofSize: 10, weight: .regular)
             leadingInset = 22
         }
@@ -7801,9 +7803,12 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         subtitleField.stringValue = item.subtitle ?? ""
         subtitleField.textColor = theme.shell.textMuted
         if let subtitle = item.subtitle {
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineBreakMode = subtitleField.lineBreakMode
             let attributes: [NSAttributedString.Key: Any] = [
                 .foregroundColor: theme.shell.textMuted,
                 .font: subtitleField.font as Any,
+                .paragraphStyle: paragraphStyle,
             ]
             let attributed = NSMutableAttributedString(string: subtitle, attributes: attributes)
             if let accentLength = item.subtitleAccentPrefixLength,
@@ -7819,6 +7824,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         } else {
             subtitleField.attributedStringValue = NSAttributedString(string: "")
         }
+        subtitleField.toolTip = item.subtitle
         subtitleField.isHidden = item.subtitle == nil
         detailField.stringValue = item.detail ?? ""
         detailField.textColor = theme.shell.textMuted.withAlphaComponent(0.85)

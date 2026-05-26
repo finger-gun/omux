@@ -57,23 +57,35 @@ final class TerminalSidebarMetadataResolver {
     private func resolveGitInfo(for path: String) -> GitInfo? {
         let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
         if let cached = gitInfoByPath[normalizedPath] {
-            return cached
+            guard let cached else {
+                return nil
+            }
+            return GitInfo(
+                branchName: currentBranchName(for: normalizedPath),
+                isWorktree: cached.isWorktree
+            )
         }
 
         guard runGit(["-C", normalizedPath, "rev-parse", "--show-toplevel"]) != nil else {
-            gitInfoByPath[normalizedPath] = nil
+            gitInfoByPath[normalizedPath] = .some(nil)
             return nil
         }
 
-        let symbolicBranch = runGit(["-C", normalizedPath, "symbolic-ref", "--quiet", "--short", "HEAD"])
-        let detachedBranch = runGit(["-C", normalizedPath, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
         let gitDir = runGit(["-C", normalizedPath, "rev-parse", "--git-dir"])
         let gitCommonDir = runGit(["-C", normalizedPath, "rev-parse", "--git-common-dir"])
         let isWorktree = Self.resolvedGitDirectoryPath(gitDir, relativeTo: normalizedPath)
             != Self.resolvedGitDirectoryPath(gitCommonDir, relativeTo: normalizedPath)
-        let gitInfo = GitInfo(branchName: symbolicBranch ?? detachedBranch, isWorktree: isWorktree)
-        gitInfoByPath[normalizedPath] = gitInfo
-        return gitInfo
+        gitInfoByPath[normalizedPath] = GitInfo(branchName: nil, isWorktree: isWorktree)
+        return GitInfo(
+            branchName: currentBranchName(for: normalizedPath),
+            isWorktree: isWorktree
+        )
+    }
+
+    private func currentBranchName(for path: String) -> String? {
+        let symbolicBranch = runGit(["-C", path, "symbolic-ref", "--quiet", "--short", "HEAD"])
+        let detachedBranch = runGit(["-C", path, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
+        return symbolicBranch ?? detachedBranch
     }
 
     private static func resolvedGitDirectoryPath(_ path: String?, relativeTo workingDirectory: String) -> String? {

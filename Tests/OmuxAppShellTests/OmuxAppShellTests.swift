@@ -5960,20 +5960,36 @@ final class OmuxAppShellTests: XCTestCase {
             bridge: bridge,
             hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
         )
-        var publishedEvents: [ControlPlaneEvent] = []
+        var terminalEvents: [ControlPlaneEvent] = []
         controller.onTerminalEvent = { event in
-            publishedEvents.append(event)
+            terminalEvents.append(event)
         }
 
         let workspace = try controller.openWorkspace(at: "/tmp")
         let pane = try XCTUnwrap(workspace.focusedPane)
         let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
-        publishedEvents.removeAll()
+        terminalEvents.removeAll()
 
         runtime.emit(.titleChanged("ls"), on: runtimeSurfaceID)
 
-        XCTAssertTrue(publishedEvents.contains(where: { $0.name == "terminal.titleChanged" }))
-        XCTAssertTrue(publishedEvents.contains(where: { $0.name == "pane.metadataChanged" }))
+        XCTAssertTrue(terminalEvents.contains(where: { $0.name == "terminal.titleChanged" }))
+
+        let controlPlaneRuntime = ActionEmittingGhosttyRuntime()
+        let controlPlaneBridge = GhosttyTerminalBridge(runtime: controlPlaneRuntime)
+        let controlPlaneController = WorkspaceController(
+            bridge: controlPlaneBridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+        var controlPlaneEvents: [ControlPlaneEvent] = []
+        controlPlaneController.onControlPlaneEvent = { event in
+            controlPlaneEvents.append(event)
+        }
+        let controlPlaneWorkspace = try controlPlaneController.openWorkspace(at: "/tmp")
+        let controlPlanePane = try XCTUnwrap(controlPlaneWorkspace.focusedPane)
+        let controlPlaneSurfaceID = try XCTUnwrap(controlPlaneBridge.surface(for: controlPlanePane.id)?.runtimeSurfaceID)
+        controlPlaneEvents.removeAll()
+        controlPlaneRuntime.emit(.titleChanged("pwd"), on: controlPlaneSurfaceID)
+        XCTAssertTrue(controlPlaneEvents.contains(where: { $0.name == "pane.metadataChanged" }))
         XCTAssertTrue(launcher.invocations.isEmpty)
     }
 

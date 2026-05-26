@@ -637,6 +637,64 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(requestCount.value, 1)
     }
 
+    func testCLIWorktreeClearSyncsPaneWorkingDirectoryBeforeClear() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: "wtclear-\(UUID().uuidString).sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[(String, [String: RPCValue]?)]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            var values = requests.value
+            values.append((request.method, request.params?.objectValue))
+            requests.value = values
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        let gitCommands = LockedValue<[GitProcessCommand]>([])
+        let repoURL = URL(fileURLWithPath: "/tmp/openmux", isDirectory: true)
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { _ in },
+            readInputLine: { "worktree/2026-05-26-deadbeef" },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: { ["PWD": repoURL.path] },
+            gitRunner: { command in
+                var commands = gitCommands.value
+                commands.append(command)
+                gitCommands.value = commands
+                switch command.arguments {
+                case ["rev-parse", "--show-toplevel"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "\(repoURL.path)\n", standardError: "")
+                case ["rev-parse", "--git-common-dir"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: ".git\n", standardError: "")
+                case ["worktree", "add", "-b", "worktree/2026-05-26-deadbeef", "/tmp/openmux-worktree-2026-05-26-deadbeef"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "", standardError: "")
+                default:
+                    return GitProcessResult(terminationStatus: 1, standardOutput: "", standardError: "unexpected git command")
+                }
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "worktree", "--clear"]), 0)
+
+        XCTAssertEqual(gitCommands.value.map(\.arguments), [
+            ["rev-parse", "--show-toplevel"],
+            ["rev-parse", "--git-common-dir"],
+            ["worktree", "add", "-b", "worktree/2026-05-26-deadbeef", "/tmp/openmux-worktree-2026-05-26-deadbeef"],
+        ])
+        XCTAssertEqual(requests.value.map(\.0), [
+            ControlMethod.runCommand.rawValue,
+            ControlMethod.setPaneWorkingDirectory.rawValue,
+            ControlMethod.runCommand.rawValue,
+        ])
+        XCTAssertEqual(requests.value[0].1?["command"]?.stringValue, "cd '/tmp/openmux-worktree-2026-05-26-deadbeef'")
+        XCTAssertEqual(requests.value[1].1?["workingDirectory"]?.stringValue, "/tmp/openmux-worktree-2026-05-26-deadbeef")
+        XCTAssertEqual(requests.value[2].1?["command"]?.stringValue, "clear")
+    }
+
     func testCLIWorktreeReportsGitFailureWithoutRPC() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: "wtfail-\(UUID().uuidString).sock")

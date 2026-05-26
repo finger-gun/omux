@@ -447,6 +447,13 @@ public struct OmuxCLICommand {
                 writeLine("omux error: cd failed: \(error.message)")
                 return 1
             }
+            _ = try? client.request(
+                method: .setPaneWorkingDirectory,
+                params: .object([
+                    "type": .string("focused"),
+                    "workingDirectory": .string(worktreePath),
+                ])
+            )
             let clearResponse = try client.request(
                 method: .runCommand,
                 params: .object([

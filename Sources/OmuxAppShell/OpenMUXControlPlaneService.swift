@@ -683,6 +683,17 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane not found"))
             }
             return JSONRPCResponse(id: request.id, result: .object(updated.rpcObject))
+        case .setPaneWorkingDirectory:
+            guard let params = request.params?.objectValue,
+                  let target = ControlPlaneTerminalTarget(rpcValue: .object(params)),
+                  let path = params["workingDirectory"]?.stringValue
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target or workingDirectory"))
+            }
+            guard let updated = controller.setPaneWorkingDirectory(target: target, path: path) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(updated.rpcObject))
         case .setPaneMetadataRows:
             guard let metadataRowsRequest = ControlPlanePaneMetadataRowsRequest(rpcValue: request.params) else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid pane metadata rows request"))
