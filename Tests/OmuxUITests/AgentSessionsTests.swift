@@ -144,23 +144,4 @@ final class AgentSessionsTests: OmuxUITestsBase {
             "Agent Sessions sidebar should close via keyboard shortcut ⇧⌘B"
         )
     }
-
-    func testToggleViaViewMenu() {
-        closeSidebarIfOpen()
-
-        let menuBar = app.menuBars.firstMatch
-        menuBar.menuBarItems["View"].click()
-        menuBar.menuBarItems["View"].menuItems["Toggle Agent Sessions"].click()
-        XCTAssertTrue(
-            waitForSidebarOpen(),
-            "Agent Sessions sidebar should open via View menu"
-        )
-
-        menuBar.menuBarItems["View"].click()
-        menuBar.menuBarItems["View"].menuItems["Toggle Agent Sessions"].click()
-        XCTAssertTrue(
-            waitForSidebarClosed(),
-            "Agent Sessions sidebar should close via View menu"
-        )
-    }
 }

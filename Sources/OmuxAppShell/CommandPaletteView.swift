@@ -9,7 +9,6 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         case none
         case theme(originalTheme: WorkspaceShellTheme)
         case restoreWorkspace
-        case vaultSessions
 
         var isActive: Bool {
             if case .none = self { return false }
@@ -24,8 +23,6 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
                 return "Themes"
             case .restoreWorkspace:
                 return "Restore Workspace"
-            case .vaultSessions:
-                return "Agent Sessions"
             }
         }
     }
@@ -276,16 +273,6 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
         refreshResults()
     }
 
-    func enterVaultSessionsSubPalette(resultProvider: @escaping (String) -> [CommandPaletteResult]) {
-        subPaletteMode = .vaultSessions
-        topLevelResultProvider = self.resultProvider
-        self.resultProvider = resultProvider
-        searchField.stringValue = ""
-        selectedIndex = 0
-        sectionLabel.stringValue = subPaletteMode.sectionTitle ?? ""
-        refreshResults()
-    }
-
     func enterRestoreWorkspaceSubPalette(resultProvider: @escaping (String) -> [CommandPaletteResult]) {
         subPaletteMode = .restoreWorkspace
         topLevelResultProvider = self.resultProvider
@@ -377,6 +364,8 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate {
                 sectionLabel.stringValue = "Commands"
             case .workspace:
                 sectionLabel.stringValue = searchField.stringValue.isEmpty ? "Workspaces" : "Results"
+            case .agentSession:
+                sectionLabel.stringValue = "Agent Sessions"
             }
         }
 

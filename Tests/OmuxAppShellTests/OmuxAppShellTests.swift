@@ -201,9 +201,20 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Open" })
         XCTAssertNotNil(configurationMenu?.items.first { $0.title == "Reload" })
-        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Show Agent Sessions" })
+        XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
+        XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
+            title: "Toggle Agent Sessions",
+            key: "b",
+            modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
+            title: "Search Agent Sessions…",
+            key: "a",
+            modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertNil(viewMenu?.items.first { $0.title == "Toggle Agent Sessions" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
@@ -937,21 +948,25 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(controller.invokeCommandPaletteResult(cliWithArguments), .invoked)
         XCTAssertEqual(runtime.executedCommands, ["omux version", "omux config open"])
         XCTAssertEqual(runtime.currentInputText(), "omux config inactive-opacity <0.0-1.0>")
+    }
 
-        let vaultCommand = CommandPaletteCommand(
-            id: "builtin:agent-sessions",
-            title: "Agent Sessions",
-            subtitle: "Resume an indexed agent session",
-            category: .action,
-            matchText: "agent sessions history resume codex copilot",
-            aliases: ["resume session"],
-            invocationTarget: .vaultSessions
+    func testAgentSessionSearchActionIsEnabledWithActiveWorkspace() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
         )
-        let vaultResult = try XCTUnwrap(CommandPaletteSearch.commandResults(query: "codex sessions", commands: commands + [vaultCommand]).first {
-            $0.invocationTarget == .vaultSessions
-        })
-        XCTAssertEqual(vaultResult.title, "Agent Sessions")
-        XCTAssertEqual(controller.invokeCommandPaletteResult(vaultResult), .inert)
+        let commands = CommandPaletteCommandCatalog.commands(controller: controller, keyBindings: .defaults)
+        XCTAssertNil(commands.first { $0.invocationTarget == .action(.agentSessionSearch) },
+            "agentSessionSearch should not appear as a command palette command — it is shell-handled")
+
+        let agentSearchResult = CommandPaletteResult(
+            id: "agent-sessions.search",
+            title: "Search Agent Sessions",
+            category: .action,
+            matchText: "search agent sessions",
+            invocationTarget: .action(.agentSessionSearch)
+        )
+        XCTAssertEqual(controller.invokeCommandPaletteResult(agentSearchResult), .failed("Handled by the app shell"))
     }
 
     func testRestoreMostRecentlyClosedWorkspacePublishesWorkspaceRestoredEvent() throws {
@@ -3896,6 +3911,53 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertTrue(result.applied)
         waitForExpectations(timeout: 2)
+    }
+
+    @MainActor
+    func testConfigurationCoordinatorReloadCompletionOnlyPublishesOnSuccess() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = home.appendingPathComponent("config.toml")
+        let themesDirectoryURL = home.appendingPathComponent("themes", isDirectory: true)
+        let generatedURL = home.appendingPathComponent("generated/ghostty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let evaluator = OmuxConfigurationEvaluator(
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(userThemesDirectoryURL: themesDirectoryURL),
+            compiler: OmuxThemeCompiler(generatedGhosttyDirectoryURL: generatedURL)
+        )
+        let prepared = OpenMUXConfigurationCoordinator.prepareInitialState(evaluator: evaluator)
+        let coordinator = OpenMUXConfigurationCoordinator(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            initialState: prepared,
+            evaluator: evaluator
+        )
+
+        var observations: [OpenMUXConfigurationReloadObservation] = []
+        coordinator.onReloadCompleted = { observations.append($0) }
+
+        let success = coordinator.reload(source: "command")
+        XCTAssertTrue(success.completed)
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].source, "command")
+
+        try """
+        schema = 1
+
+        [theme]
+        name = ""
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+        let failure = coordinator.reload(source: "watch")
+        XCTAssertFalse(failure.completed)
+        XCTAssertEqual(observations.count, 1)
     }
 
     @MainActor

@@ -10,7 +10,7 @@ OpenMUX exposes three complementary automation surfaces. A fully open transition
 
 **Hooks** are push notifications to user-installed executables under `~/.omux/hooks/`. When a transition happens, OpenMUX launches registered handlers and pipes a JSON payload to stdin. Hooks are for reactions: "when a command fails, notify me." See the [hook reference](./hooks.md).
 
-**Control plane events** are structured messages on the `omux events` JSON-RPC stream. A long-running process (dashboard, status widget, monitoring script) subscribes once and filters the stream. Events are for observation without per-occurrence process overhead. See the [development notes](./development.md#control-plane-event-stream).
+**Control plane events** are structured messages on the `omux events` JSON-RPC stream. A long-running process (dashboard, status widget, monitoring script) subscribes once and filters the stream. Events are for observation without per-occurrence process overhead. See the [event reference](./events.md).
 
 **CLI verbs** are the pull interface: query state, trigger actions, inspect the workspace. `omux split`, `omux run`, `omux config get`. CLI verbs are for scripts and tools that want to make something happen or inspect current state on demand.
 
@@ -25,11 +25,11 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Action | Hook | Event | CLI | Notes |
 | --- | --- | --- | --- | --- |
 | Open workspace | ✅ | ✅ | ✅ | Fully wired. |
-| Close workspace | ✅ | | ✅ | No control plane event yet. |
+| Close workspace | ✅ | ✅ | ✅ | Fully wired. |
 | Rename workspace | ✅ | | | Hook only. No event, no CLI verb. |
 | Switch workspace focus | | | | Most common workspace action. Not observable. |
 | Reorder workspace | | | | Move up/down has no external signal. |
-| Restore workspace | | ✅ | ✅ | Event and CLI exist, no hook. |
+| Restore workspace | ✅ | ✅ | ✅ | Fully wired. |
 
 ### Pane and tab actions
 
@@ -41,9 +41,9 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Close pane tab | ✅ | ✅ | ✅ | Fully wired. |
 | Focus pane tab | | ✅ | ✅ | Event and CLI exist, no hook. |
 | Focus pane | ✅ | ✅ | ✅ | Fully wired. `omux pane-next`, `pane-prev`, and `focus --pane` cover this. |
-| Remove pane | ✅ | | ✅ | Hook and CLI exist. No control plane event. |
+| Remove pane | ✅ | ✅ | ✅ | Fully wired. |
 | Resize pane | | | | Equalize and directional resize have no external signal. |
-| Set/clear pane alias | ✅ | | ✅ | Hook and CLI exist. No control plane event. |
+| Set/clear pane alias | ✅ | ✅ | ✅ | Fully wired. |
 
 ### Terminal session
 
@@ -70,7 +70,7 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Open URL | ✅ | ✅ | | Hook and event exist. CLI could route through OpenMUX's hook pipeline. |
 | Show desktop notification | ✅ | ✅ | n/a | Terminal-originated. `omux notify` covers the CLI path. |
 | Ring bell | ✅ | ✅ | | Hook and event exist. |
-| Update pane status | | ✅ | ✅ | Event and CLI exist. No hook. |
+| Update pane status | ✅ | ✅ | ✅ | Fully wired. |
 | Toggle sidebar | | | | No external signal. No CLI verb. |
 | Toggle pane tab bar | | | | No external signal. No CLI verb. |
 
@@ -78,9 +78,9 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 
 | Action | Hook | Event | CLI | Notes |
 | --- | --- | --- | --- | --- |
-| Create extension pane | | ✅ | ✅ | Event and CLI. No hook. |
-| Update extension pane | | ✅ | ✅ | Event and CLI. No hook. |
-| Close extension pane | | ✅ | ✅ | Event and CLI. No hook. |
+| Create extension pane | ✅ | ✅ | ✅ | Fully wired. |
+| Update extension pane | ✅ | ✅ | ✅ | Fully wired. |
+| Close extension pane | ✅ | ✅ | ✅ | Fully wired. |
 
 ### App lifecycle
 
@@ -88,7 +88,7 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | --- | --- | --- | --- | --- |
 | Start app | | | | No signal that OpenMUX is ready. |
 | Quit app | | | | No signal for cleanup before exit. |
-| Reload config | | | ✅ | CLI verb exists (`config.reload`). No hook or event on completion. |
+| Reload config | ✅ | ✅ | ✅ | Emits `config-reloaded` and `config.reloaded` on successful completion. |
 
 ## How to wire a new transition
 

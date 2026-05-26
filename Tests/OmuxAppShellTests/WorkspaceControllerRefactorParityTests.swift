@@ -61,6 +61,7 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
         let registry = HookRegistry()
         registry.register(HookDescriptor(category: .lifecycle, name: "workspace-opened", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
         registry.register(HookDescriptor(category: .lifecycle, name: "workspace-closed", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .lifecycle, name: "workspace-restored", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
         registry.register(HookDescriptor(category: .session, name: "pane-created", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
         registry.register(HookDescriptor(category: .session, name: "pane-focused", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
 
@@ -99,6 +100,8 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
             "event:workspace.opened",
             "hook:workspace-opened",
             "hook:workspace-closed",
+            "event:workspace.closed",
+            "hook:workspace-restored",
             "event:workspace.restored",
         ])
 
@@ -107,6 +110,7 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
             "pane.split",
             "session.focused",
             "workspace.opened",
+            "workspace.closed",
             "workspace.restored",
         ])
         XCTAssertEqual(events[0].payload.objectValue?["path"], .string("/tmp/refactor-publish-a"))
@@ -114,8 +118,10 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
         XCTAssertEqual(events[1].paneID, splitPaneID)
         XCTAssertEqual(events[2].sessionID, firstSessionID)
         XCTAssertEqual(events[3].payload.objectValue?["path"], .string("/tmp/refactor-publish-b"))
-        XCTAssertEqual(events[4].workspaceID, firstWorkspace.id)
-        XCTAssertEqual(events[4].payload.objectValue?.count, 0)
+        XCTAssertEqual(events[4].workspaceID, secondWorkspace.id)
+        XCTAssertEqual(events[4].payload.objectValue?["path"], .string("/tmp/refactor-publish-b"))
+        XCTAssertEqual(events[5].workspaceID, firstWorkspace.id)
+        XCTAssertEqual(events[5].payload.objectValue?["path"], .string("/tmp/refactor-publish-a"))
 
         XCTAssertEqual(launcher.invocations.map(\.name), [
             "workspace-opened",
@@ -123,6 +129,7 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
             "pane-focused",
             "workspace-opened",
             "workspace-closed",
+            "workspace-restored",
         ])
         XCTAssertEqual(launcher.invocations[0].payload.objectValue?["path"], .string("/tmp/refactor-publish-a"))
         XCTAssertEqual(launcher.invocations[1].workspaceID, firstWorkspace.id)
@@ -130,6 +137,91 @@ final class WorkspaceControllerRefactorParityTests: XCTestCase {
         XCTAssertEqual(launcher.invocations[2].sessionID, firstSessionID)
         XCTAssertEqual(launcher.invocations[3].payload.objectValue?["path"], .string("/tmp/refactor-publish-b"))
         XCTAssertEqual(launcher.invocations[4].payload.objectValue?["path"], .string("/tmp/refactor-publish-b"))
+        XCTAssertEqual(launcher.invocations[5].payload.objectValue?["path"], .string("/tmp/refactor-publish-a"))
+    }
+
+    func testPaneAndAliasParitySignalsEmitThroughPublicationSeam() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let launcher = RecordingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(HookDescriptor(category: .lifecycle, name: "pane-alias-set", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .lifecycle, name: "pane-alias-cleared", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .lifecycle, name: "pane-status-updated", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .session, name: "pane-removed", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var events: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { events.append($0) }
+
+        let workspace = try controller.openWorkspace(at: "/tmp/refactor-pane-parity")
+        let targetPane = try XCTUnwrap(workspace.focusedPane)
+        _ = try controller.splitFocusedPane(axis: .columns)
+
+        _ = try controller.setPaneAlias(targetPane.id, to: "build")
+        _ = try controller.clearPaneAlias(targetPane.id)
+        _ = controller.setPaneStatus(ControlPlanePaneStatusRequest(target: .pane(targetPane.id), state: .working, source: "test"))
+        _ = try controller.removeActivePane()
+
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.paneAliasSet.rawValue }))
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.paneAliasCleared.rawValue }))
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.paneStatusChanged.rawValue }))
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.paneRemoved.rawValue }))
+
+        let hookNames = launcher.invocations.map(\.name)
+        XCTAssertTrue(hookNames.contains("pane-alias-set"))
+        XCTAssertTrue(hookNames.contains("pane-alias-cleared"))
+        XCTAssertTrue(hookNames.contains("pane-status-updated"))
+        XCTAssertTrue(hookNames.contains("pane-removed"))
+    }
+
+    func testExtensionPaneParitySignalsEmitThroughPublicationSeam() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let launcher = RecordingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(HookDescriptor(category: .lifecycle, name: "extension-pane-created", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .lifecycle, name: "extension-pane-updated", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+        registry.register(HookDescriptor(category: .lifecycle, name: "extension-pane-closed", executableURL: URL(fileURLWithPath: "/usr/bin/true")))
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var events: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { events.append($0) }
+
+        _ = try controller.openWorkspace(at: "/tmp/refactor-extension-parity")
+        let created = try XCTUnwrap(controller.createExtensionPane(
+            title: "Preview",
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.example.preview",
+                contentKind: .html,
+                html: "<h1>Preview</h1>"
+            )
+        ))
+        _ = try XCTUnwrap(controller.updateExtensionPane(
+            paneID: created.pane.id,
+            descriptor: ExtensionPaneDescriptor(
+                pluginID: "dev.example.preview",
+                contentKind: .html,
+                html: "<h1>Updated</h1>",
+                status: .ready
+            )
+        ))
+        _ = try XCTUnwrap(controller.closeExtensionPane(paneID: created.pane.id))
+
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.extensionPaneCreated.rawValue }))
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.extensionPaneUpdated.rawValue }))
+        XCTAssertTrue(events.contains(where: { $0.name == ControlPlaneActionEventName.extensionPaneClosed.rawValue }))
+
+        let hookNames = launcher.invocations.map(\.name)
+        XCTAssertTrue(hookNames.contains("extension-pane-created"))
+        XCTAssertTrue(hookNames.contains("extension-pane-updated"))
+        XCTAssertTrue(hookNames.contains("extension-pane-closed"))
     }
 
     private func scannedContext(
