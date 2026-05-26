@@ -3,6 +3,7 @@ import Foundation
 public enum CommandPaletteQueryMode: String, Equatable, Sendable {
     case workspace
     case command
+    case agentSession
 }
 
 public struct CommandPaletteParsedQuery: Equatable, Sendable {
@@ -14,6 +15,9 @@ public struct CommandPaletteParsedQuery: Equatable, Sendable {
         self.rawText = rawText
         if rawText.first == ">" {
             mode = .command
+            matchingText = String(rawText.dropFirst())
+        } else if rawText.first == "@" {
+            mode = .agentSession
             matchingText = String(rawText.dropFirst())
         } else {
             mode = .workspace
@@ -36,7 +40,6 @@ public enum CommandPaletteInvocationTarget: Equatable, Sendable {
     case restoreWorkspacePalette
     case clearRecentlyClosedWorkspaces
     case reopenClosedWorkspace(WorkspaceID)
-    case vaultSessions
     case vaultSession(String)
     case configOpen
 }

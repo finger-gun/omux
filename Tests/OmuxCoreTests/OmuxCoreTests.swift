@@ -403,16 +403,50 @@ final class OmuxCoreTests: XCTestCase {
         )).route, .terminal)
     }
 
+    func testAgentSessionSearchDefaultShortcutRoutesToShortcut() throws {
+        let normalizer = DefaultKeyEventNormalizer(keyBindingRegistry: .defaults)
+        let cmdShiftA = normalizer.normalize(
+            RawKeyInput(
+                keyCode: 0,
+                characters: "A",
+                charactersIgnoringModifiers: "a",
+                modifiers: [.leftCommand, .leftShift]
+            )
+        )
+        XCTAssertEqual(cmdShiftA.route, .shortcut)
+
+        let chord = try OpenMUXKeyChord(parsing: "cmd+shift+a")
+        XCTAssertEqual(OpenMUXKeyBindingRegistry.defaults.chord(for: .agentSessionSearch), chord)
+
+        let unbound = DefaultKeyEventNormalizer(keyBindingRegistry: .effective(overrides: [
+            OpenMUXKeyBindingOverride(chord: try OpenMUXKeyChord(parsing: "cmd+shift+a"), action: nil),
+        ]))
+        XCTAssertEqual(unbound.normalize(RawKeyInput(
+            keyCode: 0,
+            characters: "A",
+            charactersIgnoringModifiers: "a",
+            modifiers: [.leftCommand, .leftShift]
+        )).route, .terminal)
+    }
+
     func testCommandPaletteParsingAndRanking() {
         let workspaceQuery = CommandPaletteParsedQuery(rawText: " project")
         let commandQuery = CommandPaletteParsedQuery(rawText: ">split")
         let whitespacePrefixQuery = CommandPaletteParsedQuery(rawText: " >split")
+        let agentSessionQuery = CommandPaletteParsedQuery(rawText: "@codex")
+        let agentSessionEmptyQuery = CommandPaletteParsedQuery(rawText: "@")
+        let atSignNotFirst = CommandPaletteParsedQuery(rawText: "foo@bar")
 
         XCTAssertEqual(workspaceQuery.mode, .workspace)
         XCTAssertEqual(workspaceQuery.matchingText, " project")
         XCTAssertEqual(commandQuery.mode, .command)
         XCTAssertEqual(commandQuery.matchingText, "split")
         XCTAssertEqual(whitespacePrefixQuery.mode, .workspace)
+        XCTAssertEqual(agentSessionQuery.mode, .agentSession)
+        XCTAssertEqual(agentSessionQuery.matchingText, "codex")
+        XCTAssertEqual(agentSessionEmptyQuery.mode, .agentSession)
+        XCTAssertEqual(agentSessionEmptyQuery.matchingText, "")
+        XCTAssertEqual(atSignNotFirst.mode, .workspace)
 
         let first = WorkspaceID(rawValue: "first")
         let second = WorkspaceID(rawValue: "second")

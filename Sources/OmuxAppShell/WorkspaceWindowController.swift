@@ -393,6 +393,7 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultPaletteSessions: [VaultSessionSummary] = []
     private var vaultPaletteEntries: [VaultPaletteEntry] = []
     private var vaultPaletteLoadGeneration = UUID()
+    private var vaultPaletteSessionsLoaded = false
     private var vaultIndexRefreshCoordinator: VaultIndexRefreshCoordinator?
     private var vaultSourceEventWatcher: VaultSourceEventWatcher?
     private var findSearchObserverToken: UUID?
@@ -2000,18 +2001,21 @@ final class WorkspaceShellViewController: NSViewController {
                     workspaces: controller.commandPaletteWorkspaces()
                 )
             case .command:
-                var commands = CommandPaletteCommandCatalog.commands(
+                let commands = CommandPaletteCommandCatalog.commands(
                     controller: controller,
                     keyBindings: keyBindings,
                     subtitleOverrides: configOpenContext.map { ["cli:omux.config.open": $0.subtitle] } ?? [:]
                 )
-                if vaultConfiguration.enabled && vaultStore != nil {
-                    commands.append(vaultSessionsCommand(keyBindings: keyBindings))
-                }
                 return CommandPaletteSearch.commandResults(
                     query: parsed.matchingText,
                     commands: commands
                 )
+            case .agentSession:
+                if vaultConfiguration.enabled && vaultStore != nil {
+                    ensureVaultPaletteSessionsLoaded(paletteView: paletteView)
+                    return vaultPaletteResults(query: parsed.matchingText)
+                }
+                return []
             }
         }
 
@@ -2053,9 +2057,9 @@ final class WorkspaceShellViewController: NSViewController {
                 shellOverlayHostView.dismissAllWorkspaceRestoreBanners()
                 return .invoked
             }
-            if result.invocationTarget == .vaultSessions {
-                presentVaultSessionsSubPalette(in: paletteView)
-                return .inert
+            if case .vaultSession(let sessionID) = result.invocationTarget {
+                resumeVaultSession(sessionID)
+                return .invoked
             }
             if result.invocationTarget == .configOpen {
                 NSWorkspace.shared.open(OmuxConfigPaths.configFileURL)
@@ -2073,10 +2077,6 @@ final class WorkspaceShellViewController: NSViewController {
 
         paletteView.subPaletteCommitHandler = { [weak self] identifier in
             guard let self else { return }
-            if self.vaultPaletteSessions.contains(where: { $0.id == identifier }) {
-                self.resumeVaultSession(identifier)
-                return
-            }
             if identifier.hasPrefix("recently-closed:") {
                 let workspaceIDRaw = String(identifier.dropFirst("recently-closed:".count))
                 let workspaceID = WorkspaceID(rawValue: workspaceIDRaw)
@@ -2099,6 +2099,7 @@ final class WorkspaceShellViewController: NSViewController {
             if self?.commandPaletteView === paletteView {
                 self?.commandPaletteView = nil
             }
+            self?.vaultPaletteSessionsLoaded = false
             if let paletteView {
                 self?.shellOverlayHostView.dismiss(commandPaletteView: paletteView)
             }
@@ -2107,10 +2108,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
-        presentCommandPalette(initialQuery: ">", keyBindings: keyBindings)
-        if let paletteView = commandPaletteView {
-            presentVaultSessionsSubPalette(in: paletteView)
-        }
+        presentCommandPalette(initialQuery: "@", keyBindings: keyBindings)
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -2238,27 +2236,11 @@ final class WorkspaceShellViewController: NSViewController {
             .first { $0.id == paneID }
     }
 
-    private func vaultSessionsCommand(keyBindings: OpenMUXKeyBindingRegistry) -> CommandPaletteCommand {
-        _ = keyBindings
-        return CommandPaletteCommand(
-            id: "builtin:agent-sessions",
-            title: "Agent Sessions",
-            subtitle: "Resume an indexed agent session",
-            category: .action,
-            matchText: "agent sessions history resume codex copilot",
-            aliases: ["resume session", "codex sessions", "copilot sessions"],
-            requiresArguments: false,
-            hasSafeDefaultTarget: true,
-            invocationTarget: .vaultSessions
-        )
-    }
-
-    private func presentVaultSessionsSubPalette(in paletteView: CommandPaletteView) {
+    private func ensureVaultPaletteSessionsLoaded(paletteView: CommandPaletteView) {
+        guard !vaultPaletteSessionsLoaded else { return }
+        vaultPaletteSessionsLoaded = true
         vaultPaletteSessions = []
         vaultPaletteEntries = []
-        paletteView.enterVaultSessionsSubPalette { [weak self] query in
-            self?.vaultPaletteResults(query: query) ?? []
-        }
         loadVaultPaletteSessions(paletteView: paletteView)
     }
 
@@ -2339,6 +2321,8 @@ final class WorkspaceShellViewController: NSViewController {
                 } while offset < totalCount
             } catch {
                 fputs("Agent Sessions palette search failed: \(error)\n", stderr)
+                guard let self, self.vaultPaletteLoadGeneration == generation else { return }
+                self.vaultPaletteSessionsLoaded = false
             }
         }
     }
