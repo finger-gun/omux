@@ -749,7 +749,9 @@ final class WorkspaceShellViewController: NSViewController {
         if previousWorkspaceID != nil, previousWorkspaceID != workspace.id {
             collapsedWorkspaceIDs.remove(workspace.id)
         }
-        let allPaneIDs = Set(allWorkspaces.flatMap { $0.tabs.flatMap(\.panes) }.map(\.id))
+        let allPaneIDs = Set(allWorkspaces.flatMap { workspace in
+            workspace.tabs.flatMap(\.panes) + workspace.floatingPaneModals.flatMap(\.panes)
+        }.map(\.id))
         paneMetadataRowsOverridesByPaneID = paneMetadataRowsOverridesByPaneID.filter { allPaneIDs.contains($0.key) }
         currentWorkspace = workspace
         dismissIrrelevantRestoreBanners(for: workspace)

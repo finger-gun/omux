@@ -83,9 +83,10 @@ final class TerminalSidebarMetadataResolver {
     }
 
     private func currentBranchName(for path: String) -> String? {
-        let symbolicBranch = runGit(["-C", path, "symbolic-ref", "--quiet", "--short", "HEAD"])
-        let detachedBranch = runGit(["-C", path, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
-        return symbolicBranch ?? detachedBranch
+        if let symbolicBranch = runGit(["-C", path, "symbolic-ref", "--quiet", "--short", "HEAD"]) {
+            return symbolicBranch
+        }
+        return runGit(["-C", path, "rev-parse", "--short", "HEAD"]).map { "detached \($0)" }
     }
 
     private static func resolvedGitDirectoryPath(_ path: String?, relativeTo workingDirectory: String) -> String? {

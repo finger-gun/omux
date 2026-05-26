@@ -47,6 +47,27 @@ private struct PaneMetadataRequest {
     let workspaceID: WorkspaceID
     let tabID: TabID?
     let pane: Pane
+    let freshness: PaneMetadataFreshness
+}
+
+private struct PaneMetadataFreshness: Equatable {
+    let displayTitle: String
+    let title: String
+    let userAlias: String?
+    let sessionID: SessionID?
+    let sessionWorkingDirectory: String?
+    let reportedWorkingDirectory: String?
+    let extensionPluginID: String?
+
+    init(pane: Pane) {
+        displayTitle = pane.displayTitle
+        title = pane.title
+        userAlias = pane.userAlias
+        sessionID = pane.terminalSession?.id
+        sessionWorkingDirectory = pane.terminalSession?.workingDirectory
+        reportedWorkingDirectory = pane.terminalState.reportedWorkingDirectory
+        extensionPluginID = pane.extensionPane?.pluginID
+    }
 }
 
 public struct PaneTabCloseCandidate: Equatable, Sendable {
@@ -3669,7 +3690,12 @@ public final class WorkspaceController: @unchecked Sendable {
         tabID: TabID?,
         pane: Pane
     ) -> PaneMetadataRequest {
-        PaneMetadataRequest(workspaceID: workspaceID, tabID: tabID, pane: pane)
+        PaneMetadataRequest(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            pane: pane,
+            freshness: PaneMetadataFreshness(pane: pane)
+        )
     }
 
     private func paneMetadataPublication(for request: PaneMetadataRequest) -> PaneMetadataPublication? {
@@ -3690,6 +3716,14 @@ public final class WorkspaceController: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+        guard let livePane = workspaces
+            .lazy
+            .flatMap(\.panes)
+            .first(where: { $0.id == request.pane.id }),
+              PaneMetadataFreshness(pane: livePane) == request.freshness
+        else {
+            return nil
+        }
         if paneMetadataSnapshotByPaneID[request.pane.id] == snapshot {
             return nil
         }

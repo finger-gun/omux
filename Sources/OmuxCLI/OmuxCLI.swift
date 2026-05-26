@@ -447,13 +447,17 @@ public struct OmuxCLICommand {
                 writeLine("omux error: cd failed: \(error.message)")
                 return 1
             }
-            _ = try? client.request(
+            let setWorkingDirectoryResponse = try client.request(
                 method: .setPaneWorkingDirectory,
                 params: .object([
                     "type": .string("focused"),
                     "workingDirectory": .string(worktreePath),
                 ])
             )
+            if let error = setWorkingDirectoryResponse.error {
+                writeLine("omux error: set working directory failed: \(error.message)")
+                return 1
+            }
             let clearResponse = try client.request(
                 method: .runCommand,
                 params: .object([
@@ -1713,18 +1717,34 @@ public struct OmuxCLICommand {
         switch subcommand {
         case "set":
             guard let request = parsePaneMetadataSetRequest(Array(arguments.dropFirst())) else {
-                writeLine("usage: omux pane-metadata set --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]")
+                writeLine("usage: omux pane-metadata set --session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]")
                 return 1
             }
             let response = try client.request(method: .setPaneMetadataRows, params: request.rpcValue)
+            if let error = response.error {
+                writeLine("omux error: \(error.message)")
+                return 1
+            }
+            guard response.result != nil else {
+                writeLine("omux error: missing result")
+                return 1
+            }
             writeLine(response.result?.prettyPrinted ?? "")
             return 0
         case "clear":
             guard let request = parsePaneMetadataClearRequest(Array(arguments.dropFirst())) else {
-                writeLine("usage: omux pane-metadata clear --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--source <name>]")
+                writeLine("usage: omux pane-metadata clear --session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused [--source <name>]")
                 return 1
             }
             let response = try client.request(method: .clearPaneMetadataRows, params: request)
+            if let error = response.error {
+                writeLine("omux error: \(error.message)")
+                return 1
+            }
+            guard response.result != nil else {
+                writeLine("omux error: missing result")
+                return 1
+            }
             writeLine(response.result?.prettyPrinted ?? "")
             return 0
         default:

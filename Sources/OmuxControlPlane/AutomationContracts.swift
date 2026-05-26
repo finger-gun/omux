@@ -330,13 +330,16 @@ public struct ControlPlanePaneMetadataRowsRequest: Equatable, Sendable {
     public let row3: String?
     public let source: String?
 
-    public init(
+    public init?(
         target: ControlPlaneTerminalTarget,
         row1: String? = nil,
         row2: String? = nil,
         row3: String? = nil,
         source: String? = nil
     ) {
+        guard row1 != nil || row2 != nil || row3 != nil else {
+            return nil
+        }
         self.target = target
         self.row1 = row1
         self.row2 = row2
@@ -364,7 +367,7 @@ public struct ControlPlanePaneMetadataRowsRequest: Equatable, Sendable {
             row2: row2,
             row3: row3,
             source: object["source"]?.stringValue
-        )
+        )!
     }
 
     public var rpcValue: RPCValue {

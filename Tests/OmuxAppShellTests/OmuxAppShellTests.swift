@@ -5404,6 +5404,11 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(findLabel(withString: "~/src", in: sidebar))
 
         XCTAssertTrue(windowController.clearPaneMetadataRows(paneID: paneID))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(findLabel(withString: "build", in: sidebar))
+        XCTAssertFalse(findLabel(withString: "main", in: sidebar))
+        XCTAssertFalse(findLabel(withString: "~/src", in: sidebar))
     }
 
     @MainActor
@@ -6840,24 +6845,24 @@ final class OmuxAppShellTests: XCTestCase {
 
         try service.start()
         let workspace = try controller.openWorkspace(at: "/tmp/pane-meta")
-        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let expectedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
 
         var invocations: [String] = []
         service.paneMetadataRowsHandler = { action in
             switch action {
-            case .set(let paneID, let row1, let row2, let row3, let source):
+            case .set(let resolvedPaneID, let row1, let row2, let row3, let source):
                 invocations.append("set")
-                XCTAssertEqual(paneID.rawValue.isEmpty, false)
+                XCTAssertEqual(resolvedPaneID.rawValue, expectedPaneID.rawValue)
                 XCTAssertEqual(row1, "build")
                 XCTAssertEqual(row2, "main")
                 XCTAssertEqual(row3, "~/src")
                 XCTAssertEqual(source, "test")
-                return .object(["ok": .bool(true), "paneID": .string(paneID.rawValue)])
-            case .clear(let paneID, let source):
+                return .object(["ok": .bool(true), "paneID": .string(resolvedPaneID.rawValue)])
+            case .clear(let resolvedPaneID, let source):
                 invocations.append("clear")
-                XCTAssertEqual(paneID.rawValue.isEmpty, false)
+                XCTAssertEqual(resolvedPaneID.rawValue, expectedPaneID.rawValue)
                 XCTAssertEqual(source, "test")
-                return .object(["ok": .bool(true), "paneID": .string(paneID.rawValue)])
+                return .object(["ok": .bool(true), "paneID": .string(resolvedPaneID.rawValue)])
             }
         }
 
@@ -6865,7 +6870,7 @@ final class OmuxAppShellTests: XCTestCase {
             .setPaneMetadataRows,
             socketPath: socketURL.path(percentEncoded: false),
             params: .object([
-                "target": .object(["type": .string("pane"), "id": .string(paneID.rawValue)]),
+                "target": .object(["type": .string("pane"), "id": .string(expectedPaneID.rawValue)]),
                 "row1": .string("build"),
                 "row2": .string("main"),
                 "row3": .string("~/src"),
@@ -6883,7 +6888,7 @@ final class OmuxAppShellTests: XCTestCase {
             .clearPaneMetadataRows,
             socketPath: socketURL.path(percentEncoded: false),
             params: .object([
-                "target": .object(["type": .string("pane"), "id": .string(paneID.rawValue)]),
+                "target": .object(["type": .string("pane"), "id": .string(expectedPaneID.rawValue)]),
                 "source": .string("test"),
             ])
         )

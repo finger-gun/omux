@@ -695,6 +695,56 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(requests.value[2].1?["command"]?.stringValue, "clear")
     }
 
+    func testCLIWorktreeClearReportsSetPaneWorkingDirectoryError() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: "wtclear-fail-\(UUID().uuidString).sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[String]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request.method)
+            if request.method == ControlMethod.setPaneWorkingDirectory.rawValue {
+                return JSONRPCResponse(
+                    id: request.id,
+                    error: JSONRPCError(code: 500, message: "update failed")
+                )
+            }
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        let repoURL = URL(fileURLWithPath: "/tmp/openmux", isDirectory: true)
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) },
+            readInputLine: { "worktree/2026-05-26-deadbeef" },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            environment: { ["PWD": repoURL.path] },
+            gitRunner: { command in
+                switch command.arguments {
+                case ["rev-parse", "--show-toplevel"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "\(repoURL.path)\n", standardError: "")
+                case ["rev-parse", "--git-common-dir"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: ".git\n", standardError: "")
+                case ["worktree", "add", "-b", "worktree/2026-05-26-deadbeef", "/tmp/openmux-worktree-2026-05-26-deadbeef"]:
+                    return GitProcessResult(terminationStatus: 0, standardOutput: "", standardError: "")
+                default:
+                    return GitProcessResult(terminationStatus: 1, standardOutput: "", standardError: "unexpected git command")
+                }
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "worktree", "--clear"]), 1)
+        XCTAssertEqual(requests.value, [
+            ControlMethod.runCommand.rawValue,
+            ControlMethod.setPaneWorkingDirectory.rawValue,
+        ])
+        XCTAssertEqual(output, ["omux error: set working directory failed: update failed"])
+    }
+
     func testCLIWorktreeReportsGitFailureWithoutRPC() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: "wtfail-\(UUID().uuidString).sock")
@@ -834,7 +884,10 @@ final class OmuxCLITests: XCTestCase {
     }
 
     func testCLISendsPaneMetadataRowsSetAndClearRequests() throws {
-        let socketPath = "/tmp/omux-pane-metadata-\(UUID().uuidString).sock"
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pm.sock")
+            .path(percentEncoded: false)
         let requests = LockedValue<[JSONRPCRequest]>([])
         let server = LocalControlServer(socketPath: socketPath)
         try server.start { request in
@@ -897,8 +950,36 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, [
             "ok",
             "ok",
-            "usage: omux pane-metadata set --session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]",
+            "usage: omux pane-metadata set --session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]",
         ])
+    }
+
+    func testCLIPaneMetadataCommandReportsRPCError() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pme.sock")
+            .path(percentEncoded: false)
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane metadata rows unavailable"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(
+            command.run(arguments: [
+                "omux", "pane-metadata", "set",
+                "--pane", "pane-1",
+                "--row1", "build",
+            ]),
+            1
+        )
+        XCTAssertEqual(output, ["omux error: pane metadata rows unavailable"])
     }
 
     func testCLIBundledAIStatusPluginSendsPaneStatus() throws {
