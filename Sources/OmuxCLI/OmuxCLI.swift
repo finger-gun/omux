@@ -881,7 +881,6 @@ public struct OmuxCLICommand {
 
         var context = OmuxAgentHostContext(
             currentWorkingDirectory: workingDirectoryURL.path,
-            omuxConfigPath: OmuxConfigPaths.configFileURL.path,
             fileReadScope: allowReadAnywhere ? "any-readable-path" : "cwd-only",
             focusedWorkspaceID: envWorkspaceID,
             focusedTabID: nil,

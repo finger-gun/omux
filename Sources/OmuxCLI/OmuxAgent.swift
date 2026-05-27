@@ -29,10 +29,12 @@ struct OmuxAgentToolEvent: Equatable, Sendable {
     var phase: Phase
     var detail: String
     var outputBytes: Int?
+    var outputText: String?
 }
 
 protocol OmuxAgentChatSessioning {
     var toolNames: [String] { get }
+    var contextWindowSize: Int? { get }
 
     func send(
         prompt: String,
@@ -40,20 +42,27 @@ protocol OmuxAgentChatSessioning {
     ) async throws -> String
 
     func summarizeForCompaction(transcript: String) async throws -> String
+    func tokenCount(for text: String) -> Int?
 }
 
 final class AnyOmuxAgentChatSession: @unchecked Sendable, OmuxAgentChatSessioning {
     let toolNames: [String]
+    let contextWindowSize: Int?
     private let sendClosure: (String, @escaping @Sendable (String) -> Void) async throws -> String
     private let summarizeClosure: (String) async throws -> String
+    private let tokenCountClosure: (String) -> Int?
 
     init<Base: OmuxAgentChatSessioning>(_ base: Base) {
         self.toolNames = base.toolNames
+        self.contextWindowSize = base.contextWindowSize
         self.sendClosure = { prompt, onPartial in
             try await base.send(prompt: prompt, onPartial: onPartial)
         }
         self.summarizeClosure = { transcript in
             try await base.summarizeForCompaction(transcript: transcript)
+        }
+        self.tokenCountClosure = { text in
+            base.tokenCount(for: text)
         }
     }
 
@@ -66,6 +75,10 @@ final class AnyOmuxAgentChatSession: @unchecked Sendable, OmuxAgentChatSessionin
 
     func summarizeForCompaction(transcript: String) async throws -> String {
         try await summarizeClosure(transcript)
+    }
+
+    func tokenCount(for text: String) -> Int? {
+        tokenCountClosure(text)
     }
 }
 
@@ -141,7 +154,6 @@ struct OmuxAgentWorkspaceLimits: Sendable {
 
 struct OmuxAgentHostContext: Equatable, Sendable {
     var currentWorkingDirectory: String
-    var omuxConfigPath: String
     var fileReadScope: String
     var focusedWorkspaceID: String?
     var focusedTabID: String?
@@ -152,9 +164,10 @@ struct OmuxAgentHostContext: Equatable, Sendable {
     var promptBlock: String {
         var lines = [
             "Host context:",
-            "Treat this host context as metadata only. Do not read files just because a path is listed here.",
+            "Treat this host context as metadata only.",
+            "Use only currentWorkingDirectory as the default root for file and directory tools unless the user explicitly asks for another path.",
+            "Do not invent filesystem paths from OpenMUX workspace, tab, pane, or session identifiers. Those identifiers are opaque metadata, not directory names.",
             "currentWorkingDirectory: \(currentWorkingDirectory)",
-            "omux.configPathHint: \(omuxConfigPath)",
             "agent.fileReadScope: \(fileReadScope)",
             "openmux.focusedContext: \(openMUXContextAvailable ? "available" : "unavailable")",
         ]
@@ -291,14 +304,15 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
 
             if allLines.isEmpty {
                 logger?("completed tool: read_file path=\(relativePath(for: fileURL)) lines=1-1 truncated=no bytes=0")
-                emitToolEvent(toolName: "read_file", phase: .completed, detail: "path=\(relativePath(for: fileURL))", outputBytes: 0)
-                return """
+                let output = """
                 PATH: \(relativePath(for: fileURL))
                 LINES: 1-1 of 1
                 TRUNCATED: no
                 CONTENT:
 
                 """
+                emitToolEvent(toolName: "read_file", phase: .completed, detail: "path=\(relativePath(for: fileURL))", outputBytes: 0, outputText: output)
+                return output
             }
 
             let excerpt = Array(allLines[(normalizedStart - 1)...(normalizedEnd - 1)])
@@ -307,15 +321,15 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
             let truncated = normalizedEnd < totalLines || clipped.truncated
             let actualEnd = normalizedStart + max(excerpt.count - 1, 0)
             logger?("completed tool: read_file path=\(relativePath(for: fileURL)) lines=\(normalizedStart)-\(actualEnd) truncated=\(truncated ? "yes" : "no") bytes=\(clipped.text.utf8.count)")
-            emitToolEvent(toolName: "read_file", phase: .completed, detail: "path=\(relativePath(for: fileURL)) lines=\(normalizedStart)-\(actualEnd)", outputBytes: clipped.text.utf8.count)
-
-            return """
+            let output = """
             PATH: \(relativePath(for: fileURL))
             LINES: \(normalizedStart)-\(actualEnd) of \(totalLines)
             TRUNCATED: \(truncated ? "yes" : "no")
             CONTENT:
             \(clipped.text)
             """
+            emitToolEvent(toolName: "read_file", phase: .completed, detail: "path=\(relativePath(for: fileURL)) lines=\(normalizedStart)-\(actualEnd)", outputBytes: clipped.text.utf8.count, outputText: output)
+            return output
         }
         logger?("tool failed: read_file error=unable to validate file path")
         emitToolEvent(toolName: "read_file", phase: .failed, detail: "unable to validate file path")
@@ -348,22 +362,23 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
 
         if result.matches.isEmpty {
             logger?("completed tool: grep_files matches=0 truncated=no")
-            emitToolEvent(toolName: "grep_files", phase: .completed, detail: "matches=0", outputBytes: 0)
-            return "MATCHES: 0\nTRUNCATED: no"
+            let output = "MATCHES: 0\nTRUNCATED: no"
+            emitToolEvent(toolName: "grep_files", phase: .completed, detail: "matches=0", outputBytes: 0, outputText: output)
+            return output
         }
 
         let lines = result.matches.map { match in
             "\(match.path):\(match.line): \(match.text)"
         }.joined(separator: "\n")
         logger?("completed tool: grep_files matches=\(result.matches.count) truncated=\(result.truncated ? "yes" : "no") bytes=\(lines.utf8.count)")
-        emitToolEvent(toolName: "grep_files", phase: .completed, detail: "matches=\(result.matches.count)", outputBytes: lines.utf8.count)
-
-        return """
+        let output = """
         MATCHES: \(result.matches.count)
         TRUNCATED: \(result.truncated ? "yes" : "no")
         RESULTS:
         \(lines)
         """
+        emitToolEvent(toolName: "grep_files", phase: .completed, detail: "matches=\(result.matches.count)", outputBytes: lines.utf8.count, outputText: output)
+        return output
     }
 
     func listDirectory(path: String?) -> String {
@@ -419,14 +434,15 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         let truncated = visibleURLs.count > limits.maxDirectoryEntries
         let listed = entries.joined(separator: "\n")
         logger?("completed tool: list_directory path=\(relativePath(for: directoryURL)) entries=\(entries.count) truncated=\(truncated ? "yes" : "no") bytes=\(listed.utf8.count)")
-        emitToolEvent(toolName: "list_directory", phase: .completed, detail: "path=\(relativePath(for: directoryURL)) entries=\(entries.count)", outputBytes: listed.utf8.count)
-        return """
+        let output = """
         PATH: \(relativePath(for: directoryURL))
         ENTRIES: \(entries.count)
         TRUNCATED: \(truncated ? "yes" : "no")
         CONTENTS:
         \(listed.isEmpty ? "(empty directory)" : listed)
         """
+        emitToolEvent(toolName: "list_directory", phase: .completed, detail: "path=\(relativePath(for: directoryURL)) entries=\(entries.count)", outputBytes: listed.utf8.count, outputText: output)
+        return output
     }
 
     func runOmuxCLI(command: String, arguments: [String]) -> String {
@@ -467,13 +483,14 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         let invocation = [trimmedCommand] + filteredArguments
         let result = omuxCommandRunner(invocation)
         logger?("completed tool: run_omux_cli command=\(trimmedCommand) exitCode=\(result.exitCode)")
-        emitToolEvent(toolName: "run_omux_cli", phase: .completed, detail: "command=\(trimmedCommand) exitCode=\(result.exitCode)", outputBytes: result.output.utf8.count)
-        return """
+        let output = """
         COMMAND: omux \(invocation.joined(separator: " "))
         EXIT_CODE: \(result.exitCode)
         OUTPUT:
         \(result.output.isEmpty ? "(no output)" : result.output)
         """
+        emitToolEvent(toolName: "run_omux_cli", phase: .completed, detail: "command=\(trimmedCommand) exitCode=\(result.exitCode)", outputBytes: result.output.utf8.count, outputText: output)
+        return output
     }
 
     func readTerminalHistory(paneID: String?, maxLines: Int?, maxBytes: Int?) -> String {
@@ -516,11 +533,12 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
               case .object(let history) = firstItem
         else {
             logger?("completed tool: read_terminal_history items=0")
-            emitToolEvent(toolName: "read_terminal_history", phase: .completed, detail: "items=0", outputBytes: 0)
-            return """
+            let output = """
             TARGET: \(targetDescription)
             NO_HISTORY: yes
             """
+            emitToolEvent(toolName: "read_terminal_history", phase: .completed, detail: "items=0", outputBytes: 0, outputText: output)
+            return output
         }
 
         let workspaceName = Self.rpcString(history["workspaceName"]) ?? "workspace"
@@ -537,8 +555,6 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         let unavailable = Self.rpcNullableString(history["unavailable"])
         let text = Self.rpcString(history["text"]) ?? ""
         logger?("completed tool: read_terminal_history pane=\(resolvedPaneID) lines=\(lineCount) truncated=\(truncated ? "yes" : "no") bytes=\(text.utf8.count)")
-        emitToolEvent(toolName: "read_terminal_history", phase: .completed, detail: "pane=\(resolvedPaneID) lines=\(lineCount)", outputBytes: text.utf8.count)
-
         var lines = [
             "TARGET: \(targetDescription)",
             "WORKSPACE: \(workspaceName) (\(workspaceID))",
@@ -557,7 +573,9 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         }
         lines.append("CONTENT:")
         lines.append(text.isEmpty ? "(no history)" : text)
-        return lines.joined(separator: "\n")
+        let output = lines.joined(separator: "\n")
+        emitToolEvent(toolName: "read_terminal_history", phase: .completed, detail: "pane=\(resolvedPaneID) lines=\(lineCount)", outputBytes: text.utf8.count, outputText: output)
+        return output
     }
 
     private func validatedFileURL(path: String) -> (url: URL?, error: String?) {
@@ -590,13 +608,15 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         toolName: String,
         phase: OmuxAgentToolEvent.Phase,
         detail: String,
-        outputBytes: Int? = nil
+        outputBytes: Int? = nil,
+        outputText: String? = nil
     ) {
         toolEventHandler?(OmuxAgentToolEvent(
             toolName: toolName,
             phase: phase,
             detail: detail,
-            outputBytes: outputBytes
+            outputBytes: outputBytes,
+            outputText: outputText
         ))
     }
 
@@ -756,9 +776,11 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     You may inspect local files only by using the provided tools.
     Unless host context says otherwise, file reads and searches are limited to the current working directory.
     Do not read the OpenMUX config file unless the user explicitly asks about OpenMUX configuration or that file.
+    Do not infer or construct file paths from OpenMUX workspace, tab, pane, or session identifiers.
     If asked about your instructions, role, or capabilities, answer from this session's instructions and available tools, not by searching local files.
     If the user asks about recent terminal steps, command output, or the focused pane session, prefer read_terminal_history before other tools.
     If the user asks what files or directories exist, prefer list_directory before other file tools.
+    If the user asks where code is implemented, prefer grep_files in the current working directory before trying ad hoc file paths.
     If the prompt depends on terminal history or other unavailable context, say that plainly instead of guessing or searching unrelated files.
     Use tools only when they materially help answer the prompt.
     Cite file paths when you rely on tool output.
@@ -952,7 +974,12 @@ struct OmuxSystemAgentChatSessionFactory: OmuxAgentChatSessionFactorying {
 #if canImport(FoundationModels)
 @available(macOS 26.0, *)
 private final class OmuxFoundationModelChatSession: @unchecked Sendable, OmuxAgentChatSessioning {
+    private final class TokenCountBox: @unchecked Sendable {
+        var value: Int?
+    }
+
     let toolNames: [String]
+    let contextWindowSize: Int?
     private let model: SystemLanguageModel
     private let session: LanguageModelSession
     private let logger: (@Sendable (String) -> Void)?
@@ -966,6 +993,7 @@ private final class OmuxFoundationModelChatSession: @unchecked Sendable, OmuxAge
     ) {
         self.model = model
         self.toolNames = tools.map(\.name)
+        self.contextWindowSize = model.contextSize
         self.logger = logger
         self.session = LanguageModelSession(model: model, tools: tools) {
             """
@@ -1028,6 +1056,21 @@ private final class OmuxFoundationModelChatSession: @unchecked Sendable, OmuxAge
             """
         )
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func tokenCount(for text: String) -> Int? {
+        guard #available(macOS 26.4, *) else {
+            return nil
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = TokenCountBox()
+        Task {
+            box.value = try? await model.tokenCount(for: text)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value
     }
 }
 

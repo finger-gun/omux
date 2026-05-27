@@ -41,6 +41,7 @@ final class OmuxCLITests: XCTestCase {
 
     private final class FakeAgentChatSession: OmuxAgentChatSessioning {
         let toolNames: [String]
+        let contextWindowSize: Int? = 4096
         var sentPrompts: [String] = []
         var summaryRequests: [String] = []
         var response = "done"
@@ -62,6 +63,12 @@ final class OmuxCLITests: XCTestCase {
         func summarizeForCompaction(transcript: String) async throws -> String {
             summaryRequests.append(transcript)
             return summaryResponse
+        }
+
+        func tokenCount(for text: String) -> Int? {
+            let utf8Count = text.utf8.count
+            guard utf8Count > 0 else { return 0 }
+            return max(1, utf8Count / 4)
         }
     }
 
@@ -192,7 +199,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(generator.requests.first?.workingDirectoryURL.path, FileManager.default.currentDirectoryPath)
         XCTAssertTrue(generator.requests.first?.hostContext.contains("currentWorkingDirectory: \(FileManager.default.currentDirectoryPath)") == true)
         XCTAssertTrue(generator.requests.first?.hostContext.contains("Treat this host context as metadata only.") == true)
-        XCTAssertTrue(generator.requests.first?.hostContext.contains("omux.configPathHint: \(OmuxConfigPaths.configFileURL.path)") == true)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("Do not invent filesystem paths from OpenMUX workspace, tab, pane, or session identifiers.") == true)
         XCTAssertTrue(generator.requests.first?.hostContext.contains("agent.fileReadScope: cwd-only") == true)
         XCTAssertEqual(output, "hello world\n")
     }
@@ -335,7 +342,7 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(generator.requests.count, 1)
         let hostContext = try XCTUnwrap(generator.requests.first?.hostContext)
         XCTAssertTrue(hostContext.contains("Treat this host context as metadata only."))
-        XCTAssertTrue(hostContext.contains("omux.configPathHint: \(OmuxConfigPaths.configFileURL.path)"))
+        XCTAssertTrue(hostContext.contains("Do not invent filesystem paths from OpenMUX workspace, tab, pane, or session identifiers."))
         XCTAssertTrue(hostContext.contains("openmux.focusedContext: available"))
         XCTAssertTrue(hostContext.contains("openmux.focused.workspaceID: workspace-1"))
         XCTAssertTrue(hostContext.contains("openmux.focused.tabID: tab-1"))

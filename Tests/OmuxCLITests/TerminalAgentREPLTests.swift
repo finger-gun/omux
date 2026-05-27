@@ -18,7 +18,9 @@ final class TerminalAgentREPLTests: XCTestCase {
 
         XCTAssertEqual(runner.run(), 0)
         XCTAssertEqual(session.sentPrompts, [])
-        XCTAssertTrue(driver.renderedText.contains("Tools: read_file, grep_files"))
+        XCTAssertTrue(driver.renderedText.contains("Tools:"))
+        XCTAssertTrue(driver.renderedText.contains("read_file"))
+        XCTAssertTrue(driver.renderedText.contains("grep_files"))
     }
 
     func testCompactRebuildsSessionAndRequestsSummary() {
@@ -56,7 +58,8 @@ final class TerminalAgentREPLTests: XCTestCase {
         )
 
         XCTAssertEqual(runner.run(), 0)
-        XCTAssertTrue(driver.renderedText.contains("Ask about this repo"))
+        XCTAssertTrue(driver.renderedText.contains("OpenMux Agent"))
+        XCTAssertTrue(driver.renderedText.contains("compose"))
     }
 
     func testWrappedTranscriptRenderCleanly() {
@@ -74,19 +77,155 @@ final class TerminalAgentREPLTests: XCTestCase {
         )
 
         XCTAssertEqual(runner.run(), 0)
-        XCTAssertTrue(driver.renderedText.contains("You: hello"))
-        XCTAssertTrue(driver.renderedText.contains("Agent: This is a long assistant"))
+        XCTAssertTrue(driver.renderedText.contains("This is a long assistant"))
+        XCTAssertTrue(driver.renderedText.contains("AGENT"))
+    }
+
+    func testModifiedEnterCSIParsesAsComposerNewline() {
+        XCTAssertEqual(
+            TerminalAgentREPLDefaultDriver.parseCSI(Array("27;2;13~".utf8)),
+            .newline
+        )
+        XCTAssertEqual(
+            TerminalAgentREPLDefaultDriver.parseCSI(Array("13;2~".utf8)),
+            .newline
+        )
+        XCTAssertEqual(
+            TerminalAgentREPLDefaultDriver.parseCSI(Array("13;2u".utf8)),
+            .newline
+        )
+    }
+
+    func testCSIArrowAndPagingParsingStillWorks() {
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x41]), .up)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x42]), .down)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("5~".utf8)), .pageUp)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("6~".utf8)), .pageDown)
+    }
+
+    func testResizeEventTriggersImmediateRerender() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(
+            events: [.resize, .escape],
+            sizes: [.init(rows: 20, columns: 80), .init(rows: 12, columns: 32)]
+        )
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertGreaterThanOrEqual(driver.renderCount, 3)
+        XCTAssertTrue(driver.renderedText.contains("OpenMux Agent"))
+    }
+
+    func testToolActivityRendersInlineTranscriptRows() {
+        let session = FakeSession()
+        session.response = "assistant reply"
+        session.toolEvents = [
+            .init(toolName: "grep_files", phase: .started, detail: "pattern=status", outputBytes: nil, outputText: nil),
+            .init(toolName: "grep_files", phase: .completed, detail: "matches=3", outputBytes: 128, outputText: "MATCHES: 3")
+        ]
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("find it\n/exit\n"), size: .init(rows: 32, columns: 100))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        let toolDone = driver.renderedText.range(of: "grep_files done")
+        let answer = driver.renderedText.range(of: "assistant reply")
+        XCTAssertNotNil(toolDone)
+        XCTAssertNotNil(answer)
+        if let toolDone, let answer {
+            XCTAssertLessThan(toolDone.lowerBound, answer.lowerBound)
+        }
+    }
+
+    func testContextEstimateIncludesToolOutputPayloads() {
+        let baselineSession = FakeSession()
+        baselineSession.response = "done"
+        let baselineFactory = FakeFactory(session: baselineSession)
+        let baselineDriver = FakeDriver(events: .text("hello\n/exit\n"))
+        let baselineRunner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: baselineFactory,
+            driver: baselineDriver
+        )
+
+        XCTAssertEqual(baselineRunner.run(), 0)
+        let baselineContext = extractApproxContext(from: baselineDriver.renderedText)
+
+        let toolSession = FakeSession()
+        toolSession.response = "done"
+        toolSession.toolEvents = [
+            .init(toolName: "grep_files", phase: .started, detail: "pattern=hello", outputBytes: nil, outputText: nil),
+            .init(toolName: "grep_files", phase: .completed, detail: "matches=4", outputBytes: 4096, outputText: String(repeating: "x", count: 4096))
+        ]
+        let toolFactory = FakeFactory(session: toolSession)
+        let toolDriver = FakeDriver(events: .text("hello\n/exit\n"))
+        let toolRunner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: toolFactory,
+            driver: toolDriver
+        )
+
+        XCTAssertEqual(toolRunner.run(), 0)
+        let toolContext = extractApproxContext(from: toolDriver.renderedText)
+        XCTAssertGreaterThan(toolContext, baselineContext)
+    }
+
+    func testSlashOverlayCanCompleteCommandOnEnter() {
+        let session = FakeSession()
+        session.response = "answer"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [.character("/"), .character("c"), .character("o"), .character("m"), .enter, .escape])
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.summaryRequests.count, 1)
+        XCTAssertEqual(factory.makeCount, 2)
+        XCTAssertTrue(driver.renderedText.contains("Compacted prior conversation"))
     }
 }
 
 private final class FakeSession: OmuxAgentChatSessioning {
     let toolNames = ["read_file", "grep_files"]
+    let contextWindowSize: Int? = 4096
     var sentPrompts: [String] = []
     var summaryRequests: [String] = []
     var response = "done"
+    var toolEvents: [OmuxAgentToolEvent] = []
+    var toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)?
 
     func send(prompt: String, onPartial: @escaping @Sendable (String) -> Void) async throws -> String {
         sentPrompts.append(prompt)
+        for event in toolEvents {
+            toolEventHandler?(event)
+        }
         onPartial(response)
         return response
     }
@@ -94,6 +233,10 @@ private final class FakeSession: OmuxAgentChatSessioning {
     func summarizeForCompaction(transcript: String) async throws -> String {
         summaryRequests.append(transcript)
         return "short summary"
+    }
+
+    func tokenCount(for text: String) -> Int? {
+        max(1, text.utf8.count / 4)
     }
 }
 
@@ -118,7 +261,7 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
         _ = workingDirectoryURL
         _ = allowReadAnywhere
         _ = onVerbose
-        _ = onToolEvent
+        session.toolEventHandler = onToolEvent
         makeCount += 1
         return AnyOmuxAgentChatSession(session)
     }
@@ -126,12 +269,18 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
 
 private final class FakeDriver: TerminalAgentREPLDriver {
     private var events: [TerminalAgentREPLEvent]
-    private let size: TerminalAgentREPLSize
+    private let sizes: [TerminalAgentREPLSize]
+    private var sizeIndex = 0
     private(set) var renderedText = ""
+    private(set) var renderCount = 0
 
-    init(events: [TerminalAgentREPLEvent], size: TerminalAgentREPLSize = .init(rows: 20, columns: 80)) {
+    init(
+        events: [TerminalAgentREPLEvent],
+        size: TerminalAgentREPLSize = .init(rows: 20, columns: 80),
+        sizes: [TerminalAgentREPLSize]? = nil
+    ) {
         self.events = events
-        self.size = size
+        self.sizes = sizes ?? [size]
     }
 
     func isAvailable() -> Bool { true }
@@ -148,10 +297,19 @@ private final class FakeDriver: TerminalAgentREPLDriver {
     }
 
     func terminalSize() -> TerminalAgentREPLSize {
-        size
+        let current = sizes[min(sizeIndex, sizes.count - 1)]
+        if sizeIndex < sizes.count - 1 {
+            sizeIndex += 1
+        }
+        return current
+    }
+
+    func supportsStyling() -> Bool {
+        false
     }
 
     func render(lines: [String]) {
+        renderCount += 1
         renderedText = lines.joined(separator: "\n")
     }
 }
@@ -167,4 +325,18 @@ private extension Array where Element == TerminalAgentREPLEvent {
             }
         }
     }
+}
+
+private func extractApproxContext(from renderedText: String) -> Int {
+    let pattern = #"ctx ~([0-9]+)"#
+    let regex = try! NSRegularExpression(pattern: pattern)
+    let range = NSRange(renderedText.startIndex..<renderedText.endIndex, in: renderedText)
+    guard
+        let match = regex.firstMatch(in: renderedText, range: range),
+        let valueRange = Range(match.range(at: 1), in: renderedText)
+    else {
+        XCTFail("missing context estimate in rendered text: \(renderedText)")
+        return 0
+    }
+    return Int(renderedText[valueRange]) ?? 0
 }
