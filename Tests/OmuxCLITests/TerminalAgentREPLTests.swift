@@ -191,6 +191,27 @@ final class TerminalAgentREPLTests: XCTestCase {
         XCTAssertEqual(session.sentPrompts, ["  hello\nworld  "])
     }
 
+    func testStyledRenderKeepsFooterStatusAndPathVisible() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("/exit\n"), size: .init(rows: 18, columns: 100), styled: true)
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp/project",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp/project", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        let rendered = driver.renderedText
+        XCTAssertTrue(rendered.contains("interactive local agent"))
+        XCTAssertTrue(rendered.contains("/tmp/project") || rendered.contains("~/"))
+        XCTAssertTrue(rendered.contains("ctx ~"))
+        XCTAssertTrue(rendered.contains("OpenMux Agent"))
+    }
+
     func testContextEstimateIncludesToolOutputPayloads() {
         let baselineSession = FakeSession()
         baselineSession.response = "done"
@@ -414,6 +435,7 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
 private final class FakeDriver: TerminalAgentREPLDriver {
     private var events: [TerminalAgentREPLEvent]
     private let sizes: [TerminalAgentREPLSize]
+    private let styled: Bool
     private var sizeIndex = 0
     private(set) var renderedText = ""
     private(set) var renderCount = 0
@@ -421,10 +443,12 @@ private final class FakeDriver: TerminalAgentREPLDriver {
     init(
         events: [TerminalAgentREPLEvent],
         size: TerminalAgentREPLSize = .init(rows: 20, columns: 80),
-        sizes: [TerminalAgentREPLSize]? = nil
+        sizes: [TerminalAgentREPLSize]? = nil,
+        styled: Bool = false
     ) {
         self.events = events
         self.sizes = sizes ?? [size]
+        self.styled = styled
     }
 
     func isAvailable() -> Bool { true }
@@ -449,7 +473,7 @@ private final class FakeDriver: TerminalAgentREPLDriver {
     }
 
     func supportsStyling() -> Bool {
-        false
+        styled
     }
 
     func render(lines: [String]) {

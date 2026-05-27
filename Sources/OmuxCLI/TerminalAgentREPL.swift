@@ -1141,13 +1141,19 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     }
 
     private func backgroundPad(_ text: String, width: Int, styled: Bool) -> String {
-        let plain = fit(stripANSI(text), width: max(1, width))
+        let safeWidth = max(1, width)
+        let plainText = stripANSI(text)
+        let plainLength = plainText.count
         if styled == false {
-            return plain
+            return fit(plainText, width: safeWidth)
         }
-        let prefixLength = min(text.count, plain.count)
-        let originalPrefix = String(text.prefix(prefixLength))
-        let padded = originalPrefix + String(repeating: " ", count: max(0, width - plainTextLength(stripANSI(text))))
+
+        if plainLength > safeWidth {
+            let clipped = fit(plainText, width: safeWidth)
+            return ansi(fg: palette.foregroundPrimary, bg: palette.backgroundCanvas, bold: false) + clipped + ansiReset()
+        }
+
+        let padded = text + String(repeating: " ", count: safeWidth - plainLength)
         return ansi(fg: palette.foregroundPrimary, bg: palette.backgroundCanvas, bold: false) + padded + ansiReset()
     }
 
