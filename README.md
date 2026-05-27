@@ -153,7 +153,12 @@ OpenMUX has two plugin and automation surfaces:
 
 Plugins can create extension panes with `omux extension-pane`, listen through hooks, call back into the public CLI, and contribute native menu items. Hooks are executable event handlers under `~/.omux/hooks/`.
 
-`omux agent` is an experimental local Apple Foundation Models command. By default it opens an ephemeral full-screen terminal REPL with multi-turn chat, streaming output, inline tool activity, and slash commands such as `/help`, `/tools`, `/stats`, `/compact`, and `/exit`. Use `omux agent -p "..."` for one-shot mode that prints one plain-text response to stdout. Both modes can read recent terminal history from OpenMUX, run non-interactive `omux` subcommands through a built-in tool, and read or grep files under the current working directory. Non-interactive use requires `-p`. Use `--verbose` to print progress such as session startup and tool calls to stderr. Use `--allow-read-anywhere` to let the read-file tool open any readable local path; grep remains scoped to the current working directory.
+`omux agent` is an experimental local Apple Foundation Models command.
+
+- Modes: `omux agent` opens an ephemeral full-screen REPL by default. Use `omux agent -p "..."` for one-shot mode that prints a single plain-text response to stdout; non-interactive use requires `-p`.
+- Interactive features: The REPL supports multi-turn chat, streaming output, inline tool activity, and host-handled slash commands such as `/help`, `/tools`, `/stats`, `/compact`, and `/exit`.
+- File and history access: Both modes can read recent terminal history from OpenMUX, run non-interactive `omux` subcommands through a built-in tool, and read or grep files under the current working directory.
+- Flags and security: Use `--verbose` to print progress such as session startup and tool calls to stderr. Use `--allow-read-anywhere` to let the read-file tool open any readable local path; `grep` remains scoped to the current working directory.
 
 Official registries:
 

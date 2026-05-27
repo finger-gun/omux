@@ -153,6 +153,44 @@ final class TerminalAgentREPLTests: XCTestCase {
         }
     }
 
+    func testPromptSubmissionPreservesRawWhitespace() {
+        let session = FakeSession()
+        session.response = "done"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(
+            events: [
+                .character(" "),
+                .character(" "),
+                .character("h"),
+                .character("e"),
+                .character("l"),
+                .character("l"),
+                .character("o"),
+                .newline,
+                .character("w"),
+                .character("o"),
+                .character("r"),
+                .character("l"),
+                .character("d"),
+                .character(" "),
+                .character(" "),
+                .enter,
+                .escape,
+            ]
+        )
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.sentPrompts, ["  hello\nworld  "])
+    }
+
     func testContextEstimateIncludesToolOutputPayloads() {
         let baselineSession = FakeSession()
         baselineSession.response = "done"

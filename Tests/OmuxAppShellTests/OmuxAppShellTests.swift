@@ -4868,6 +4868,43 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
     }
 
+    @MainActor
+    func testPaneMetadataRowsOverridePublishesSourceAttributedMetadataEvent() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+
+        XCTAssertTrue(windowController.setPaneMetadataRows(paneID: paneID, row1: "build", row2: "main", row3: "~/src", source: "rpc.test"))
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["source"], .string("rpc.test"))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.payload.objectValue?["source"], .string("rpc.test"))
+    }
+
     func testTerminalSidebarMetadataUsesPaneDisplayTitle() {
         let pane = Pane(
             title: "path-like-title",
@@ -5424,6 +5461,33 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertFalse(findLabel(withString: "build", in: sidebar))
         XCTAssertFalse(findLabel(withString: "main", in: sidebar))
         XCTAssertFalse(findLabel(withString: "~/src", in: sidebar))
+    }
+
+    @MainActor
+    func testWorkspaceWindowPreservesSidebarRowSlotsWhenLeadingRowsAreEmpty() throws {
+        let workspacePath = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspacePath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspacePath) }
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: workspacePath.path)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        windowController.updateSidebar(
+            OmuxConfigUI.Sidebar(
+                terminalRows: .init(row1: .gitBranch, row2: .abbreviatedPath, row3: .none)
+            )
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: workspacePath.lastPathComponent, in: sidebar))
+        XCTAssertTrue(findLabel(withString: workspacePath.path, in: sidebar) || findLabel(withString: workspacePath.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), in: sidebar))
     }
 
     @MainActor

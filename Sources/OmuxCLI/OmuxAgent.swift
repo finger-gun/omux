@@ -482,15 +482,13 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
                 emitToolEvent(toolName: "read_file", phase: .failed, detail: "file not readable")
                 return "ERROR: file is not readable: \(path)"
             }
-            guard let data = try? Data(contentsOf: fileURL) else {
+            let fileSize = (try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.intValue
+            guard let totalLines = try? Self.countLines(in: fileURL) else {
                 logger?("tool failed: read_file error=unable to read file contents")
                 emitToolEvent(toolName: "read_file", phase: .failed, detail: "unable to read file contents")
                 return "ERROR: unable to read file: \(path)"
             }
 
-            let text = String(decoding: data, as: UTF8.self)
-            let allLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            let totalLines = max(allLines.count, 1)
             let requestedStart = max(startLine ?? 1, 1)
             let normalizedStart = min(requestedStart, totalLines)
 
@@ -504,7 +502,17 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
             let requestedEnd = max(endLine ?? totalLines, normalizedStart)
             let normalizedEnd = min(requestedEnd, maxEndByLines, totalLines)
 
-            if allLines.isEmpty {
+            guard let excerptResult = try? Self.readExcerpt(
+                from: fileURL,
+                startLine: normalizedStart,
+                endLine: normalizedEnd
+            ) else {
+                logger?("tool failed: read_file error=unable to read file contents")
+                emitToolEvent(toolName: "read_file", phase: .failed, detail: "unable to read file contents")
+                return "ERROR: unable to read file: \(path)"
+            }
+
+            if excerptResult.lines.isEmpty && totalLines == 1 {
                 logger?("completed tool: read_file path=\(relativePath(for: fileURL)) lines=1-1 truncated=no bytes=0")
                 let output = """
                 PATH: \(relativePath(for: fileURL))
@@ -517,11 +525,12 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
                 return output
             }
 
-            let excerpt = Array(allLines[(normalizedStart - 1)...(normalizedEnd - 1)])
-            let joined = excerpt.joined(separator: "\n")
+            let joined = excerptResult.lines.joined(separator: "\n")
             let clipped = Self.prefix(joined, maxUTF8Bytes: limits.maxReadBytes)
-            let truncated = normalizedEnd < totalLines || clipped.truncated
-            let actualEnd = normalizedStart + max(excerpt.count - 1, 0)
+            let truncated = normalizedEnd < totalLines
+                || clipped.truncated
+                || (fileSize.map { $0 > limits.maxReadBytes } ?? false)
+            let actualEnd = excerptResult.actualEnd
             logger?("completed tool: read_file path=\(relativePath(for: fileURL)) lines=\(normalizedStart)-\(actualEnd) truncated=\(truncated ? "yes" : "no") bytes=\(clipped.text.utf8.count)")
             let output = """
             PATH: \(relativePath(for: fileURL))
@@ -683,6 +692,11 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         }
 
         let invocation = [trimmedCommand] + filteredArguments
+        if let blockedReason = Self.blockedOmuxInvocationReason(for: invocation) {
+            logger?("tool failed: run_omux_cli error=\(blockedReason)")
+            emitToolEvent(toolName: "run_omux_cli", phase: .failed, detail: blockedReason)
+            return "ERROR: \(blockedReason)"
+        }
         let result = omuxCommandRunner(invocation)
         logger?("completed tool: run_omux_cli command=\(trimmedCommand) exitCode=\(result.exitCode)")
         let output = """
@@ -906,11 +920,121 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         return (result, true)
     }
 
+    private static func countLines(in fileURL: URL) throws -> Int {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var newlineCount = 0
+        var sawBytes = false
+        while true {
+            let chunk = try handle.read(upToCount: 8_192) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            sawBytes = true
+            newlineCount += chunk.reduce(into: 0) { partialResult, byte in
+                if byte == 0x0A {
+                    partialResult += 1
+                }
+            }
+        }
+
+        return sawBytes ? max(newlineCount + 1, 1) : 1
+    }
+
+    private static func readExcerpt(
+        from fileURL: URL,
+        startLine: Int,
+        endLine: Int
+    ) throws -> (lines: [String], actualEnd: Int) {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var currentLine = Data()
+        var currentLineNumber = 1
+        var selectedLines: [String] = []
+
+        func finishCurrentLine(finalLine: Bool = false) {
+            if currentLineNumber >= startLine && currentLineNumber <= endLine {
+                selectedLines.append(String(decoding: currentLine, as: UTF8.self))
+            }
+            if finalLine == false || currentLine.isEmpty == false {
+                currentLineNumber += 1
+            }
+            currentLine.removeAll(keepingCapacity: true)
+        }
+
+        while currentLineNumber <= endLine {
+            let chunk = try handle.read(upToCount: 8_192) ?? Data()
+            if chunk.isEmpty {
+                finishCurrentLine(finalLine: true)
+                break
+            }
+
+            for byte in chunk {
+                if byte == 0x0A {
+                    finishCurrentLine()
+                    if currentLineNumber > endLine {
+                        break
+                    }
+                } else {
+                    currentLine.append(byte)
+                }
+            }
+        }
+
+        if selectedLines.isEmpty && startLine == 1 && endLine == 1 && currentLineNumber == 1 {
+            return ([], 1)
+        }
+        return (selectedLines, startLine + max(selectedLines.count - 1, 0))
+    }
+
+    private static func blockedOmuxInvocationReason(for invocation: [String]) -> String? {
+        guard let command = invocation.first else {
+            return "command must not be empty"
+        }
+
+        let interactiveCommands: Set<String> = [
+            "install",
+            "install-cli",
+            "self-update",
+            "uninstall",
+            "update",
+            "upgrade",
+        ]
+        if interactiveCommands.contains(command) {
+            return "omux \(command) is not allowed from the agent tool because it installs, updates, or removes state"
+        }
+
+        if invocation.count >= 2, command == "config", invocation[1] == "open" {
+            return "omux config open is not allowed from the agent tool because it launches an external editor"
+        }
+
+        return nil
+    }
+
     private static func defaultRGRunner(
         request: OmuxAgentGrepRequest,
         rootURL: URL,
         limits: OmuxAgentWorkspaceLimits
     ) throws -> OmuxAgentGrepResult {
+        final class PipeBuffer: @unchecked Sendable {
+            private let lock = NSLock()
+            private var data = Data()
+
+            func append(_ chunk: Data) {
+                lock.lock()
+                data.append(chunk)
+                lock.unlock()
+            }
+
+            func snapshot() -> Data {
+                lock.lock()
+                defer { lock.unlock() }
+                return data
+            }
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.currentDirectoryURL = rootURL
@@ -949,14 +1073,43 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        let finished = DispatchSemaphore(value: 0)
+        let drainGroup = DispatchGroup()
+        let outputBuffer = PipeBuffer()
+        let errorBuffer = PipeBuffer()
+
+        drainGroup.enter()
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                drainGroup.leave()
+                return
+            }
+            outputBuffer.append(chunk)
+        }
+        drainGroup.enter()
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                drainGroup.leave()
+                return
+            }
+            errorBuffer.append(chunk)
+        }
+        process.terminationHandler = { _ in
+            finished.signal()
+        }
         try process.run()
-        process.waitUntilExit()
+        finished.wait()
+        drainGroup.wait()
+        stdout.fileHandleForReading.readabilityHandler = nil
+        stderr.fileHandleForReading.readabilityHandler = nil
 
         let status = process.terminationStatus
-        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-        let output = String(decoding: outputData, as: UTF8.self)
-        let errorOutput = String(decoding: errorData, as: UTF8.self)
+        let output = String(decoding: outputBuffer.snapshot(), as: UTF8.self)
+        let errorOutput = String(decoding: errorBuffer.snapshot(), as: UTF8.self)
 
         if status != 0 && status != 1 {
             throw NSError(

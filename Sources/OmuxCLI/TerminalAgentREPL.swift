@@ -521,10 +521,13 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     }
 
     private func submitInputIfNeeded() {
-        var trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawInput = input
+        var trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return }
+        var promptText = rawInput
         if let selectedSlashCommand = selectedSlashCommand(for: trimmed) {
             trimmed = selectedSlashCommand
+            promptText = selectedSlashCommand
         }
         input = ""
         slashSelectionIndex = 0
@@ -534,8 +537,6 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             render()
             return
         }
-
-        let promptText = trimmed
 
         addEntry(kind: .user, text: promptText)
         contextTurns.append(TranscriptEntry(kind: .user, text: promptText))
@@ -553,8 +554,9 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             ])
         )
 
+        let submittedPrompt = promptText
         let result: Result<String, Error> = waitForResult {
-            let value = try await self.session?.send(prompt: promptText, onPartial: { [weak self] chunk in
+            let value = try await self.session?.send(prompt: submittedPrompt, onPartial: { [weak self] chunk in
                 self?.appendAssistantChunk(chunk: chunk)
             }) ?? ""
             return value
@@ -958,7 +960,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
 
     private func estimateContextTokens() -> Int {
         let transcriptText = contextTurns.map(\.text).joined(separator: "\n")
-        let systemText = effectiveSystemInstruction() ?? OmuxSystemAgentGenerator.effectiveSystemInstruction(nil)
+        let systemText = effectiveSystemInstruction() ?? defaultSystemInstruction()
         let summaryText = compactionSummary ?? ""
         return estimateTokens(for: systemText + "\n" + hostContext + "\n" + transcriptText + "\n" + summaryText + "\n" + input) + toolStats.totalOutputTokens
     }
@@ -967,13 +969,27 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         guard let compactionSummary else {
             return request.systemInstruction
         }
-        let base = OmuxSystemAgentGenerator.effectiveSystemInstruction(request.systemInstruction)
+        let base = {
+            #if canImport(FoundationModels)
+            OmuxSystemAgentGenerator.effectiveSystemInstruction(request.systemInstruction)
+            #else
+            request.systemInstruction ?? OmuxSystemAgentGenerator.defaultSystemInstruction
+            #endif
+        }()
         return """
         \(base)
 
         Compacted prior conversation summary:
         \(compactionSummary)
         """
+    }
+
+    private func defaultSystemInstruction() -> String {
+        #if canImport(FoundationModels)
+        OmuxSystemAgentGenerator.effectiveSystemInstruction(nil)
+        #else
+        OmuxSystemAgentGenerator.defaultSystemInstruction
+        #endif
     }
 
     private func publishObservation(

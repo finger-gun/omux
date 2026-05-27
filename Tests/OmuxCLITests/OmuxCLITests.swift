@@ -458,6 +458,24 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(result.contains("two\nthree"))
     }
 
+    func testAgentWorkspaceReadFileTruncatesLargeFilesWithoutLoadingPastCap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("large.txt", isDirectory: false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try String(repeating: "abcdef", count: 2_000).write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            limits: OmuxAgentWorkspaceLimits(maxReadLines: 80, maxReadBytes: 128, maxGrepResults: 40, maxMatchLineBytes: 512)
+        )
+        let result = access.readFile(path: "large.txt", startLine: nil, endLine: nil)
+
+        XCTAssertTrue(result.contains("PATH: large.txt"))
+        XCTAssertTrue(result.contains("TRUNCATED: yes"))
+        XCTAssertLessThan(result.utf8.count, 512)
+    }
+
     func testAgentWorkspaceGrepFormatsMatchesAndCapsResults() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -634,6 +652,14 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(
             access.runOmuxCLI(command: "theme", arguments: []),
             "ERROR: omux theme without arguments is not allowed from the agent tool because it is interactive"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "config", arguments: ["open"]),
+            "ERROR: omux config open is not allowed from the agent tool because it launches an external editor"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "install-cli", arguments: []),
+            "ERROR: omux install-cli is not allowed from the agent tool because it installs, updates, or removes state"
         )
     }
 

@@ -698,7 +698,6 @@ public enum OmuxConfigTemplate {
         grep_files = true
         list_skills = true
         read_skill = true
-
         [agent-sessions]
         enabled = true
         preview_enabled = true
@@ -1750,7 +1749,6 @@ public struct OmuxConfigLoader {
                 break
             }
         }
-
         let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme", "presentation"]
         var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
         var markdownPreviewRenderer = config.plugins.markdownPreview.renderer

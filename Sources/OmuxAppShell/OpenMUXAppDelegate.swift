@@ -182,7 +182,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 }
                 switch action {
                 case .set(let paneID, let row1, let row2, let row3, let source):
-                    guard windowController.setPaneMetadataRows(paneID: paneID, row1: row1, row2: row2, row3: row3) else {
+                    guard windowController.setPaneMetadataRows(
+                        paneID: paneID,
+                        row1: row1,
+                        row2: row2,
+                        row3: row3,
+                        source: source
+                    ) else {
                         return .object(["ok": .bool(false), "error": .string("pane not found")])
                     }
                     return .object([
@@ -194,7 +200,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                         "source": source.map(RPCValue.string) ?? .null,
                     ])
                 case .clear(let paneID, let source):
-                    guard windowController.clearPaneMetadataRows(paneID: paneID) else {
+                    guard windowController.clearPaneMetadataRows(paneID: paneID, source: source) else {
                         return .object(["ok": .bool(false), "error": .string("pane not found")])
                     }
                     return .object([
