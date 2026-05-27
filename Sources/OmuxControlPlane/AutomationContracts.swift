@@ -323,6 +323,65 @@ public struct ControlPlanePaneStatusRequest: Equatable, Sendable {
     }
 }
 
+public struct ControlPlanePaneMetadataRowsRequest: Equatable, Sendable {
+    public let target: ControlPlaneTerminalTarget
+    public let row1: String?
+    public let row2: String?
+    public let row3: String?
+    public let source: String?
+
+    public init?(
+        target: ControlPlaneTerminalTarget,
+        row1: String? = nil,
+        row2: String? = nil,
+        row3: String? = nil,
+        source: String? = nil
+    ) {
+        guard row1 != nil || row2 != nil || row3 != nil else {
+            return nil
+        }
+        self.target = target
+        self.row1 = row1
+        self.row2 = row2
+        self.row3 = row3
+        self.source = source
+    }
+
+    public init?(rpcValue: RPCValue?) {
+        guard case .object(let object)? = rpcValue,
+              let target = ControlPlaneTerminalTarget(rpcValue: rpcValue)
+        else {
+            return nil
+        }
+
+        let row1 = object["row1"]?.stringValue
+        let row2 = object["row2"]?.stringValue
+        let row3 = object["row3"]?.stringValue
+        guard row1 != nil || row2 != nil || row3 != nil else {
+            return nil
+        }
+
+        self.init(
+            target: target,
+            row1: row1,
+            row2: row2,
+            row3: row3,
+            source: object["source"]?.stringValue
+        )!
+    }
+
+    public var rpcValue: RPCValue {
+        var object: [String: RPCValue] = [
+            "target": target.rpcValue,
+            "row1": row1.map(RPCValue.string) ?? .null,
+            "row2": row2.map(RPCValue.string) ?? .null,
+            "row3": row3.map(RPCValue.string) ?? .null,
+        ]
+        object["source"] = source.map(RPCValue.string) ?? .null
+        return .object(object)
+    }
+}
+
 public enum ControlPlaneHistoryScope: Equatable, Sendable {
     case activeWorkspace
     case pane(PaneID)

@@ -70,6 +70,14 @@ final class OmuxControlPlaneTests: XCTestCase {
             "scope": .string("pane"),
             "id": .string("pane-1"),
         ]))
+        let setPaneMetadataRows = try client.request(method: .setPaneMetadataRows, params: .object([
+            "target": .object(["type": .string("pane"), "id": .string("pane-1")]),
+            "row1": .string("build"),
+            "row2": .string("main"),
+        ]))
+        let clearPaneMetadataRows = try client.request(method: .clearPaneMetadataRows, params: .object([
+            "target": .object(["type": .string("pane"), "id": .string("pane-1")]),
+        ]))
 
         XCTAssertEqual(createTab.result, .object(["method": .string(ControlMethod.createTab.rawValue)]))
         XCTAssertEqual(split.result, .object(["method": .string(ControlMethod.splitPane.rawValue)]))
@@ -82,6 +90,8 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertEqual(sessions.result, .object(["method": .string(ControlMethod.listSessions.rawValue)]))
         XCTAssertEqual(panes.result, .object(["method": .string(ControlMethod.listPanes.rawValue)]))
         XCTAssertEqual(history.result, .object(["method": .string(ControlMethod.terminalHistory.rawValue)]))
+        XCTAssertEqual(setPaneMetadataRows.result, .object(["method": .string(ControlMethod.setPaneMetadataRows.rawValue)]))
+        XCTAssertEqual(clearPaneMetadataRows.result, .object(["method": .string(ControlMethod.clearPaneMetadataRows.rawValue)]))
     }
 
     func testTerminalHistoryRequestParsesScopesAndBounds() {

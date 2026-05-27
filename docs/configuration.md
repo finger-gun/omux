@@ -494,6 +494,27 @@ colors_enabled = true
 # font_family = "JetBrainsMono Nerd Font"
 ```
 
+## `[ui.sidebar]` settings
+
+`[ui.sidebar]` controls which metadata source is shown on each terminal row in the workspace sidebar.
+
+| Key              | Type     | Meaning                                                                                                 |
+|------------------|----------|---------------------------------------------------------------------------------------------------------|
+| `terminal_row_1` | string   | First row source. Defaults to `"title"`.                                                              |
+| `terminal_row_2` | string   | Second row source. Defaults to `"git-branch"`.                                                       |
+| `terminal_row_3` | string   | Third row source. Defaults to `"abbreviated-path"`.                                                 |
+
+Allowed values: `"title"`, `"subtitle"`, `"path"`, `"abbreviated-path"`, `"git-branch"`, `"none"`.
+
+Example:
+
+```toml
+[ui.sidebar]
+terminal_row_1 = "title"
+terminal_row_2 = "git-branch"
+terminal_row_3 = "abbreviated-path"
+```
+
 ## `[keys]` keybindings
 
 `[keys]` maps a single key chord to an OpenMUX shell action. User action bindings replace OpenMUX defaults for that action, so rebinding only requires the new chord. Use `"none"` when you want OpenMUX to leave a chord to the terminal.

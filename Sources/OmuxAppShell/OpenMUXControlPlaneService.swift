@@ -13,6 +13,17 @@ private enum VaultControlPlaneError: Error, CustomStringConvertible {
 }
 
 final class OpenMUXControlPlaneService: @unchecked Sendable {
+    enum PaneMetadataRowsAction: Sendable {
+        case set(
+            paneID: PaneID,
+            row1: String?,
+            row2: String?,
+            row3: String?,
+            source: String?
+        )
+        case clear(paneID: PaneID, source: String?)
+    }
+
     private final class VaultAwaitBox<T>: @unchecked Sendable {
         var result: Result<T, Error>?
     }
@@ -147,6 +158,7 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
     private let terminalEventBroadcaster = TerminalEventBroadcaster()
     private let vaultWaiter = VaultWaiter()
     var agentSessionsUIHandler: (@MainActor @Sendable (String) -> RPCValue)?
+    var paneMetadataRowsHandler: (@MainActor @Sendable (PaneMetadataRowsAction) -> RPCValue)?
 
     init(
         controller: WorkspaceController,
@@ -677,6 +689,50 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "pane not found"))
             }
             return JSONRPCResponse(id: request.id, result: .object(updated.rpcObject))
+        case .setPaneWorkingDirectory:
+            guard let params = request.params?.objectValue,
+                  let target = ControlPlaneTerminalTarget(rpcValue: .object(params)),
+                  let path = params["workingDirectory"]?.stringValue
+            else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target or workingDirectory"))
+            }
+            guard let updated = controller.setPaneWorkingDirectory(target: target, path: path) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(updated.rpcObject))
+        case .setPaneMetadataRows:
+            guard let metadataRowsRequest = ControlPlanePaneMetadataRowsRequest(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid pane metadata rows request"))
+            }
+            guard let context = controller.resolveTerminalTarget(metadataRowsRequest.target) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+            }
+            guard let paneMetadataRowsHandler else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane metadata rows unavailable"))
+            }
+            let result = paneMetadataRowsHandler(
+                .set(
+                    paneID: context.paneID,
+                    row1: metadataRowsRequest.row1,
+                    row2: metadataRowsRequest.row2,
+                    row3: metadataRowsRequest.row3,
+                    source: metadataRowsRequest.source
+                )
+            )
+            return JSONRPCResponse(id: request.id, result: result)
+        case .clearPaneMetadataRows:
+            guard let target = ControlPlaneTerminalTarget(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing target"))
+            }
+            guard let context = controller.resolveTerminalTarget(target) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "target pane not found"))
+            }
+            guard let paneMetadataRowsHandler else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "pane metadata rows unavailable"))
+            }
+            let source = request.params?.objectValue?["source"]?.stringValue
+            let result = paneMetadataRowsHandler(.clear(paneID: context.paneID, source: source))
+            return JSONRPCResponse(id: request.id, result: result)
         case .none:
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: -32601, message: "method not found"))
         }

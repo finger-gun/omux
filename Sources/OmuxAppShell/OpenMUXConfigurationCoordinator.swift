@@ -11,6 +11,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
     let persistedScrollback: OmuxConfigTerminal.PersistedScrollback
     let panes: OmuxConfigUI.Panes
     let icons: OmuxConfigUI.Icons
+    let sidebar: OmuxConfigUI.Sidebar
     let markdownPreview: OmuxConfigPlugins.MarkdownPreview
     let aiStatus: OmuxConfigPlugins.AIStatus
     let agentSessions: VaultConfiguration
@@ -27,6 +28,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback = OmuxConfigTerminal.PersistedScrollback(),
         panes: OmuxConfigUI.Panes = OmuxConfigUI.Panes(),
         icons: OmuxConfigUI.Icons = OmuxConfigUI.Icons(),
+        sidebar: OmuxConfigUI.Sidebar = OmuxConfigUI.Sidebar(),
         markdownPreview: OmuxConfigPlugins.MarkdownPreview = OmuxConfigPlugins.MarkdownPreview(),
         aiStatus: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(),
         agentSessions: VaultConfiguration = VaultConfiguration(),
@@ -42,6 +44,7 @@ struct OpenMUXPreparedConfiguration: Sendable {
         self.persistedScrollback = persistedScrollback
         self.panes = panes
         self.icons = icons
+        self.sidebar = sidebar
         self.markdownPreview = markdownPreview
         self.aiStatus = aiStatus
         self.agentSessions = agentSessions
@@ -74,6 +77,7 @@ final class OpenMUXConfigurationCoordinator {
     var onPersistedScrollbackChange: ((OmuxConfigTerminal.PersistedScrollback) -> Void)?
     var onPaneConfigurationChange: ((OmuxConfigUI.Panes) -> Void)?
     var onIconConfigurationChange: ((OmuxConfigUI.Icons) -> Void)?
+    var onSidebarConfigurationChange: ((OmuxConfigUI.Sidebar) -> Void)?
     var onMarkdownPreviewConfigurationChange: ((OmuxConfigPlugins.MarkdownPreview) -> Void)?
     var onAIStatusConfigurationChange: ((OmuxConfigPlugins.AIStatus) -> Void)?
     var onAgentSessionsConfigurationChange: ((VaultConfiguration) -> Void)?
@@ -91,6 +95,7 @@ final class OpenMUXConfigurationCoordinator {
     private var currentPersistedScrollback: OmuxConfigTerminal.PersistedScrollback
     private var currentPanes: OmuxConfigUI.Panes
     private var currentIcons: OmuxConfigUI.Icons
+    private var currentSidebar: OmuxConfigUI.Sidebar
     private var currentMarkdownPreview: OmuxConfigPlugins.MarkdownPreview
     private var currentAIStatus: OmuxConfigPlugins.AIStatus
     private var currentAgentSessions: VaultConfiguration
@@ -112,6 +117,7 @@ final class OpenMUXConfigurationCoordinator {
         self.currentPersistedScrollback = initialState.persistedScrollback
         self.currentPanes = initialState.panes
         self.currentIcons = initialState.icons
+        self.currentSidebar = initialState.sidebar
         self.currentMarkdownPreview = initialState.markdownPreview
         self.currentAIStatus = initialState.aiStatus
         self.currentAgentSessions = initialState.agentSessions
@@ -134,6 +140,7 @@ final class OpenMUXConfigurationCoordinator {
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
+                sidebar: evaluation.config.ui.sidebar,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 aiStatus: evaluation.config.plugins.aiStatus,
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
@@ -155,6 +162,7 @@ final class OpenMUXConfigurationCoordinator {
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
+                sidebar: evaluation.config.ui.sidebar,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 aiStatus: evaluation.config.plugins.aiStatus,
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
@@ -172,6 +180,7 @@ final class OpenMUXConfigurationCoordinator {
                 persistedScrollback: evaluation.config.terminal.persistedScrollback,
                 panes: evaluation.config.ui.panes,
                 icons: evaluation.config.ui.icons,
+                sidebar: evaluation.config.ui.sidebar,
                 markdownPreview: evaluation.config.plugins.markdownPreview,
                 aiStatus: evaluation.config.plugins.aiStatus,
                 agentSessions: VaultConfiguration(config: evaluation.config.agentSessions),
@@ -225,6 +234,12 @@ final class OpenMUXConfigurationCoordinator {
         stateLock.lock()
         defer { stateLock.unlock() }
         return currentPanes
+    }
+
+    func sidebarConfiguration() -> OmuxConfigUI.Sidebar {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentSidebar
     }
 
     /// Persists a new theme to the config file and fires `onThemeChange`.
@@ -350,6 +365,7 @@ final class OpenMUXConfigurationCoordinator {
                     persistedScrollback: currentPersistedScrollback,
                     panes: currentPanes,
                     icons: currentIcons,
+                    sidebar: currentSidebar,
                     markdownPreview: currentMarkdownPreview,
                     aiStatus: currentAIStatus,
                     agentSessions: currentAgentSessions,
@@ -362,6 +378,7 @@ final class OpenMUXConfigurationCoordinator {
             let persistedScrollback = evaluation.config.terminal.persistedScrollback
             let panes = evaluation.config.ui.panes
             let icons = evaluation.config.ui.icons
+            let sidebar = evaluation.config.ui.sidebar
             let markdownPreview = evaluation.config.plugins.markdownPreview
             let aiStatus = evaluation.config.plugins.aiStatus
             let agentSessions = VaultConfiguration(config: evaluation.config.agentSessions)
@@ -372,6 +389,7 @@ final class OpenMUXConfigurationCoordinator {
                 || previousState.persistedScrollback != persistedScrollback
                 || previousState.panes != panes
                 || previousState.icons != icons
+                || previousState.sidebar != sidebar
                 || previousState.markdownPreview != markdownPreview
                 || previousState.aiStatus != aiStatus
                 || previousState.agentSessions != agentSessions
@@ -395,6 +413,7 @@ final class OpenMUXConfigurationCoordinator {
                 currentPersistedScrollback = persistedScrollback
                 currentPanes = panes
                 currentIcons = icons
+                currentSidebar = sidebar
                 currentMarkdownPreview = markdownPreview
                 currentAIStatus = aiStatus
                 currentAgentSessions = agentSessions
@@ -410,6 +429,7 @@ final class OpenMUXConfigurationCoordinator {
                 persistedScrollback: persistedScrollback,
                 panes: panes,
                 icons: icons,
+                sidebar: sidebar,
                 markdownPreview: markdownPreview,
                 aiStatus: aiStatus,
                 agentSessions: agentSessions,
@@ -441,6 +461,7 @@ final class OpenMUXConfigurationCoordinator {
             persistedScrollback: nil,
             panes: nil,
             icons: nil,
+            sidebar: nil,
             markdownPreview: nil,
             aiStatus: nil,
             agentSessions: nil,
@@ -456,6 +477,7 @@ final class OpenMUXConfigurationCoordinator {
         persistedScrollback: OmuxConfigTerminal.PersistedScrollback?,
         panes: OmuxConfigUI.Panes?,
         icons: OmuxConfigUI.Icons?,
+        sidebar: OmuxConfigUI.Sidebar?,
         markdownPreview: OmuxConfigPlugins.MarkdownPreview?,
         aiStatus: OmuxConfigPlugins.AIStatus?,
         agentSessions: VaultConfiguration?,
@@ -479,6 +501,9 @@ final class OpenMUXConfigurationCoordinator {
         }
         if let icons {
             onIconConfigurationChange?(icons)
+        }
+        if let sidebar {
+            onSidebarConfigurationChange?(sidebar)
         }
         if let markdownPreview {
             onMarkdownPreviewConfigurationChange?(markdownPreview)

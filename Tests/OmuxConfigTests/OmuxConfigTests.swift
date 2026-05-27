@@ -481,6 +481,56 @@ struct OmuxConfigTests {
     }
 
     @Test
+    func loadsSidebarUISettings() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        try write(
+            """
+            schema = 1
+
+            [ui.sidebar]
+            terminal_row_1 = "title"
+            terminal_row_2 = "subtitle"
+            terminal_row_3 = "none"
+            """,
+            to: home.appendingPathComponent("config.toml")
+        )
+
+        let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.ui.sidebar.terminalRows.row1 == .title)
+        #expect(result.config.ui.sidebar.terminalRows.row2 == .subtitle)
+        #expect(result.config.ui.sidebar.terminalRows.row3 == .none)
+    }
+
+    @Test
+    func rejectsInvalidSidebarUISettings() throws {
+        let cases = [
+            ("terminal_row_1 = true", "ui.sidebar.terminal_row_1 must be one of"),
+            ("terminal_row_2 = \"wat\"", "ui.sidebar.terminal_row_2 must be one of"),
+            ("unknown = true", "Unknown [ui.sidebar] key"),
+        ]
+
+        for (entry, expectedMessage) in cases {
+            let home = try temporaryHome()
+            defer { cleanup(home) }
+            try write(
+                """
+                schema = 1
+
+                [ui.sidebar]
+                \(entry)
+                """,
+                to: home.appendingPathComponent("config.toml")
+            )
+
+            let result = OmuxConfigLoader(configURL: home.appendingPathComponent("config.toml")).load()
+            #expect(result.hasErrors)
+            #expect(result.diagnostics.contains(where: { $0.message.contains(expectedMessage) }))
+        }
+    }
+
+    @Test
     func rejectsInvalidIconUISettings() throws {
         let cases = [
             ("enabled = \"yes\"", "ui.icons.enabled must be a boolean"),

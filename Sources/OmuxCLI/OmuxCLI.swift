@@ -304,6 +304,8 @@ public struct OmuxCLICommand {
                     params: request.rpcValue
                 )
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "pane-metadata":
+                return try runPaneMetadataCommand(arguments: Array(commandArguments.dropFirst()))
             case "notify":
                 guard commandArguments.count >= 2 else {
                     writeLine("usage: omux notify <title> [body]")
@@ -443,6 +445,17 @@ public struct OmuxCLICommand {
             )
             if let error = cdResponse.error {
                 writeLine("omux error: cd failed: \(error.message)")
+                return 1
+            }
+            let setWorkingDirectoryResponse = try client.request(
+                method: .setPaneWorkingDirectory,
+                params: .object([
+                    "type": .string("focused"),
+                    "workingDirectory": .string(worktreePath),
+                ])
+            )
+            if let error = setWorkingDirectoryResponse.error {
+                writeLine("omux error: set working directory failed: \(error.message)")
                 return 1
             }
             let clearResponse = try client.request(
@@ -1694,6 +1707,161 @@ public struct OmuxCLICommand {
             message: message,
             source: source
         )
+    }
+
+    private func runPaneMetadataCommand(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            writeLine("usage: omux pane-metadata <set|clear> ...")
+            return 1
+        }
+        switch subcommand {
+        case "set":
+            guard let request = parsePaneMetadataSetRequest(Array(arguments.dropFirst())) else {
+                writeLine("usage: omux pane-metadata set --session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused [--row1 <text>] [--row2 <text>] [--row3 <text>] [--source <name>]")
+                return 1
+            }
+            let response = try client.request(method: .setPaneMetadataRows, params: request.rpcValue)
+            if let error = response.error {
+                writeLine("omux error: \(error.message)")
+                return 1
+            }
+            guard response.result != nil else {
+                writeLine("omux error: missing result")
+                return 1
+            }
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        case "clear":
+            guard let request = parsePaneMetadataClearRequest(Array(arguments.dropFirst())) else {
+                writeLine("usage: omux pane-metadata clear --session <id>|--pane <id>|--pane-tab <id>|--tab <id>|--workspace <id>|--focused [--source <name>]")
+                return 1
+            }
+            let response = try client.request(method: .clearPaneMetadataRows, params: request)
+            if let error = response.error {
+                writeLine("omux error: \(error.message)")
+                return 1
+            }
+            guard response.result != nil else {
+                writeLine("omux error: missing result")
+                return 1
+            }
+            writeLine(response.result?.prettyPrinted ?? "")
+            return 0
+        default:
+            writeLine("usage: omux pane-metadata <set|clear> ...")
+            return 1
+        }
+    }
+
+    private func parsePaneMetadataSetRequest(_ arguments: [String]) -> ControlPlanePaneMetadataRowsRequest? {
+        var index = 0
+        var target: ControlPlaneTerminalTarget?
+        var row1: String?
+        var row2: String?
+        var row3: String?
+        var source: String?
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--session":
+                guard index + 1 < arguments.count else { return nil }
+                target = .session(SessionID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--pane", "--pane-tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .pane(PaneID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .tab(TabID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--workspace":
+                guard index + 1 < arguments.count else { return nil }
+                target = .workspace(WorkspaceID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--focused":
+                target = .focused
+                index += 1
+            case "--row1":
+                guard index + 1 < arguments.count else { return nil }
+                row1 = arguments[index + 1]
+                index += 2
+            case "--row2":
+                guard index + 1 < arguments.count else { return nil }
+                row2 = arguments[index + 1]
+                index += 2
+            case "--row3":
+                guard index + 1 < arguments.count else { return nil }
+                row3 = arguments[index + 1]
+                index += 2
+            case "--source":
+                guard index + 1 < arguments.count else { return nil }
+                source = arguments[index + 1]
+                index += 2
+            default:
+                return nil
+            }
+        }
+
+        guard let target,
+              row1 != nil || row2 != nil || row3 != nil
+        else {
+            return nil
+        }
+
+        return ControlPlanePaneMetadataRowsRequest(
+            target: target,
+            row1: row1,
+            row2: row2,
+            row3: row3,
+            source: source
+        )
+    }
+
+    private func parsePaneMetadataClearRequest(_ arguments: [String]) -> RPCValue? {
+        var index = 0
+        var target: ControlPlaneTerminalTarget?
+        var source: String?
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--session":
+                guard index + 1 < arguments.count else { return nil }
+                target = .session(SessionID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--pane", "--pane-tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .pane(PaneID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--tab":
+                guard index + 1 < arguments.count else { return nil }
+                target = .tab(TabID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--workspace":
+                guard index + 1 < arguments.count else { return nil }
+                target = .workspace(WorkspaceID(rawValue: arguments[index + 1]))
+                index += 2
+            case "--focused":
+                target = .focused
+                index += 1
+            case "--source":
+                guard index + 1 < arguments.count else { return nil }
+                source = arguments[index + 1]
+                index += 2
+            default:
+                return nil
+            }
+        }
+
+        guard let target else {
+            return nil
+        }
+
+        var object: [String: RPCValue] = ["target": target.rpcValue]
+        object["source"] = source.map(RPCValue.string) ?? .null
+        return .object(object)
     }
 
     private func parseTargetPrefix(_ arguments: [String]) -> (target: ControlPlaneTerminalTarget?, remaining: [String]) {

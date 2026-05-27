@@ -110,24 +110,6 @@ OpenMUX should be easy for AI systems to work with because it uses good engineer
 
 Do not distort the product around agent-centric workflows just to satisfy tooling.
 
-## Clean-room and licensing rules
-
-OpenMUX is Apache-2.0 licensed.
-
-The project may take **architectural inspiration** from tools like cmux, but agents must **not copy code or file contents** from GPL projects into this repository.
-
-Allowed:
-
-- using public behavior as inspiration
-- reusing high-level requirements
-- studying architecture and scope
-
-Not allowed:
-
-- copying implementation code
-- copying source files or large chunks of text
-- reproducing GPL project structure verbatim without justification
-
 ## Preferred engineering style
 
 - Prefer small, composable modules over large rigid systems.
@@ -149,16 +131,6 @@ When proposing or implementing changes:
 6. When adding or modifying a user-observable state transition (workspace, pane, tab, focus, layout, config, or session change), verify it emits a hook invocation and a control plane event, and check whether a CLI verb exists for the same action. Update the coverage table in [`docs/open-by-design.md`](./docs/open-by-design.md) when wiring new transitions or closing gaps.
 7. When changing behavior described by existing documentation, update the affected docs in the same change. Stale documentation is a bug.
 
-## If the repo is still sparse
-
-This repository is still at an early foundation stage.
-
-When code or structure is missing:
-
-- do not invent a browser-heavy or cross-platform-first direction
-- do not assume a Mac App Store target
-- do not assume in-process plugin execution is the first step
-- do prefer scaffolding that supports the documented architecture direction
 
 ## Deliverable bias
 

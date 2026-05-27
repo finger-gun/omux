@@ -4788,6 +4788,99 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(publishedEvent?.payload.objectValue?["path"], .string("/var/tmp"))
     }
 
+    func testPaneMetadataChangedHookAndEventEmitOnWorkingDirectoryUpdate() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.paneID, pane.id)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["path"], .string("/var/tmp"))
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["isGitRepo"], .bool(false))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
+
+        runtime.emit(.workingDirectoryChanged("/var/tmp"), on: runtimeSurfaceID)
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(launcher.invocations.count, 1)
+    }
+
+    func testPaneMetadataChangedHookAndEventEmitOnPaneAliasUpdate() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        _ = try controller.setPaneAlias(paneID, to: "Plugins")
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.paneID, paneID)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["displayTitle"], .string("Plugins"))
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["userAlias"], .string("Plugins"))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
+    }
+
+    func testTerminalSidebarMetadataUsesPaneDisplayTitle() {
+        let pane = Pane(
+            title: "path-like-title",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        )
+
+        let metadata = TerminalSidebarMetadataResolver().metadata(for: pane, icon: .terminal)
+
+        XCTAssertEqual(metadata.title, pane.displayTitle)
+        XCTAssertEqual(metadata.path, "/tmp/project")
+        XCTAssertEqual(metadata.abbreviatedPath, "/tmp/project")
+    }
+
     func testTerminalActionStateChangesCoalesceWorkspaceUpdates() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -5306,6 +5399,34 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowAppliesPaneMetadataRowOverridesInSidebar() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        XCTAssertTrue(windowController.setPaneMetadataRows(paneID: paneID, row1: "build", row2: "main", row3: "~/src"))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: "build", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "~/src", in: sidebar))
+
+        XCTAssertTrue(windowController.clearPaneMetadataRows(paneID: paneID))
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(findLabel(withString: "build", in: sidebar))
+        XCTAssertFalse(findLabel(withString: "main", in: sidebar))
+        XCTAssertFalse(findLabel(withString: "~/src", in: sidebar))
+    }
+
+    @MainActor
     func testWorkspaceSidebarDragRegionsDoNotMoveWindow() {
         XCTAssertFalse(WorkspaceSidebarView().mouseDownCanMoveWindow)
         XCTAssertFalse(SidebarItemButton().mouseDownCanMoveWindow)
@@ -5619,9 +5740,10 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
-        let expectedTitle = "main"
+        let expectedTitle = repositoryURL.lastPathComponent
 
         XCTAssertTrue(findLabel(withString: expectedTitle, in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
         XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
     }
 
@@ -5647,7 +5769,8 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
         XCTAssertTrue(findLabel(withString: "hx", in: sidebar))
-        XCTAssertTrue(findLabel(withString: "main · \(repositoryURL.path)", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "main", in: sidebar))
+        XCTAssertTrue(findLabel(withString: repositoryURL.path, in: sidebar))
     }
 
     @MainActor
@@ -5904,19 +6027,36 @@ final class OmuxAppShellTests: XCTestCase {
             bridge: bridge,
             hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
         )
-        var publishedEvents: [ControlPlaneEvent] = []
+        var terminalEvents: [ControlPlaneEvent] = []
         controller.onTerminalEvent = { event in
-            publishedEvents.append(event)
+            terminalEvents.append(event)
         }
 
         let workspace = try controller.openWorkspace(at: "/tmp")
         let pane = try XCTUnwrap(workspace.focusedPane)
         let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: pane.id)?.runtimeSurfaceID)
-        publishedEvents.removeAll()
+        terminalEvents.removeAll()
 
         runtime.emit(.titleChanged("ls"), on: runtimeSurfaceID)
 
-        XCTAssertEqual(publishedEvents.map(\.name), ["terminal.titleChanged"])
+        XCTAssertTrue(terminalEvents.contains(where: { $0.name == "terminal.titleChanged" }))
+
+        let controlPlaneRuntime = ActionEmittingGhosttyRuntime()
+        let controlPlaneBridge = GhosttyTerminalBridge(runtime: controlPlaneRuntime)
+        let controlPlaneController = WorkspaceController(
+            bridge: controlPlaneBridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+        var controlPlaneEvents: [ControlPlaneEvent] = []
+        controlPlaneController.onControlPlaneEvent = { event in
+            controlPlaneEvents.append(event)
+        }
+        let controlPlaneWorkspace = try controlPlaneController.openWorkspace(at: "/tmp")
+        let controlPlanePane = try XCTUnwrap(controlPlaneWorkspace.focusedPane)
+        let controlPlaneSurfaceID = try XCTUnwrap(controlPlaneBridge.surface(for: controlPlanePane.id)?.runtimeSurfaceID)
+        controlPlaneEvents.removeAll()
+        controlPlaneRuntime.emit(.titleChanged("pwd"), on: controlPlaneSurfaceID)
+        XCTAssertTrue(controlPlaneEvents.contains(where: { $0.name == "pane.metadataChanged" }))
         XCTAssertTrue(launcher.invocations.isEmpty)
     }
 
@@ -6684,6 +6824,96 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(invalidResponse.error?.code, 404)
+    }
+
+    @MainActor
+    func testControlPlanePaneMetadataRowsSetAndClear() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/tmp",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "pane-meta.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+        let workspace = try controller.openWorkspace(at: "/tmp/pane-meta")
+        let expectedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        var invocations: [String] = []
+        service.paneMetadataRowsHandler = { action in
+            switch action {
+            case .set(let resolvedPaneID, let row1, let row2, let row3, let source):
+                invocations.append("set")
+                XCTAssertEqual(resolvedPaneID.rawValue, expectedPaneID.rawValue)
+                XCTAssertEqual(row1, "build")
+                XCTAssertEqual(row2, "main")
+                XCTAssertEqual(row3, "~/src")
+                XCTAssertEqual(source, "test")
+                return .object(["ok": .bool(true), "paneID": .string(resolvedPaneID.rawValue)])
+            case .clear(let resolvedPaneID, let source):
+                invocations.append("clear")
+                XCTAssertEqual(resolvedPaneID.rawValue, expectedPaneID.rawValue)
+                XCTAssertEqual(source, "test")
+                return .object(["ok": .bool(true), "paneID": .string(resolvedPaneID.rawValue)])
+            }
+        }
+
+        let setResponse = try await Self.requestControlMethod(
+            .setPaneMetadataRows,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "target": .object(["type": .string("pane"), "id": .string(expectedPaneID.rawValue)]),
+                "row1": .string("build"),
+                "row2": .string("main"),
+                "row3": .string("~/src"),
+                "source": .string("test"),
+            ])
+        )
+        XCTAssertNil(setResponse.error)
+        if case .object(let setResult)? = setResponse.result {
+            XCTAssertEqual(setResult["ok"], .bool(true))
+        } else {
+            XCTFail("expected set pane metadata response object")
+        }
+
+        let clearResponse = try await Self.requestControlMethod(
+            .clearPaneMetadataRows,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object([
+                "target": .object(["type": .string("pane"), "id": .string(expectedPaneID.rawValue)]),
+                "source": .string("test"),
+            ])
+        )
+        XCTAssertNil(clearResponse.error)
+        if case .object(let clearResult)? = clearResponse.result {
+            XCTAssertEqual(clearResult["ok"], .bool(true))
+        } else {
+            XCTFail("expected clear pane metadata response object")
+        }
+        XCTAssertEqual(invocations, ["set", "clear"])
     }
 
 

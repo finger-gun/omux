@@ -274,12 +274,47 @@ public struct OmuxConfigUI: Equatable, Sendable {
         }
     }
 
+    public struct Sidebar: Equatable, Sendable {
+        public enum TerminalRowSource: String, Equatable, Sendable {
+            case title
+            case subtitle
+            case path
+            case abbreviatedPath = "abbreviated-path"
+            case gitBranch = "git-branch"
+            case none
+        }
+
+        public struct TerminalRows: Equatable, Sendable {
+            public let row1: TerminalRowSource
+            public let row2: TerminalRowSource
+            public let row3: TerminalRowSource
+
+            public init(
+                row1: TerminalRowSource = .title,
+                row2: TerminalRowSource = .gitBranch,
+                row3: TerminalRowSource = .abbreviatedPath
+            ) {
+                self.row1 = row1
+                self.row2 = row2
+                self.row3 = row3
+            }
+        }
+
+        public let terminalRows: TerminalRows
+
+        public init(terminalRows: TerminalRows = TerminalRows()) {
+            self.terminalRows = terminalRows
+        }
+    }
+
     public let panes: Panes
     public let icons: Icons
+    public let sidebar: Sidebar
 
-    public init(panes: Panes = Panes(), icons: Icons = Icons()) {
+    public init(panes: Panes = Panes(), icons: Icons = Icons(), sidebar: Sidebar = Sidebar()) {
         self.panes = panes
         self.icons = icons
+        self.sidebar = sidebar
     }
 }
 
@@ -597,6 +632,11 @@ public enum OmuxConfigTemplate {
         # provider = "nerd-font"
         # colors_enabled = true
         # font_family = "JetBrainsMono Nerd Font" # optional override; OpenMUX bundles Symbols Nerd Font Mono
+
+        [ui.sidebar]
+        # terminal_row_1 = "title"
+        # terminal_row_2 = "git-branch"
+        # terminal_row_3 = "abbreviated-path"
 
         [agent-sessions]
         enabled = true
@@ -988,6 +1028,7 @@ public struct OmuxConfigLoader {
             "workspace",
             "ui.panes",
             "ui.icons",
+            "ui.sidebar",
             "agent-sessions",
             "plugins.markdown-preview",
             "plugins.ai-status",
@@ -1493,6 +1534,49 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let sidebarAllowedKeys: Set<String> = ["terminal_row_1", "terminal_row_2", "terminal_row_3"]
+        var sidebarTerminalRow1 = config.ui.sidebar.terminalRows.row1
+        var sidebarTerminalRow2 = config.ui.sidebar.terminalRows.row2
+        var sidebarTerminalRow3 = config.ui.sidebar.terminalRows.row3
+        for entry in document.entries(in: "ui.sidebar") {
+            guard sidebarAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [ui.sidebar] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard let rawValue = entry.value.stringValue,
+                  let value = OmuxConfigUI.Sidebar.TerminalRowSource(rawValue: rawValue)
+            else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "ui.sidebar.\(entry.key) must be one of: \"title\", \"subtitle\", \"path\", \"abbreviated-path\", \"git-branch\", or \"none\".",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "terminal_row_1":
+                sidebarTerminalRow1 = value
+            case "terminal_row_2":
+                sidebarTerminalRow2 = value
+            case "terminal_row_3":
+                sidebarTerminalRow3 = value
+            default:
+                break
+            }
+        }
+
         let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme", "presentation"]
         var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
         var markdownPreviewRenderer = config.plugins.markdownPreview.renderer
@@ -1983,6 +2067,13 @@ public struct OmuxConfigLoader {
                     provider: iconsProvider,
                     fontFamily: iconsFontFamily,
                     colorsEnabled: iconsColorsEnabled
+                ),
+                sidebar: OmuxConfigUI.Sidebar(
+                    terminalRows: OmuxConfigUI.Sidebar.TerminalRows(
+                        row1: sidebarTerminalRow1,
+                        row2: sidebarTerminalRow2,
+                        row3: sidebarTerminalRow3
+                    )
                 )
             ),
             agentSessions: OmuxConfigAgentSessions(

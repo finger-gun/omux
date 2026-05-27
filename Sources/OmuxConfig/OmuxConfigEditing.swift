@@ -13,6 +13,9 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let iconsEnabled: Bool
         public let iconProvider: String
         public let iconColorsEnabled: Bool
+        public let sidebarTerminalRow1: String
+        public let sidebarTerminalRow2: String
+        public let sidebarTerminalRow3: String
         public let markdownPreviewEnabled: Bool
         public let markdownPreviewRenderer: String
         public let markdownPreviewTheme: String
@@ -58,6 +61,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
     public struct UI: Codable, Equatable, Sendable {
         public let panes: Panes
         public let icons: Icons
+        public let sidebar: Sidebar
     }
 
     public struct Panes: Codable, Equatable, Sendable {
@@ -70,6 +74,12 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let provider: String
         public let fontFamily: String?
         public let colorsEnabled: Bool
+    }
+
+    public struct Sidebar: Codable, Equatable, Sendable {
+        public let terminalRow1: String
+        public let terminalRow2: String
+        public let terminalRow3: String
     }
 
     public struct Plugins: Codable, Equatable, Sendable {
@@ -122,6 +132,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
     public struct UI: Codable, Equatable, Sendable {
         public var panes: Panes?
         public var icons: Icons?
+        public var sidebar: Sidebar?
     }
 
     public struct Panes: Codable, Equatable, Sendable {
@@ -134,6 +145,12 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var provider: String?
         public var fontFamily: String?
         public var colorsEnabled: Bool?
+    }
+
+    public struct Sidebar: Codable, Equatable, Sendable {
+        public var terminalRow1: String?
+        public var terminalRow2: String?
+        public var terminalRow3: String?
     }
 
     public struct Plugins: Codable, Equatable, Sendable {
@@ -306,6 +323,7 @@ public struct OmuxConfigEditor {
 
         let panesPayload = payload.ui?.panes
         let iconsPayload = payload.ui?.icons
+        let sidebarPayload = payload.ui?.sidebar
         let markdownPreviewPayload = payload.plugins?.markdownPreview
         let aiStatusPayload = payload.plugins?.aiStatus
         return OmuxConfig(
@@ -333,6 +351,13 @@ public struct OmuxConfigEditor {
                     provider: iconsPayload?.provider.flatMap(OmuxConfigUI.Icons.Provider.init(rawValue:)) ?? current.ui.icons.provider,
                     fontFamily: iconsPayload?.fontFamily ?? current.ui.icons.fontFamily,
                     colorsEnabled: iconsPayload?.colorsEnabled ?? current.ui.icons.colorsEnabled
+                ),
+                sidebar: OmuxConfigUI.Sidebar(
+                    terminalRows: OmuxConfigUI.Sidebar.TerminalRows(
+                        row1: sidebarPayload?.terminalRow1.flatMap(OmuxConfigUI.Sidebar.TerminalRowSource.init(rawValue:)) ?? current.ui.sidebar.terminalRows.row1,
+                        row2: sidebarPayload?.terminalRow2.flatMap(OmuxConfigUI.Sidebar.TerminalRowSource.init(rawValue:)) ?? current.ui.sidebar.terminalRows.row2,
+                        row3: sidebarPayload?.terminalRow3.flatMap(OmuxConfigUI.Sidebar.TerminalRowSource.init(rawValue:)) ?? current.ui.sidebar.terminalRows.row3
+                    )
                 )
             ),
             plugins: OmuxConfigPlugins(
@@ -428,6 +453,11 @@ public struct OmuxConfigEditor {
                     "fontFamily": true,
                     "colorsEnabled": true,
                 ],
+                "sidebar": [
+                    "terminalRow1": true,
+                    "terminalRow2": true,
+                    "terminalRow3": true,
+                ],
             ],
             "plugins": [
                 "markdownPreview": [
@@ -504,6 +534,11 @@ public enum OmuxConfigRenderer {
             lines.append("font_family = \(render(.string(fontFamily)))")
         }
         lines.append("colors_enabled = \(config.ui.icons.colorsEnabled ? "true" : "false")")
+        lines.append("")
+        lines.append("[ui.sidebar]")
+        lines.append("terminal_row_1 = \(render(.string(config.ui.sidebar.terminalRows.row1.rawValue)))")
+        lines.append("terminal_row_2 = \(render(.string(config.ui.sidebar.terminalRows.row2.rawValue)))")
+        lines.append("terminal_row_3 = \(render(.string(config.ui.sidebar.terminalRows.row3.rawValue)))")
         lines.append("")
         lines.append("[ui.panes]")
         lines.append("inactive_opacity = \(renderOpacity(config.ui.panes.inactiveOpacity))")
@@ -599,6 +634,9 @@ private extension OmuxConfigExport.Defaults {
             iconsEnabled: config.ui.icons.enabled,
             iconProvider: config.ui.icons.provider.rawValue,
             iconColorsEnabled: config.ui.icons.colorsEnabled,
+            sidebarTerminalRow1: config.ui.sidebar.terminalRows.row1.rawValue,
+            sidebarTerminalRow2: config.ui.sidebar.terminalRows.row2.rawValue,
+            sidebarTerminalRow3: config.ui.sidebar.terminalRows.row3.rawValue,
             markdownPreviewEnabled: config.plugins.markdownPreview.enabled,
             markdownPreviewRenderer: config.plugins.markdownPreview.renderer,
             markdownPreviewTheme: config.plugins.markdownPreview.theme,
@@ -654,6 +692,11 @@ private extension OmuxConfigExport.UI {
                 provider: config.icons.provider.rawValue,
                 fontFamily: config.icons.fontFamily,
                 colorsEnabled: config.icons.colorsEnabled
+            ),
+            sidebar: .init(
+                terminalRow1: config.sidebar.terminalRows.row1.rawValue,
+                terminalRow2: config.sidebar.terminalRows.row2.rawValue,
+                terminalRow3: config.sidebar.terminalRows.row3.rawValue
             )
         )
     }
