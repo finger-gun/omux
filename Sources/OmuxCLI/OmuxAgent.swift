@@ -1,5 +1,6 @@
 import Foundation
 import OmuxControlPlane
+import OmuxConfig
 import OmuxCore
 
 #if canImport(FoundationModels)
@@ -11,6 +12,7 @@ protocol OmuxAgentGenerating {
         prompt: String,
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
@@ -42,6 +44,7 @@ protocol OmuxAgentChatSessioning {
     ) async throws -> String
 
     func summarizeForCompaction(transcript: String) async throws -> String
+    func summarizeForHandoff(transcript: String) async throws -> String
     func tokenCount(for text: String) -> Int?
 }
 
@@ -50,6 +53,7 @@ final class AnyOmuxAgentChatSession: @unchecked Sendable, OmuxAgentChatSessionin
     let contextWindowSize: Int?
     private let sendClosure: (String, @escaping @Sendable (String) -> Void) async throws -> String
     private let summarizeClosure: (String) async throws -> String
+    private let handoffClosure: (String) async throws -> String
     private let tokenCountClosure: (String) -> Int?
 
     init<Base: OmuxAgentChatSessioning>(_ base: Base) {
@@ -60,6 +64,9 @@ final class AnyOmuxAgentChatSession: @unchecked Sendable, OmuxAgentChatSessionin
         }
         self.summarizeClosure = { transcript in
             try await base.summarizeForCompaction(transcript: transcript)
+        }
+        self.handoffClosure = { transcript in
+            try await base.summarizeForHandoff(transcript: transcript)
         }
         self.tokenCountClosure = { text in
             base.tokenCount(for: text)
@@ -77,6 +84,10 @@ final class AnyOmuxAgentChatSession: @unchecked Sendable, OmuxAgentChatSessionin
         try await summarizeClosure(transcript)
     }
 
+    func summarizeForHandoff(transcript: String) async throws -> String {
+        try await handoffClosure(transcript)
+    }
+
     func tokenCount(for text: String) -> Int? {
         tokenCountClosure(text)
     }
@@ -86,6 +97,7 @@ final class AnyOmuxAgentChatSessionFactory: @unchecked Sendable {
     private let makeSessionClosure: (
         String?,
         String,
+        OmuxConfigAgent,
         URL,
         Bool,
         (@Sendable (String) -> Void)?,
@@ -93,10 +105,11 @@ final class AnyOmuxAgentChatSessionFactory: @unchecked Sendable {
     ) throws -> AnyOmuxAgentChatSession
 
     init<Base: OmuxAgentChatSessionFactorying>(_ base: Base) {
-        self.makeSessionClosure = { systemInstruction, hostContext, workingDirectoryURL, allowReadAnywhere, onVerbose, onToolEvent in
+        self.makeSessionClosure = { systemInstruction, hostContext, agentConfiguration, workingDirectoryURL, allowReadAnywhere, onVerbose, onToolEvent in
             try base.makeSession(
                 systemInstruction: systemInstruction,
                 hostContext: hostContext,
+                agentConfiguration: agentConfiguration,
                 workingDirectoryURL: workingDirectoryURL,
                 allowReadAnywhere: allowReadAnywhere,
                 onVerbose: onVerbose,
@@ -108,12 +121,13 @@ final class AnyOmuxAgentChatSessionFactory: @unchecked Sendable {
     func makeSession(
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
         onToolEvent: (@Sendable (OmuxAgentToolEvent) -> Void)?
     ) throws -> AnyOmuxAgentChatSession {
-        try makeSessionClosure(systemInstruction, hostContext, workingDirectoryURL, allowReadAnywhere, onVerbose, onToolEvent)
+        try makeSessionClosure(systemInstruction, hostContext, agentConfiguration, workingDirectoryURL, allowReadAnywhere, onVerbose, onToolEvent)
     }
 }
 
@@ -121,6 +135,7 @@ protocol OmuxAgentChatSessionFactorying {
     func makeSession(
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
@@ -189,6 +204,37 @@ struct OmuxAgentHostContext: Equatable, Sendable {
     }
 }
 
+struct OmuxAgentDefaultPromptAnalysis: Equatable, Sendable {
+    var currentLength: Int
+    var previousLength: Int
+    var currentTokenCount: Int?
+    var previousTokenCount: Int?
+}
+
+struct OmuxAgentSkill: Equatable, Sendable {
+    enum Scope: String, Equatable, Sendable {
+        case repo
+        case user
+    }
+
+    var name: String
+    var description: String
+    var scope: Scope
+    var rootURL: URL
+    var skillMarkdownURL: URL
+    var body: String
+}
+
+struct OmuxAgentSkillReadResult: Equatable, Sendable {
+    struct IncludedFile: Equatable, Sendable {
+        var relativePath: String
+        var contents: String
+    }
+
+    var skill: OmuxAgentSkill
+    var files: [IncludedFile]
+}
+
 struct OmuxAgentGrepRequest: Equatable, Sendable {
     enum CaseMode: String, Equatable, Sendable {
         case smart
@@ -217,6 +263,162 @@ struct OmuxAgentGrepResult: Equatable, Sendable {
 typealias OmuxAgentRGRunner = @Sendable (OmuxAgentGrepRequest, URL, OmuxAgentWorkspaceLimits) throws -> OmuxAgentGrepResult
 typealias OmuxAgentCLIRunner = ([String]) -> (exitCode: Int32, output: String)
 typealias OmuxAgentHistoryFetcher = (ControlPlaneHistoryRequest) throws -> RPCValue?
+
+enum OmuxAgentSkillCatalog {
+    static func discover(
+        workingDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> [OmuxAgentSkill] {
+        let repoDirectory = workingDirectoryURL.appendingPathComponent(".agents/skills", isDirectory: true)
+        let userDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".agents/skills", isDirectory: true)
+        let userSkills = discover(in: userDirectory, scope: .user, fileManager: fileManager)
+        let repoSkills = discover(in: repoDirectory, scope: .repo, fileManager: fileManager)
+
+        var byName: [String: OmuxAgentSkill] = [:]
+        for skill in userSkills {
+            byName[skill.name] = skill
+        }
+        for skill in repoSkills {
+            byName[skill.name] = skill
+        }
+        return byName.values.sorted { lhs, rhs in
+            if lhs.scope != rhs.scope {
+                return lhs.scope == .repo
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    static func readSkill(
+        named name: String,
+        includePaths: [String],
+        workingDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> OmuxAgentSkillReadResult {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedName.isEmpty == false else {
+            throw NSError(domain: "OmuxAgentSkillCatalog", code: 1, userInfo: [NSLocalizedDescriptionKey: "skill name must not be empty"])
+        }
+
+        guard let skill = discover(workingDirectoryURL: workingDirectoryURL, fileManager: fileManager)
+            .first(where: { $0.name == normalizedName }) else {
+            throw NSError(domain: "OmuxAgentSkillCatalog", code: 2, userInfo: [NSLocalizedDescriptionKey: "skill not found: \(normalizedName)"])
+        }
+
+        let files = try includePaths.map { relativePath -> OmuxAgentSkillReadResult.IncludedFile in
+            let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else {
+                throw NSError(domain: "OmuxAgentSkillCatalog", code: 3, userInfo: [NSLocalizedDescriptionKey: "includePaths must not contain empty entries"])
+            }
+            guard trimmed.hasPrefix("/") == false,
+                  trimmed.split(separator: "/").contains(where: { $0 == ".." }) == false else {
+                throw NSError(domain: "OmuxAgentSkillCatalog", code: 4, userInfo: [NSLocalizedDescriptionKey: "include path escapes skill root: \(relativePath)"])
+            }
+
+            let candidateURL = URL(fileURLWithPath: trimmed, relativeTo: skill.rootURL).standardizedFileURL
+            let resolvedURL = candidateURL.resolvingSymlinksInPath().standardizedFileURL
+            guard isWithinRoot(resolvedURL, rootURL: skill.rootURL) else {
+                throw NSError(domain: "OmuxAgentSkillCatalog", code: 5, userInfo: [NSLocalizedDescriptionKey: "include path escapes skill root: \(relativePath)"])
+            }
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory), isDirectory.boolValue == false else {
+                throw NSError(domain: "OmuxAgentSkillCatalog", code: 6, userInfo: [NSLocalizedDescriptionKey: "included file not found: \(relativePath)"])
+            }
+            guard let contents = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
+                throw NSError(domain: "OmuxAgentSkillCatalog", code: 7, userInfo: [NSLocalizedDescriptionKey: "unable to read included file: \(relativePath)"])
+            }
+            return .init(relativePath: trimmed, contents: contents)
+        }
+
+        return OmuxAgentSkillReadResult(skill: skill, files: files)
+    }
+
+    private static func discover(
+        in directoryURL: URL,
+        scope: OmuxAgentSkill.Scope,
+        fileManager: FileManager
+    ) -> [OmuxAgentSkill] {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return []
+        }
+
+        let childURLs = (try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return childURLs.compactMap { skillRoot in
+            guard ((try? skillRoot.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) else {
+                return nil
+            }
+            let skillMarkdownURL = skillRoot.appendingPathComponent("SKILL.md", isDirectory: false)
+            guard let rawContents = try? String(contentsOf: skillMarkdownURL, encoding: .utf8) else {
+                return nil
+            }
+            guard let parsed = parseSkillMarkdown(rawContents) else {
+                return nil
+            }
+            return OmuxAgentSkill(
+                name: parsed.name,
+                description: parsed.description,
+                scope: scope,
+                rootURL: skillRoot.resolvingSymlinksInPath().standardizedFileURL,
+                skillMarkdownURL: skillMarkdownURL,
+                body: parsed.body
+            )
+        }
+    }
+
+    private static func parseSkillMarkdown(_ contents: String) -> (name: String, description: String, body: String)? {
+        guard contents.hasPrefix("---\n") || contents.hasPrefix("---\r\n") else {
+            return nil
+        }
+
+        let normalized = contents.replacingOccurrences(of: "\r\n", with: "\n")
+        let parts = normalized.components(separatedBy: "\n---\n")
+        guard parts.count >= 2 else {
+            return nil
+        }
+
+        let frontmatter = String(parts[0].dropFirst(4))
+        let body = parts.dropFirst().joined(separator: "\n---\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        var name: String?
+        var description: String?
+        for rawLine in frontmatter.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.isEmpty == false,
+                  let separator = line.firstIndex(of: ":") else {
+                continue
+            }
+            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            switch key {
+            case "name":
+                name = value
+            case "description":
+                description = value
+            default:
+                break
+            }
+        }
+
+        guard let name, name.isEmpty == false,
+              let description, description.isEmpty == false else {
+            return nil
+        }
+        return (name, description, body)
+    }
+
+    private static func isWithinRoot(_ fileURL: URL, rootURL: URL) -> Bool {
+        let filePath = fileURL.path
+        let rootPath = rootURL.path
+        return filePath == rootPath || filePath.hasPrefix(rootPath + "/")
+    }
+}
 
 final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
     let rootURL: URL
@@ -578,6 +780,66 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         return output
     }
 
+    func listSkills() -> String {
+        logger?("calling tool: list_skills")
+        emitToolEvent(toolName: "list_skills", phase: .started, detail: "discover")
+        let skills = OmuxAgentSkillCatalog.discover(workingDirectoryURL: rootURL, fileManager: fileManager)
+        guard skills.isEmpty == false else {
+            let output = "SKILLS: 0"
+            emitToolEvent(toolName: "list_skills", phase: .completed, detail: "skills=0", outputBytes: 0, outputText: output)
+            return output
+        }
+
+        let lines = skills.map { skill in
+            "\(skill.name) | \(skill.description) | scope=\(skill.scope.rawValue) | root=\(skill.rootURL.path)"
+        }.joined(separator: "\n")
+        let output = """
+        SKILLS: \(skills.count)
+        RESULTS:
+        \(lines)
+        """
+        logger?("completed tool: list_skills skills=\(skills.count)")
+        emitToolEvent(toolName: "list_skills", phase: .completed, detail: "skills=\(skills.count)", outputBytes: lines.utf8.count, outputText: output)
+        return output
+    }
+
+    func readSkill(name: String, includePaths: [String]) -> String {
+        logger?("calling tool: read_skill name=\(name) includePaths=\(includePaths.count)")
+        emitToolEvent(toolName: "read_skill", phase: .started, detail: "name=\(name)")
+        do {
+            let result = try OmuxAgentSkillCatalog.readSkill(
+                named: name,
+                includePaths: includePaths,
+                workingDirectoryURL: rootURL,
+                fileManager: fileManager
+            )
+            var lines = [
+                "NAME: \(result.skill.name)",
+                "DESCRIPTION: \(result.skill.description)",
+                "SCOPE: \(result.skill.scope.rawValue)",
+                "ROOT: \(result.skill.rootURL.path)",
+                "SKILL_MD:",
+                result.skill.body,
+            ]
+            if result.files.isEmpty == false {
+                lines.append("INCLUDED_FILES:")
+                for file in result.files {
+                    lines.append("FILE: \(file.relativePath)")
+                    lines.append(file.contents)
+                }
+            }
+            let output = lines.joined(separator: "\n")
+            logger?("completed tool: read_skill name=\(name) files=\(result.files.count)")
+            emitToolEvent(toolName: "read_skill", phase: .completed, detail: "name=\(name) files=\(result.files.count)", outputBytes: output.utf8.count, outputText: output)
+            return output
+        } catch {
+            let message = "ERROR: \(error.localizedDescription)"
+            logger?("tool failed: read_skill error=\(message)")
+            emitToolEvent(toolName: "read_skill", phase: .failed, detail: error.localizedDescription)
+            return message
+        }
+    }
+
     private func validatedFileURL(path: String) -> (url: URL?, error: String?) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
@@ -766,7 +1028,7 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         self.historyFetcher = historyFetcher
     }
 
-    static let defaultSystemInstruction = """
+    static let previousDefaultSystemInstruction = """
     You are a concise helpful local assistant.
     Prefer short, practical plain-text answers.
     Treat host context as metadata, not as a task list.
@@ -786,10 +1048,39 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     Cite file paths when you rely on tool output.
     """
 
+    static let defaultSystemInstruction = """
+    Role:
+    Quick local OpenMUX assistant for small tasks and lightweight automation.
+
+    Response style:
+    Be concise, practical, and plain text.
+
+    Tool discipline:
+    Use tools only when needed.
+    Prefer the cheapest relevant tool first.
+
+    Host and path safety:
+    Host context is metadata only.
+    Never derive filesystem paths from OpenMUX IDs.
+    Do not read the OpenMUX config file unless the user explicitly asks about OpenMUX configuration or that file.
+
+    Retrieval order:
+    Recent terminal or session questions -> read_terminal_history
+    What exists here -> list_directory
+    Where is this implemented -> grep_files
+    File-content questions -> read_file
+    OpenMUX control -> run_omux_cli
+    Reusable workflow guidance -> skills tools
+
+    If required context is unavailable, say so plainly instead of guessing.
+    Cite file paths when tool output informs the answer.
+    """
+
     func generate(
         prompt: String,
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
@@ -807,7 +1098,7 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
                 historyFetcher: historyFetcher,
                 onVerbose: onVerbose
             )
-            let tools = Self.makeTools(access: access)
+            let tools = Self.makeTools(access: access, configuration: agentConfiguration)
 
             let toolNames = tools.map(\.name).joined(separator: ", ")
             onVerbose?("registered tools: \(toolNames)")
@@ -861,6 +1152,25 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         #endif
     }
 
+    static func effectiveSystemInstruction(_ systemInstruction: String?) -> String {
+        (systemInstruction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? systemInstruction!
+            : defaultSystemInstruction
+    }
+
+    static func defaultPromptAnalysis(
+        tokenCounter: ((String) -> Int?)? = nil
+    ) -> OmuxAgentDefaultPromptAnalysis {
+        let currentLength = defaultSystemInstruction.utf8.count
+        let previousLength = previousDefaultSystemInstruction.utf8.count
+        return OmuxAgentDefaultPromptAnalysis(
+            currentLength: currentLength,
+            previousLength: previousLength,
+            currentTokenCount: tokenCounter?(defaultSystemInstruction),
+            previousTokenCount: tokenCounter?(previousDefaultSystemInstruction)
+        )
+    }
+
     #if canImport(FoundationModels)
     @available(macOS 26.0, *)
     static func requireAvailableModel(
@@ -873,12 +1183,6 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
             throw OmuxAgentError.unavailable
         }
         return model
-    }
-
-    static func effectiveSystemInstruction(_ systemInstruction: String?) -> String {
-        (systemInstruction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? systemInstruction!
-            : defaultSystemInstruction
     }
 
     static func makeWorkspaceAccess(
@@ -906,14 +1210,33 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     }
 
     @available(macOS 26.0, *)
-    static func makeTools(access: OmuxAgentWorkspaceAccess) -> [any Tool] {
-        [
-            OmuxReadTerminalHistoryTool(access: access),
-            OmuxListDirectoryTool(access: access),
-            OmuxRunCLICommandTool(access: access),
-            OmuxReadFileTool(access: access),
-            OmuxGrepTool(access: access),
-        ]
+    static func makeTools(
+        access: OmuxAgentWorkspaceAccess,
+        configuration: OmuxConfigAgent
+    ) -> [any Tool] {
+        var tools: [any Tool] = []
+        if configuration.tools.readTerminalHistory {
+            tools.append(OmuxReadTerminalHistoryTool(access: access))
+        }
+        if configuration.tools.listDirectory {
+            tools.append(OmuxListDirectoryTool(access: access))
+        }
+        if configuration.tools.runOmuxCLI {
+            tools.append(OmuxRunCLICommandTool(access: access))
+        }
+        if configuration.tools.readFile {
+            tools.append(OmuxReadFileTool(access: access))
+        }
+        if configuration.tools.grepFiles {
+            tools.append(OmuxGrepTool(access: access))
+        }
+        if configuration.skillsEnabled && configuration.tools.listSkills {
+            tools.append(OmuxListSkillsTool(access: access))
+        }
+        if configuration.skillsEnabled && configuration.tools.readSkill {
+            tools.append(OmuxReadSkillTool(access: access))
+        }
+        return tools
     }
     #endif
 }
@@ -933,6 +1256,7 @@ struct OmuxSystemAgentChatSessionFactory: OmuxAgentChatSessionFactorying {
     func makeSession(
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
@@ -951,7 +1275,7 @@ struct OmuxSystemAgentChatSessionFactory: OmuxAgentChatSessionFactorying {
                 onVerbose: onVerbose,
                 onToolEvent: onToolEvent
             )
-            let tools = OmuxSystemAgentGenerator.makeTools(access: access)
+            let tools = OmuxSystemAgentGenerator.makeTools(access: access, configuration: agentConfiguration)
             onVerbose?("registered tools: \(tools.map(\.name).joined(separator: ", "))")
             return AnyOmuxAgentChatSession(OmuxFoundationModelChatSession(
                 model: model,
@@ -1051,6 +1375,31 @@ private final class OmuxFoundationModelChatSession: @unchecked Sendable, OmuxAge
         let response = try await compactSession.respond(
             to: """
             Summarize this OpenMUX agent session transcript for continuation after context compaction:
+
+            \(transcript)
+            """
+        )
+        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func summarizeForHandoff(transcript: String) async throws -> String {
+        let handoffSession = LanguageModelSession(model: model) {
+            """
+            You write compact markdown continuation briefs for a local CLI agent session.
+            Produce exactly these sections:
+            # Title
+            ## Current Goal
+            ## Key Facts Learned
+            ## Files, Paths, and Commands
+            ## Tool Activity Summary
+            ## Open Issues or Questions
+            ## Suggested Next Prompt
+            Keep it concise, factual, and continuation-oriented.
+            """
+        }
+        let response = try await handoffSession.respond(
+            to: """
+            Write a continuation handoff for this OpenMUX agent session transcript:
 
             \(transcript)
             """
@@ -1222,6 +1571,44 @@ struct OmuxGrepTool: Tool {
                 maxResults: arguments.maxResults
             )
         )
+    }
+}
+
+@available(macOS 26.0, *)
+@Generable
+struct OmuxListSkillsArguments {}
+
+@available(macOS 26.0, *)
+struct OmuxListSkillsTool: Tool {
+    let name = "list_skills"
+    let description = "List local read-only skill bundles from the repo and user skill directories."
+
+    let access: OmuxAgentWorkspaceAccess
+
+    func call(arguments: OmuxListSkillsArguments) async throws -> String {
+        access.listSkills()
+    }
+}
+
+@available(macOS 26.0, *)
+@Generable
+struct OmuxReadSkillArguments {
+    @Guide(description: "Skill name from list_skills.")
+    let name: String
+
+    @Guide(description: "Optional relative files under the same skill root to include alongside SKILL.md.")
+    let includePaths: [String]
+}
+
+@available(macOS 26.0, *)
+struct OmuxReadSkillTool: Tool {
+    let name = "read_skill"
+    let description = "Read one local skill bundle. Returns the SKILL.md body and any explicitly requested relative files under the same skill root."
+
+    let access: OmuxAgentWorkspaceAccess
+
+    func call(arguments: OmuxReadSkillArguments) async throws -> String {
+        access.readSkill(name: arguments.name, includePaths: arguments.includePaths)
     }
 }
 #endif

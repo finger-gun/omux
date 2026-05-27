@@ -26,11 +26,13 @@ final class OmuxCLITests: XCTestCase {
             prompt: String,
             systemInstruction: String?,
             hostContext: String,
+            agentConfiguration: OmuxConfigAgent,
             workingDirectoryURL: URL,
             allowReadAnywhere: Bool,
             onVerbose: (@Sendable (String) -> Void)?,
             onPartial: @escaping (String) -> Void
         ) async throws -> String {
+            _ = agentConfiguration
             requests.append((prompt: prompt, systemInstruction: systemInstruction, hostContext: hostContext, workingDirectoryURL: workingDirectoryURL))
             for chunk in streamedChunks {
                 onPartial(chunk)
@@ -47,6 +49,21 @@ final class OmuxCLITests: XCTestCase {
         var response = "done"
         var streamedChunks: [String] = []
         var summaryResponse = "compacted summary"
+        var handoffResponse = """
+        # Title
+        ## Current Goal
+        goal
+        ## Key Facts Learned
+        fact
+        ## Files, Paths, and Commands
+        file
+        ## Tool Activity Summary
+        tool
+        ## Open Issues or Questions
+        none
+        ## Suggested Next Prompt
+        next
+        """
 
         init(toolNames: [String] = ["read_terminal_history", "list_directory"]) {
             self.toolNames = toolNames
@@ -65,6 +82,11 @@ final class OmuxCLITests: XCTestCase {
             return summaryResponse
         }
 
+        func summarizeForHandoff(transcript: String) async throws -> String {
+            summaryRequests.append(transcript)
+            return handoffResponse
+        }
+
         func tokenCount(for text: String) -> Int? {
             let utf8Count = text.utf8.count
             guard utf8Count > 0 else { return 0 }
@@ -79,6 +101,7 @@ final class OmuxCLITests: XCTestCase {
         func makeSession(
             systemInstruction: String?,
             hostContext: String,
+            agentConfiguration: OmuxConfigAgent,
             workingDirectoryURL: URL,
             allowReadAnywhere: Bool,
             onVerbose: (@Sendable (String) -> Void)?,
@@ -86,6 +109,7 @@ final class OmuxCLITests: XCTestCase {
         ) throws -> AnyOmuxAgentChatSession {
             _ = onVerbose
             _ = onToolEvent
+            _ = agentConfiguration
             onMakeSession?(systemInstruction, hostContext, workingDirectoryURL, allowReadAnywhere)
             return AnyOmuxAgentChatSession(session)
         }
@@ -258,7 +282,7 @@ final class OmuxCLITests: XCTestCase {
             agentGenerator: FakeAgentGenerator(),
             agentChatSessionFactory: FakeAgentChatSessionFactory(session: FakeAgentChatSession()),
             isAgentREPLAvailable: { true },
-            runAgentREPL: { request, _, _ in
+            runAgentREPL: { request, _, _, _ in
                 replRequests.append(request)
                 return 0
             }
@@ -270,6 +294,38 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(replRequests.count, 1)
         XCTAssertTrue(replRequests[0].verbose)
         XCTAssertTrue(replRequests[0].allowReadAnywhere)
+    }
+
+    func testAgentCommandHonorsAgentEnabledConfig() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [agent]
+        enabled = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: FakeAgentGenerator()
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 1)
+        XCTAssertEqual(output, ["omux agent is disabled by [agent].enabled = false in ~/.omux/config.toml."])
     }
 
     func testAgentCommandRejectsPositionalPromptWithoutPromptFlag() {
@@ -461,6 +517,77 @@ final class OmuxCLITests: XCTestCase {
         )
 
         XCTAssertEqual(output, "ERROR: ripgrep (rg) is unavailable or search failed")
+    }
+
+    func testDefaultAgentPromptIsSmallerAndRetainsToolOrderGuidance() {
+        let analysis = OmuxSystemAgentGenerator.defaultPromptAnalysis { text in
+            max(1, text.utf8.count / 4)
+        }
+
+        XCTAssertLessThan(analysis.currentLength, analysis.previousLength)
+        XCTAssertLessThan(analysis.currentTokenCount ?? .max, analysis.previousTokenCount ?? .max)
+        let prompt = OmuxSystemAgentGenerator.defaultSystemInstruction
+        XCTAssertTrue(prompt.contains("Recent terminal or session questions -> read_terminal_history"))
+        XCTAssertTrue(prompt.contains("What exists here -> list_directory"))
+        XCTAssertTrue(prompt.contains("Where is this implemented -> grep_files"))
+        XCTAssertTrue(prompt.contains("Reusable workflow guidance -> skills tools"))
+    }
+
+    func testSkillsDiscoveryPrefersRepoSkillOverUserSkill() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let userHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: userHome.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: userHome)
+        }
+
+        try """
+        ---
+        name: demo
+        description: repo version
+        ---
+        repo body
+        """.write(to: root.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+        try """
+        ---
+        name: demo
+        description: user version
+        ---
+        user body
+        """.write(to: userHome.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+
+        setenv("HOME", userHome.path, 1)
+        defer { unsetenv("HOME") }
+
+        let skills = OmuxAgentSkillCatalog.discover(workingDirectoryURL: root)
+        let demoSkills = skills.filter { $0.name == "demo" }
+        XCTAssertEqual(demoSkills.count, 1)
+        XCTAssertEqual(demoSkills.first?.scope, .repo)
+        XCTAssertEqual(demoSkills.first?.description, "repo version")
+    }
+
+    func testReadSkillRejectsTraversalIncludePath() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try """
+        ---
+        name: demo
+        description: desc
+        ---
+        body
+        """.write(to: root.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(
+            try OmuxAgentSkillCatalog.readSkill(
+                named: "demo",
+                includePaths: ["../secret.txt"],
+                workingDirectoryURL: root
+            )
+        )
     }
 
     func testAgentWorkspaceRunOmuxCLIFormatsOutput() throws {

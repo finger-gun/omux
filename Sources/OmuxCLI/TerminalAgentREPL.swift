@@ -1,5 +1,9 @@
 import Foundation
 import Darwin
+import OmuxConfig
+import OmuxControlPlane
+import OmuxCore
+import OmuxHooks
 import OmuxTheme
 
 enum TerminalAgentREPLEvent: Equatable {
@@ -273,16 +277,30 @@ struct OmuxAgentREPLRequest {
     var systemInstruction: String?
     var verbose: Bool
     var allowReadAnywhere: Bool
+    var agentConfiguration: OmuxConfigAgent
+
+    init(
+        systemInstruction: String?,
+        verbose: Bool,
+        allowReadAnywhere: Bool,
+        agentConfiguration: OmuxConfigAgent = OmuxConfigAgent()
+    ) {
+        self.systemInstruction = systemInstruction
+        self.verbose = verbose
+        self.allowReadAnywhere = allowReadAnywhere
+        self.agentConfiguration = agentConfiguration
+    }
 }
 
 final class OmuxAgentREPLRunner: @unchecked Sendable {
-    private static let slashCommands = ["/help", "/clear", "/stats", "/tools", "/compact", "/exit"]
+    private static let slashCommands = ["/help", "/clear", "/stats", "/tools", "/compact", "/handoff", "/exit"]
     private static let slashCommandDescriptions: [String: String] = [
         "/help": "show repl help",
         "/clear": "clear visible transcript",
         "/stats": "show context and tool stats",
         "/tools": "list available tools",
         "/compact": "summarize and rebuild session",
+        "/handoff": "write a continuation brief",
         "/exit": "leave the repl"
     ]
 
@@ -372,8 +390,10 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     private let writeErrorLine: @Sendable (String) -> Void
     private let request: OmuxAgentREPLRequest
     private let hostContext: String
+    private let hostMetadata: OmuxAgentHostContext
     private let workingDirectoryURL: URL
     private let sessionFactory: AnyOmuxAgentChatSessionFactory
+    private let observationClient: OmuxAgentObservationClient
     private let driver: any TerminalAgentREPLDriver
     private let lock = NSLock()
     private let palette: RenderPalette
@@ -396,15 +416,27 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         writeErrorLine: @escaping @Sendable (String) -> Void,
         request: OmuxAgentREPLRequest,
         hostContext: String,
+        hostMetadata: OmuxAgentHostContext = OmuxAgentHostContext(
+            currentWorkingDirectory: FileManager.default.currentDirectoryPath,
+            fileReadScope: "cwd-only",
+            focusedWorkspaceID: nil,
+            focusedTabID: nil,
+            focusedPaneID: nil,
+            focusedSessionID: nil,
+            openMUXContextAvailable: false
+        ),
         workingDirectoryURL: URL,
         sessionFactory: OmuxAgentChatSessionFactorying,
+        observationClient: OmuxAgentObservationClient = OmuxAgentObservationClient(client: OmuxControlClient()),
         driver: any TerminalAgentREPLDriver = TerminalAgentREPLDefaultDriver()
     ) {
         self.writeErrorLine = writeErrorLine
         self.request = request
         self.hostContext = hostContext
+        self.hostMetadata = hostMetadata
         self.workingDirectoryURL = workingDirectoryURL
         self.sessionFactory = AnyOmuxAgentChatSessionFactory(sessionFactory)
+        self.observationClient = observationClient
         self.driver = driver
         self.palette = Self.loadRenderPalette()
     }
@@ -435,6 +467,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         let createdSession = try sessionFactory.makeSession(
             systemInstruction: effectiveSystemInstruction(),
             hostContext: hostContext,
+            agentConfiguration: request.agentConfiguration,
             workingDirectoryURL: workingDirectoryURL,
             allowReadAnywhere: request.allowReadAnywhere,
             onVerbose: verboseHandler,
@@ -510,6 +543,15 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         pendingAssistantIndex = assistantIndex
         stateLabel = "thinking"
         render()
+        publishObservation(
+            eventName: .agentPromptSubmitted,
+            hookCategory: .command,
+            hookName: "agent-prompt-submitted",
+            payload: .object([
+                "prompt": .string(promptText),
+                "source": .string("repl"),
+            ])
+        )
 
         let result: Result<String, Error> = waitForResult {
             let value = try await self.session?.send(prompt: promptText, onPartial: { [weak self] chunk in
@@ -526,6 +568,16 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             lastTurnApproxTokens = estimateTurnTokens(prompt: promptText, response: response)
             stateLabel = "ready"
             pendingAssistantIndex = nil
+            publishObservation(
+                eventName: .agentResponseCompleted,
+                hookCategory: .command,
+                hookName: "agent-response-completed",
+                payload: .object([
+                    "response": .string(response),
+                    "source": .string("repl"),
+                    "approxTokens": .integer(lastTurnApproxTokens),
+                ])
+            )
         case .failure(let error):
             replaceEntry(at: resolvedAssistantIndex, kind: .error, text: describeOmuxAgentError(error))
             stateLabel = "error"
@@ -542,9 +594,17 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     }
 
     private func runSlashCommand(_ command: String) {
+        publishObservation(
+            eventName: .agentSlashCommandInvoked,
+            hookCategory: .command,
+            hookName: "agent-slash-command-invoked",
+            payload: .object([
+                "command": .string(command),
+            ])
+        )
         switch command {
         case "/help":
-            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /compact /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Up/Down to scroll.")
+            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /compact /handoff /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Up/Down to scroll.")
         case "/clear":
             transcript.removeAll()
             addEntry(kind: .note, text: "Cleared visible transcript. Session context is still active.")
@@ -555,6 +615,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             addEntry(kind: .note, text: "Tools: \(tools)")
         case "/compact":
             compactSession()
+        case "/handoff":
+            writeHandoff()
         case "/exit":
             shouldExit = true
         default:
@@ -594,6 +656,53 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             }
         case .failure(let error):
             addEntry(kind: .error, text: "Compaction failed: \(describeOmuxAgentError(error))")
+            stateLabel = "error"
+        }
+    }
+
+    private func writeHandoff() {
+        stateLabel = "handoff"
+        render()
+        let transcriptText = transcript.map { entry in
+            "\(entryLabel(for: entry.kind)): \(entry.text)"
+        }.joined(separator: "\n\n")
+
+        let result: Result<String, Error> = waitForResult {
+            try await self.session?.summarizeForHandoff(transcript: transcriptText) ?? ""
+        }
+
+        switch result {
+        case .success(let markdown):
+            let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else {
+                addEntry(kind: .error, text: "Handoff failed: summary was empty.")
+                stateLabel = "error"
+                return
+            }
+            do {
+                let outputDirectory = workingDirectoryURL.appendingPathComponent(".omux-handoffs", isDirectory: true)
+                try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyyMMdd-HHmmss"
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                let fileURL = outputDirectory.appendingPathComponent("\(formatter.string(from: Date())).md", isDirectory: false)
+                try (trimmed + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+                addEntry(kind: .note, text: "Wrote handoff: \(fileURL.path)")
+                publishObservation(
+                    eventName: .agentHandoffWritten,
+                    hookCategory: .command,
+                    hookName: "agent-handoff-written",
+                    payload: .object([
+                        "path": .string(fileURL.path),
+                    ])
+                )
+                stateLabel = "ready"
+            } catch {
+                addEntry(kind: .error, text: "Handoff failed: \(error.localizedDescription)")
+                stateLabel = "error"
+            }
+        case .failure(let error):
+            addEntry(kind: .error, text: "Handoff failed: \(describeOmuxAgentError(error))")
             stateLabel = "error"
         }
     }
@@ -865,6 +974,27 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         Compacted prior conversation summary:
         \(compactionSummary)
         """
+    }
+
+    private func publishObservation(
+        eventName: ControlPlaneActionEventName,
+        hookCategory: HookCategory,
+        hookName: String,
+        payload: OmuxValue
+    ) {
+        observationClient.publish(
+            eventName: eventName,
+            hookCategory: hookCategory,
+            hookName: hookName,
+            context: OmuxAgentObservationContext(
+                cwd: workingDirectoryURL.path,
+                workspaceID: hostMetadata.focusedWorkspaceID.map(WorkspaceID.init(rawValue:)),
+                tabID: hostMetadata.focusedTabID.map(TabID.init(rawValue:)),
+                paneID: hostMetadata.focusedPaneID.map(PaneID.init(rawValue:)),
+                sessionID: hostMetadata.focusedSessionID.map(SessionID.init(rawValue:))
+            ),
+            payload: payload
+        )
     }
 
     private func estimateTokens(for text: String) -> Int {

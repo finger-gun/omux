@@ -4,6 +4,7 @@ import OmuxAIStatusPlugin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxHooks
 import OmuxVault
 import OmuxMarkdownPreviewPlugin
 import OmuxTheme
@@ -16,6 +17,41 @@ func describeOmuxAgentError(_ error: Error) -> String {
     return error.localizedDescription
 }
 
+struct OmuxAgentObservationContext: Sendable {
+    let cwd: String
+    let workspaceID: WorkspaceID?
+    let tabID: TabID?
+    let paneID: PaneID?
+    let sessionID: SessionID?
+}
+
+struct OmuxAgentObservationClient {
+    let client: OmuxControlClient
+
+    func publish(
+        eventName: ControlPlaneActionEventName,
+        hookCategory: HookCategory,
+        hookName: String,
+        context: OmuxAgentObservationContext,
+        payload: OmuxValue
+    ) {
+        _ = try? client.request(
+            method: .agentObserve,
+            params: ControlPlaneAgentObservation(
+                eventName: eventName.rawValue,
+                hookCategory: hookCategory.rawValue,
+                hookName: hookName,
+                cwd: context.cwd,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                paneID: context.paneID,
+                sessionID: context.sessionID,
+                payload: payload
+            ).rpcValue
+        )
+    }
+}
+
 private final class OmuxAgentCommandRunner: @unchecked Sendable {
     let generator: OmuxAgentGenerating
     let write: (String) -> Void
@@ -23,6 +59,9 @@ private final class OmuxAgentCommandRunner: @unchecked Sendable {
     let writeErrorLine: @Sendable (String) -> Void
     let request: OmuxCLICommand.AgentCommandRequest
     let hostContext: String
+    let agentConfiguration: OmuxConfigAgent
+    let observationClient: OmuxAgentObservationClient
+    let observationContext: OmuxAgentObservationContext
     let workingDirectoryURL: URL
     let semaphore = DispatchSemaphore(value: 0)
     var exitCode: Int32 = 0
@@ -34,6 +73,9 @@ private final class OmuxAgentCommandRunner: @unchecked Sendable {
         writeErrorLine: @escaping @Sendable (String) -> Void,
         request: OmuxCLICommand.AgentCommandRequest,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
+        observationClient: OmuxAgentObservationClient,
+        observationContext: OmuxAgentObservationContext,
         workingDirectoryURL: URL
     ) {
         self.generator = generator
@@ -42,6 +84,9 @@ private final class OmuxAgentCommandRunner: @unchecked Sendable {
         self.writeErrorLine = writeErrorLine
         self.request = request
         self.hostContext = hostContext
+        self.agentConfiguration = agentConfiguration
+        self.observationClient = observationClient
+        self.observationContext = observationContext
         self.workingDirectoryURL = workingDirectoryURL
     }
 
@@ -66,10 +111,21 @@ private final class OmuxAgentCommandRunner: @unchecked Sendable {
         }
 
         do {
+            observationClient.publish(
+                eventName: .agentPromptSubmitted,
+                hookCategory: .command,
+                hookName: "agent-prompt-submitted",
+                context: observationContext,
+                payload: .object([
+                    "prompt": .string(request.prompt ?? ""),
+                    "source": .string("one-shot"),
+                ])
+            )
             let final = try await generator.generate(
                 prompt: request.prompt ?? "",
                 systemInstruction: request.systemInstruction,
                 hostContext: hostContext,
+                agentConfiguration: agentConfiguration,
                 workingDirectoryURL: workingDirectoryURL,
                 allowReadAnywhere: request.allowReadAnywhere,
                 onVerbose: verboseHandler,
@@ -78,6 +134,17 @@ private final class OmuxAgentCommandRunner: @unchecked Sendable {
             if final.isEmpty == false, final.hasSuffix("\n") == false {
                 write("\n")
             }
+            observationClient.publish(
+                eventName: .agentResponseCompleted,
+                hookCategory: .command,
+                hookName: "agent-response-completed",
+                context: observationContext,
+                payload: .object([
+                    "response": .string(final),
+                    "source": .string("one-shot"),
+                    "approxTokens": .integer(max(1, Int(ceil(Double(final.utf8.count + (request.prompt ?? "").utf8.count) / 4.0)))),
+                ])
+            )
         } catch {
             if request.verbose {
                 let nsError = error as NSError
@@ -113,7 +180,7 @@ public struct OmuxCLICommand {
     private let isAgentREPLAvailable: () -> Bool
     private let environment: () -> [String: String]
     private let gitRunner: (GitProcessCommand) throws -> GitProcessResult
-    private let runAgentREPL: (OmuxAgentREPLRequest, String, URL) -> Int32
+    private let runAgentREPL: (OmuxAgentREPLRequest, String, OmuxAgentHostContext, URL) -> Int32
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
@@ -165,13 +232,14 @@ public struct OmuxCLICommand {
             isInteractiveVaultResumeChoicePickerAvailable: TerminalVaultResumeChoicePicker.isAvailable,
             selectVaultResumeChoiceInteractively: { try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1) },
             isAgentREPLAvailable: TerminalAgentREPLDefaultDriver().isAvailable,
-            runAgentREPL: { request, hostContext, workingDirectoryURL in
+            runAgentREPL: { request, hostContext, hostMetadata, workingDirectoryURL in
                 OmuxAgentREPLRunner(
                     writeErrorLine: {
                         FileHandle.standardError.write(Data(($0 + "\n").utf8))
                     },
                     request: request,
                     hostContext: hostContext,
+                    hostMetadata: hostMetadata,
                     workingDirectoryURL: workingDirectoryURL,
                     sessionFactory: OmuxSystemAgentChatSessionFactory(
                         omuxCommandRunner: Self.makeAgentCLICommandRunner(
@@ -181,7 +249,8 @@ public struct OmuxCLICommand {
                         historyFetcher: Self.makeAgentHistoryFetcher(
                             client: client
                         )
-                    )
+                    ),
+                    observationClient: OmuxAgentObservationClient(client: client)
                 ).run()
             }
         )
@@ -220,15 +289,17 @@ public struct OmuxCLICommand {
             try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1)
         },
         isAgentREPLAvailable: @escaping () -> Bool = { TerminalAgentREPLDefaultDriver().isAvailable() },
-        runAgentREPL: @escaping (OmuxAgentREPLRequest, String, URL) -> Int32 = { request, hostContext, workingDirectoryURL in
+        runAgentREPL: @escaping (OmuxAgentREPLRequest, String, OmuxAgentHostContext, URL) -> Int32 = { request, hostContext, hostMetadata, workingDirectoryURL in
             OmuxAgentREPLRunner(
                 writeErrorLine: {
                     FileHandle.standardError.write(Data(($0 + "\n").utf8))
                 },
                 request: request,
                 hostContext: hostContext,
+                hostMetadata: hostMetadata,
                 workingDirectoryURL: workingDirectoryURL,
-                sessionFactory: OmuxSystemAgentChatSessionFactory()
+                sessionFactory: OmuxSystemAgentChatSessionFactory(),
+                observationClient: OmuxAgentObservationClient(client: OmuxControlClient())
             ).run()
         }
     ) {
@@ -575,11 +646,30 @@ public struct OmuxCLICommand {
             return 1
         }
 
+        let configResult = configLoader.load()
+        if configResult.hasErrors {
+            writeLine("omux agent error: configuration is invalid. Run `omux config doctor` for details.")
+            return 1
+        }
+        let agentConfiguration = configResult.config.agent
+        guard agentConfiguration.enabled else {
+            writeLine("omux agent is disabled by [agent].enabled = false in ~/.omux/config.toml.")
+            return 1
+        }
+
         let workingDirectoryURL = currentWorkingDirectoryURL()
         let hostContext = makeAgentHostContext(
             workingDirectoryURL: workingDirectoryURL,
             allowReadAnywhere: request.allowReadAnywhere
         )
+        let observationContext = OmuxAgentObservationContext(
+            cwd: workingDirectoryURL.path,
+            workspaceID: hostContext.focusedWorkspaceID.map(WorkspaceID.init(rawValue:)),
+            tabID: hostContext.focusedTabID.map(TabID.init(rawValue:)),
+            paneID: hostContext.focusedPaneID.map(PaneID.init(rawValue:)),
+            sessionID: hostContext.focusedSessionID.map(SessionID.init(rawValue:))
+        )
+        let observationClient = OmuxAgentObservationClient(client: client)
 
         if let prompt = request.prompt {
             let runner = OmuxAgentCommandRunner(
@@ -594,6 +684,9 @@ public struct OmuxCLICommand {
                     prompt: prompt
                 ),
                 hostContext: hostContext.promptBlock,
+                agentConfiguration: agentConfiguration,
+                observationClient: observationClient,
+                observationContext: observationContext,
                 workingDirectoryURL: workingDirectoryURL
             )
             runner.start()
@@ -610,9 +703,11 @@ public struct OmuxCLICommand {
             OmuxAgentREPLRequest(
                 systemInstruction: request.systemInstruction,
                 verbose: request.verbose,
-                allowReadAnywhere: request.allowReadAnywhere
+                allowReadAnywhere: request.allowReadAnywhere,
+                agentConfiguration: agentConfiguration
             ),
             hostContext.promptBlock,
+            hostContext,
             workingDirectoryURL
         )
     }

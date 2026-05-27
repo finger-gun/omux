@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import OmuxCLI
+@testable import OmuxConfig
 
 final class TerminalAgentREPLTests: XCTestCase {
     func testSlashCommandsAreHostHandled() {
@@ -225,14 +226,79 @@ final class TerminalAgentREPLTests: XCTestCase {
         )
 
         XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("/handoff"))
         XCTAssertTrue(driver.renderedText.contains("/compact"))
-        XCTAssertTrue(driver.renderedText.contains("/exit"))
-        XCTAssertFalse(driver.renderedText.contains("/clear"))
+        XCTAssertFalse(driver.renderedText.contains("/help"))
+    }
+
+    func testHandoffWritesMarkdownFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let session = FakeSession()
+        session.response = "answer"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("hello\n/handoff\n/exit\n"))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: \(root.path)",
+            workingDirectoryURL: root,
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        let handoffDirectory = root.appendingPathComponent(".omux-handoffs", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(at: handoffDirectory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.count, 1)
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
+        XCTAssertTrue(contents.contains("# Title"))
+        XCTAssertTrue(contents.contains("## Suggested Next Prompt"))
+        XCTAssertTrue(driver.renderedText.contains("Wrote handoff:"))
+    }
+
+    func testToolsCommandReflectsConfigFilteredTools() {
+        let session = FakeSession()
+        session.toolNames = ["list_directory", "read_file"]
+        let driver = FakeDriver(events: .text("/tools\n/exit\n"))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(
+                systemInstruction: nil,
+                verbose: false,
+                allowReadAnywhere: false,
+                agentConfiguration: OmuxConfigAgent(
+                    enabled: true,
+                    skillsEnabled: false,
+                    tools: .init(
+                        readTerminalHistory: false,
+                        listDirectory: true,
+                        runOmuxCLI: false,
+                        readFile: true,
+                        grepFiles: false,
+                        listSkills: true,
+                        readSkill: true
+                    )
+                )
+            ),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: FakeFactory(session: session),
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("list_directory"))
+        XCTAssertTrue(driver.renderedText.contains("read_file"))
+        XCTAssertFalse(driver.renderedText.contains("list_skills"))
+        XCTAssertFalse(driver.renderedText.contains("read_terminal_history"))
     }
 }
 
 private final class FakeSession: OmuxAgentChatSessioning {
-    let toolNames = ["read_file", "grep_files"]
+    var toolNames = ["read_file", "grep_files"]
     let contextWindowSize: Int? = 4096
     var sentPrompts: [String] = []
     var summaryRequests: [String] = []
@@ -254,6 +320,25 @@ private final class FakeSession: OmuxAgentChatSessioning {
         return "short summary"
     }
 
+    func summarizeForHandoff(transcript: String) async throws -> String {
+        summaryRequests.append(transcript)
+        return """
+        # Title
+        ## Current Goal
+        continue
+        ## Key Facts Learned
+        fact
+        ## Files, Paths, and Commands
+        path
+        ## Tool Activity Summary
+        tool
+        ## Open Issues or Questions
+        none
+        ## Suggested Next Prompt
+        next
+        """
+    }
+
     func tokenCount(for text: String) -> Int? {
         max(1, text.utf8.count / 4)
     }
@@ -270,6 +355,7 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
     func makeSession(
         systemInstruction: String?,
         hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
         workingDirectoryURL: URL,
         allowReadAnywhere: Bool,
         onVerbose: (@Sendable (String) -> Void)?,
@@ -277,6 +363,7 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
     ) throws -> AnyOmuxAgentChatSession {
         _ = systemInstruction
         _ = hostContext
+        _ = agentConfiguration
         _ = workingDirectoryURL
         _ = allowReadAnywhere
         _ = onVerbose

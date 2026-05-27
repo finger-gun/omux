@@ -276,6 +276,44 @@ Notes:
 2. OpenMUX does not hardcode Swedish, German, US, or other layout-specific Option character maps; text comes from AppKit for the active keyboard layout.
 3. For manual verification of international layouts and IME workflows, see the contributor guidance in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
+## Agent settings
+
+`omux agent` is intentionally small: a local assistant for quick automation, repo inspection, and simple OpenMUX control. The `[agent]` table controls whether the command is enabled at all and which read-only model tools are registered.
+
+```toml
+[agent]
+enabled = true
+skills_enabled = true
+
+[agent.tools]
+read_terminal_history = true
+list_directory = true
+run_omux_cli = true
+read_file = true
+grep_files = true
+list_skills = true
+read_skill = true
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | boolean | Enables or disables `omux agent` entirely. When `false`, the command exits with a clear CLI message. Defaults to `true`. |
+| `skills_enabled` | boolean | Enables repo-local and user-local read-only skill discovery under `.agents/skills/` and `~/.agents/skills/`. When `false`, both skill tools are suppressed even if their individual toggles are `true`. Defaults to `true`. |
+
+Per-tool toggles live under `[agent.tools]`:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `read_terminal_history` | boolean | Registers the tool for bounded recent terminal/session questions. |
+| `list_directory` | boolean | Registers the directory listing tool. |
+| `run_omux_cli` | boolean | Registers the non-interactive OpenMUX control tool. |
+| `read_file` | boolean | Registers the bounded local file reader. |
+| `grep_files` | boolean | Registers the ripgrep-backed code/content search tool. |
+| `list_skills` | boolean | Registers the skill discovery tool when `skills_enabled = true`. |
+| `read_skill` | boolean | Registers the skill reader tool when `skills_enabled = true`. |
+
+Repo-local skills live under `.agents/skills/*/SKILL.md` relative to the current working directory. User-local skills live under `~/.agents/skills/*/SKILL.md`. Repo-local names shadow user-local names when both exist.
+
 ## Agent Sessions settings
 
 Agent Sessions indexes local coding-agent history so OpenMUX can search, resume, and show activity for sessions in the sidebar. See [Agent Sessions](./agent-sessions.md) for the user workflow and architecture diagrams.

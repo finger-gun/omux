@@ -386,6 +386,50 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigAgent: Equatable, Sendable {
+    public struct Tools: Equatable, Sendable {
+        public let readTerminalHistory: Bool
+        public let listDirectory: Bool
+        public let runOmuxCLI: Bool
+        public let readFile: Bool
+        public let grepFiles: Bool
+        public let listSkills: Bool
+        public let readSkill: Bool
+
+        public init(
+            readTerminalHistory: Bool = true,
+            listDirectory: Bool = true,
+            runOmuxCLI: Bool = true,
+            readFile: Bool = true,
+            grepFiles: Bool = true,
+            listSkills: Bool = true,
+            readSkill: Bool = true
+        ) {
+            self.readTerminalHistory = readTerminalHistory
+            self.listDirectory = listDirectory
+            self.runOmuxCLI = runOmuxCLI
+            self.readFile = readFile
+            self.grepFiles = grepFiles
+            self.listSkills = listSkills
+            self.readSkill = readSkill
+        }
+    }
+
+    public let enabled: Bool
+    public let skillsEnabled: Bool
+    public let tools: Tools
+
+    public init(
+        enabled: Bool = true,
+        skillsEnabled: Bool = true,
+        tools: Tools = Tools()
+    ) {
+        self.enabled = enabled
+        self.skillsEnabled = skillsEnabled
+        self.tools = tools
+    }
+}
+
 public struct OmuxConfigAgentSessions: Equatable, Sendable {
     public struct Agent: Equatable, Sendable {
         public let enabled: Bool?
@@ -461,6 +505,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
+    public let agent: OmuxConfigAgent
     public let agentSessions: OmuxConfigAgentSessions
     public let plugins: OmuxConfigPlugins
     public let registries: OmuxConfigRegistries
@@ -475,6 +520,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
+        agent: OmuxConfigAgent = OmuxConfigAgent(),
         agentSessions: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
@@ -488,6 +534,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
+        self.agent = agent
         self.agentSessions = agentSessions
         self.plugins = plugins
         self.registries = registries
@@ -503,6 +550,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
+        agent: OmuxConfigAgent(),
         agentSessions: OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
@@ -637,6 +685,19 @@ public enum OmuxConfigTemplate {
         # terminal_row_1 = "title"
         # terminal_row_2 = "git-branch"
         # terminal_row_3 = "abbreviated-path"
+
+        [agent]
+        enabled = true
+        skills_enabled = true
+
+        [agent.tools]
+        read_terminal_history = true
+        list_directory = true
+        run_omux_cli = true
+        read_file = true
+        grep_files = true
+        list_skills = true
+        read_skill = true
 
         [agent-sessions]
         enabled = true
@@ -1029,6 +1090,8 @@ public struct OmuxConfigLoader {
             "ui.panes",
             "ui.icons",
             "ui.sidebar",
+            "agent",
+            "agent.tools",
             "agent-sessions",
             "plugins.markdown-preview",
             "plugins.ai-status",
@@ -1121,6 +1184,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agent: config.agent,
                 agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
@@ -1136,6 +1200,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agent: config.agent,
                 agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
@@ -1572,6 +1637,115 @@ public struct OmuxConfigLoader {
                 sidebarTerminalRow2 = value
             case "terminal_row_3":
                 sidebarTerminalRow3 = value
+            default:
+                break
+            }
+        }
+
+        let agentAllowedKeys: Set<String> = ["enabled", "skills_enabled"]
+        var agentEnabled = config.agent.enabled
+        var agentSkillsEnabled = config.agent.skillsEnabled
+        for entry in document.entries(in: "agent") {
+            guard agentAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [agent] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentEnabled = value
+            case "skills_enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.skills_enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentSkillsEnabled = value
+            default:
+                break
+            }
+        }
+
+        let agentToolsAllowedKeys: Set<String> = [
+            "read_terminal_history",
+            "list_directory",
+            "run_omux_cli",
+            "read_file",
+            "grep_files",
+            "list_skills",
+            "read_skill",
+        ]
+        var agentReadTerminalHistory = config.agent.tools.readTerminalHistory
+        var agentListDirectory = config.agent.tools.listDirectory
+        var agentRunOmuxCLI = config.agent.tools.runOmuxCLI
+        var agentReadFile = config.agent.tools.readFile
+        var agentGrepFiles = config.agent.tools.grepFiles
+        var agentListSkills = config.agent.tools.listSkills
+        var agentReadSkill = config.agent.tools.readSkill
+        for entry in document.entries(in: "agent.tools") {
+            guard agentToolsAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [agent.tools] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard let value = entry.value.boolValue else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "agent.tools.\(entry.key) must be a boolean.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "read_terminal_history":
+                agentReadTerminalHistory = value
+            case "list_directory":
+                agentListDirectory = value
+            case "run_omux_cli":
+                agentRunOmuxCLI = value
+            case "read_file":
+                agentReadFile = value
+            case "grep_files":
+                agentGrepFiles = value
+            case "list_skills":
+                agentListSkills = value
+            case "read_skill":
+                agentReadSkill = value
             default:
                 break
             }
@@ -2074,6 +2248,19 @@ public struct OmuxConfigLoader {
                         row2: sidebarTerminalRow2,
                         row3: sidebarTerminalRow3
                     )
+                )
+            ),
+            agent: OmuxConfigAgent(
+                enabled: agentEnabled,
+                skillsEnabled: agentSkillsEnabled,
+                tools: OmuxConfigAgent.Tools(
+                    readTerminalHistory: agentReadTerminalHistory,
+                    listDirectory: agentListDirectory,
+                    runOmuxCLI: agentRunOmuxCLI,
+                    readFile: agentReadFile,
+                    grepFiles: agentGrepFiles,
+                    listSkills: agentListSkills,
+                    readSkill: agentReadSkill
                 )
             ),
             agentSessions: OmuxConfigAgentSessions(

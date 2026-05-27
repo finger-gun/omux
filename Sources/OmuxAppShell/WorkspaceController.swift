@@ -3663,6 +3663,42 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    func publishAgentObservation(_ observation: ControlPlaneAgentObservation) {
+        guard let category = HookCategory(rawValue: observation.hookCategory) else {
+            return
+        }
+
+        let payload: OmuxValue = .object(
+            ["cwd": .string(observation.cwd)]
+                .merging(observation.payload.objectValue ?? [:]) { _, new in new }
+        )
+
+        do {
+            try publication.emitHook(
+                category: category,
+                name: observation.hookName,
+                workspaceID: observation.workspaceID,
+                tabID: observation.tabID,
+                paneID: observation.paneID,
+                sessionID: observation.sessionID,
+                payload: payload
+            )
+        } catch {
+            fputs("warning: failed to emit \(observation.hookName) hook: \(error)\n", stderr)
+        }
+
+        publication.emitControlPlaneEvent(
+            ControlPlaneEvent(
+                name: observation.eventName,
+                workspaceID: observation.workspaceID,
+                tabID: observation.tabID,
+                paneID: observation.paneID,
+                sessionID: observation.sessionID,
+                payload: payload
+            )
+        )
+    }
+
     func publishControlPlaneEvent(_ event: ControlPlaneEvent) {
         publication.emitControlPlaneEvent(event)
     }

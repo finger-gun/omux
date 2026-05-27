@@ -239,6 +239,77 @@ public struct ControlPlaneActionResult: Equatable, Sendable {
     }
 }
 
+public struct ControlPlaneAgentObservation: Equatable, Sendable {
+    public let eventName: String
+    public let hookCategory: String
+    public let hookName: String
+    public let cwd: String
+    public let workspaceID: WorkspaceID?
+    public let tabID: TabID?
+    public let paneID: PaneID?
+    public let sessionID: SessionID?
+    public let payload: OmuxValue
+
+    public init(
+        eventName: String,
+        hookCategory: String,
+        hookName: String,
+        cwd: String,
+        workspaceID: WorkspaceID? = nil,
+        tabID: TabID? = nil,
+        paneID: PaneID? = nil,
+        sessionID: SessionID? = nil,
+        payload: OmuxValue = .object([:])
+    ) {
+        self.eventName = eventName
+        self.hookCategory = hookCategory
+        self.hookName = hookName
+        self.cwd = cwd
+        self.workspaceID = workspaceID
+        self.tabID = tabID
+        self.paneID = paneID
+        self.sessionID = sessionID
+        self.payload = payload
+    }
+
+    public init?(rpcValue: RPCValue?) {
+        guard let object = rpcValue?.objectValue,
+              let eventName = object["eventName"]?.stringValue,
+              let hookCategory = object["hookCategory"]?.stringValue,
+              let hookName = object["hookName"]?.stringValue,
+              let cwd = object["cwd"]?.stringValue
+        else {
+            return nil
+        }
+
+        self.init(
+            eventName: eventName,
+            hookCategory: hookCategory,
+            hookName: hookName,
+            cwd: cwd,
+            workspaceID: object["workspaceID"]?.stringValue.map(WorkspaceID.init(rawValue:)),
+            tabID: object["tabID"]?.stringValue.map(TabID.init(rawValue:)),
+            paneID: object["paneID"]?.stringValue.map(PaneID.init(rawValue:)),
+            sessionID: object["sessionID"]?.stringValue.map(SessionID.init(rawValue:)),
+            payload: object["payload"]?.omuxValue ?? .object([:])
+        )
+    }
+
+    public var rpcValue: RPCValue {
+        .object([
+            "eventName": .string(eventName),
+            "hookCategory": .string(hookCategory),
+            "hookName": .string(hookName),
+            "cwd": .string(cwd),
+            "workspaceID": workspaceID.map { .string($0.rawValue) } ?? .null,
+            "tabID": tabID.map { .string($0.rawValue) } ?? .null,
+            "paneID": paneID.map { .string($0.rawValue) } ?? .null,
+            "sessionID": sessionID.map { .string($0.rawValue) } ?? .null,
+            "payload": RPCValue(payload),
+        ])
+    }
+}
+
 public enum ControlPlanePaneStatusState: String, CaseIterable, Sendable {
     case working
     case indeterminate

@@ -659,6 +659,14 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 id: request.id,
                 error: JSONRPCError(code: -32600, message: "terminal.events requires a streaming client")
             )
+        case .agentObserve:
+            guard let observation = ControlPlaneAgentObservation(rpcValue: request.params) else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "invalid agent observation payload"))
+            }
+            try mainActorSyncThrowing {
+                controller.publishAgentObservation(observation)
+            }
+            return JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))
         case .getPaneAlias:
             guard let paneIDString = request.params?.objectValue?["paneID"]?.stringValue else {
                 return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 400, message: "missing paneID"))
