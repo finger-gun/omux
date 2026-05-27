@@ -747,6 +747,10 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     private func renderSlashOverlay(width: Int, styled: Bool, state: SlashOverlayState?) -> [String] {
         guard let state else { return [] }
         let bodyWidth = width - 8
+        let visibleCount = 4
+        let maxStart = max(0, state.matches.count - visibleCount)
+        let start = min(max(0, state.selectedIndex - (visibleCount - 1)), maxStart)
+        let visibleMatches = Array(state.matches[start..<min(state.matches.count, start + visibleCount)])
         var lines = [
             panelLine(
                 lead: rail(tone: .lavender, styled: styled),
@@ -755,7 +759,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
                 styled: styled
             )
         ]
-        for (index, command) in state.matches.prefix(4).enumerated() {
+        for (offset, command) in visibleMatches.enumerated() {
+            let index = start + offset
             let tone: Tone = index == state.selectedIndex ? .accent : .muted
             let description = Self.slashCommandDescriptions[command] ?? ""
             let content = description.isEmpty

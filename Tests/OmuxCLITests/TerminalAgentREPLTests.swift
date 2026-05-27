@@ -210,6 +210,25 @@ final class TerminalAgentREPLTests: XCTestCase {
         XCTAssertEqual(factory.makeCount, 2)
         XCTAssertTrue(driver.renderedText.contains("Compacted prior conversation"))
     }
+
+    func testSlashOverlayScrollsToKeepSelectionVisible() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [.character("/"), .down, .down, .down, .down, .down, .escape], size: .init(rows: 24, columns: 90))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("/compact"))
+        XCTAssertTrue(driver.renderedText.contains("/exit"))
+        XCTAssertFalse(driver.renderedText.contains("/clear"))
+    }
 }
 
 private final class FakeSession: OmuxAgentChatSessioning {
