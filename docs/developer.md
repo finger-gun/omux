@@ -33,7 +33,7 @@ make ui-test
 | Command | Use it for |
 | --- | --- |
 | `make app` | Launch the local `OpenMUXApp` build for manual testing. |
-| `make app sandbox=1` | Launch against a fresh, isolated sandbox — no real user data touched. |
+| `make app sandbox=uitest` | Launch OpenMUXApp with a fresh reproducible sandbox setup. |
 | `make dev` | Alias for launching the local app with the Ghostty resource path configured. |
 | `make build` | Build Swift packages and app targets. |
 | `make test` | Run the Swift test suite. |
@@ -92,14 +92,22 @@ openspec validate <change-id> --strict
 
 ## Sandbox mode
 
-`make app sandbox=1` launches OpenMUX against a fully isolated, throwaway environment instead of your real `~/.omux/` and `~/Library/Application Support/OpenMUX/` data.
+`make app sandbox=<name>` launches OpenMUX against a fully isolated, throwaway environment instead of your real `~/.omux/` and `~/Library/Application Support/OpenMUX/` data. The `<name>` maps to `Scripts/sandbox-<name>.sh`, which sets up `/tmp/omux-sandbox/` for that scenario.
+
+Available sandboxes:
+
+| Name | Script | Use it for |
+| --- | --- | --- |
+| `uitest` | `Scripts/sandbox-uitest.sh` | UI test suite and general manual testing. 2 workspaces × 2 tabs × 2-pane split across three stub git repos. |
+
+To add a new sandbox, create `Scripts/sandbox-<name>.sh` (follow `sandbox-uitest.sh` as a template) and run `make app sandbox=<name>`.
 
 **When to use it:**
 
 - Reproducing workspace restore bugs without touching your real session state.
 - Testing layout persistence, tab/pane structure, and scrollback before a release.
 - Iterating on `current.json` schema changes safely — a malformed fixture never silently falls back to real backups.
-- Handing a colleague a fully deterministic starting point ("clone and run `make app sandbox=1`").
+- Handing a colleague a fully deterministic starting point ("clone and run `make app sandbox=uitest`").
 - Any situation where you want a clean slate but don't want to wipe your real data.
 
 **What it does:**
@@ -113,9 +121,9 @@ openspec validate <change-id> --strict
 Your real `~/.omux/` and `~/Library/Application Support/OpenMUX/` are never read or written.
 
 ```bash
-make app sandbox=1
+make app sandbox=uitest
 # or
-make dev sandbox=1
+make dev sandbox=uitest
 ```
 
 The sandbox is always reset on each invocation. There is no persistent sandbox state between runs.
