@@ -33,6 +33,7 @@ make ui-test
 | Command | Use it for |
 | --- | --- |
 | `make app` | Launch the local `OpenMUXApp` build for manual testing. |
+| `make app sandbox=1` | Launch against a fresh, isolated sandbox — no real user data touched. |
 | `make dev` | Alias for launching the local app with the Ghostty resource path configured. |
 | `make build` | Build Swift packages and app targets. |
 | `make test` | Run the Swift test suite. |
@@ -88,6 +89,36 @@ openspec validate <change-id> --strict
 - [Hooks](./hooks.md) - hook names, payloads, and automation examples.
 - [Releasing](./releasing.md) - packaging and release flow.
 - [Manifesto](./manifest.md) - product and architecture guardrails.
+
+## Sandbox mode
+
+`make app sandbox=1` launches OpenMUX against a fully isolated, throwaway environment instead of your real `~/.omux/` and `~/Library/Application Support/OpenMUX/` data.
+
+**When to use it:**
+
+- Reproducing workspace restore bugs without touching your real session state.
+- Testing layout persistence, tab/pane structure, and scrollback before a release.
+- Iterating on `current.json` schema changes safely — a malformed fixture never silently falls back to real backups.
+- Handing a colleague a fully deterministic starting point ("clone and run `make app sandbox=1`").
+- Any situation where you want a clean slate but don't want to wipe your real data.
+
+**What it does:**
+
+1. Wipes `/tmp/omux-sandbox/` and rebuilds it from scratch every time.
+2. Creates three stub git repos at `/tmp/omux-sandbox/worktrees/{alpha,beta,gamma}/`.
+3. Writes a `config.toml` with test-friendly defaults.
+4. Writes a `current.json` fixture: 2 workspaces × 2 tabs × 2-pane horizontal splits, each pane pointing at a worktree directory.
+5. Launches `OpenMUXApp` with `OMUX_HOME=/tmp/omux-sandbox` and `OMUX_APP_SUPPORT_DIR=/tmp/omux-sandbox/AppSupport`, so config, socket, hooks, workspace state, scrollback, and backups all land in `/tmp/`.
+
+Your real `~/.omux/` and `~/Library/Application Support/OpenMUX/` are never read or written.
+
+```bash
+make app sandbox=1
+# or
+make dev sandbox=1
+```
+
+The sandbox is always reset on each invocation. There is no persistent sandbox state between runs.
 
 ## Local cleanup
 

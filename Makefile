@@ -21,6 +21,7 @@ help:
 	@printf "  make uninstall-local Remove local OpenMUX installs and user data (prompts first)\n"
 	@printf "  make dev           Launch OpenMUXApp\n"
 	@printf "  make app           Launch OpenMUXApp\n"
+	@printf "  make app sandbox=1 Launch OpenMUXApp with a fresh reproducible sandbox setup\n"
 	@printf "  make cli-help      Show omux CLI help\n"
 	@printf "  make generate-xcodeproj Regenerate OpenMUX.xcodeproj from project.yml (requires xcodegen)\n"
 	@printf "  make ui-test       Run the XCUIAutomation GUI test suite via xcodebuild\n"
@@ -73,7 +74,16 @@ uninstall-local:
 	./Scripts/uninstall-local.sh
 
 dev:
+ifeq ($(sandbox),1)
+	@echo "[sandbox] Setting up sandbox at /tmp/omux-sandbox..."
+	@./Scripts/setup-sandbox.sh
+	OMUX_HOME=/tmp/omux-sandbox \
+	OMUX_APP_SUPPORT_DIR=/tmp/omux-sandbox/AppSupport \
+	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" \
+	$(SWIFT) run OpenMUXApp
+else
 	GHOSTTY_RESOURCES_DIR="$(CURDIR)/Vendor/ghostty/zig-out/share/ghostty" $(SWIFT) run OpenMUXApp
+endif
 
 app: dev
 

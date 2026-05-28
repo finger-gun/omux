@@ -127,13 +127,21 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
     }
 
     private static func appBackupDirectory() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if let override = ProcessInfo.processInfo.environment["OMUX_APP_SUPPORT_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("WorkspaceBackups", isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenMUX", isDirectory: true)
             .appendingPathComponent("WorkspaceBackups", isDirectory: true)
     }
 
     static func appStateDirectoryURL() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if let override = ProcessInfo.processInfo.environment["OMUX_APP_SUPPORT_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("WorkspaceState", isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenMUX", isDirectory: true)
             .appendingPathComponent("WorkspaceState", isDirectory: true)
     }
@@ -144,7 +152,11 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
     }
 
     private static func appScrollbackDirectory() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if let override = ProcessInfo.processInfo.environment["OMUX_APP_SUPPORT_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("Scrollback", isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenMUX", isDirectory: true)
             .appendingPathComponent("Scrollback", isDirectory: true)
     }
