@@ -41,6 +41,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var searchAgentSessionsMenuItem: NSMenuItem?
     private weak var reindexAgentSessionsMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
+    private weak var toggleVaultSidebarMenuItem: NSMenuItem?
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
     private weak var commandPaletteCommandMenuItem: NSMenuItem?
     private weak var findInPaneMenuItem: NSMenuItem?
@@ -636,6 +637,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         windowController?.toggleSidebarVisibility()
     }
 
+    @objc private func toggleVaultSidebarFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.toggleVaultSidebarVisibility()
+    }
+
     @objc private func toggleAgentSessionsFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.toggleAgentSessionsVisibility()
@@ -1163,12 +1169,21 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let viewMenu = NSMenu(title: "View")
 
         let toggleSidebarMenuItem = NSMenuItem(
-            title: "Toggle Workspace Column",
+            title: "Toggle Left Sidebar",
             action: #selector(toggleSidebarFromMenu(_:)),
             keyEquivalent: ""
         )
         toggleSidebarMenuItem.target = self
         viewMenu.addItem(toggleSidebarMenuItem)
+
+        let toggleVaultSidebarMenuItem = NSMenuItem(
+            title: "Toggle Right Sidebar",
+            action: #selector(toggleVaultSidebarFromMenu(_:)),
+            keyEquivalent: "b"
+        )
+        toggleVaultSidebarMenuItem.keyEquivalentModifierMask = [.command, .option]
+        toggleVaultSidebarMenuItem.target = self
+        viewMenu.addItem(toggleVaultSidebarMenuItem)
 
         viewMenu.addItem(.separator())
 
@@ -1199,6 +1214,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
+        self.toggleVaultSidebarMenuItem = toggleVaultSidebarMenuItem
         self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
         self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
         self.findInPaneMenuItem = findInPaneMenuItem
@@ -1253,6 +1269,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
         reindexAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible && vaultStore != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
+        toggleVaultSidebarMenuItem?.isEnabled = hasWorkspace
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace

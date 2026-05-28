@@ -268,12 +268,16 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.toggleSidebarVisibility()
     }
 
+    func toggleVaultSidebarVisibility() {
+        rootViewController.toggleVaultSidebar()
+    }
+
     func setAgentSessionsVisibility(_ isVisible: Bool) {
         rootViewController.setVaultSidebarVisibility(isVisible)
     }
 
     func toggleAgentSessionsVisibility() {
-        rootViewController.toggleVaultSidebar()
+        rootViewController.toggleAgentSessionsPanel()
     }
 
     func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
@@ -1512,6 +1516,35 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    func toggleAgentSessionsPanel() {
+        if !isVaultSidebarVisible {
+            // Sidebar closed: open it and ensure agent sessions is expanded.
+            isVaultSidebarVisible = true
+            applyVaultSidebarVisibility()
+            if vaultSessions.isEmpty, vaultIsLoading == false {
+                reloadVaultSessions(reset: true)
+            }
+            if isAgentSessionsSectionCollapsed {
+                isAgentSessionsSectionCollapsed = false
+                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+                vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+                if let workspace = currentWorkspace { update(workspace: workspace) }
+            }
+        } else if isAgentSessionsSectionCollapsed {
+            // Sidebar open, widget collapsed: expand it.
+            isAgentSessionsSectionCollapsed = false
+            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+            vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        } else {
+            // Sidebar open, widget expanded: collapse it.
+            isAgentSessionsSectionCollapsed = true
+            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+            vaultSidebarView.splitView.setCollapsed(true, panelID: "agentSessions")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        }
+    }
+
     func setVaultSidebarVisibility(_ isVisible: Bool) {
         guard isVaultSidebarVisible != isVisible else {
             return
@@ -2227,7 +2260,7 @@ final class WorkspaceShellViewController: NSViewController {
                 return .invoked
             }
             if result.invocationTarget == .action(.agentSessionsToggle) {
-                toggleVaultSidebar()
+                toggleAgentSessionsPanel()
                 return .invoked
             }
             if result.invocationTarget == .action(.paneFind) {
