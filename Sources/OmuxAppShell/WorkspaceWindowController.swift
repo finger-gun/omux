@@ -116,17 +116,7 @@ final class TitleBarButton: NSButton {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let existing = hoverTrackingArea {
-            removeTrackingArea(existing)
-        }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        hoverTrackingArea = area
+        replaceTrackingArea(&hoverTrackingArea, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -1474,26 +1464,12 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func deleteVaultSessionPrompt(sessionID: String) {
-        let alert = NSAlert()
-        alert.messageText = "Delete Agent Session"
-        alert.informativeText = "This removes the indexed session from OpenMUX."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-
-        let performDelete = { [weak self] in
+        presentConfirmation(
+            title: "Delete Agent Session",
+            message: "This removes the indexed session from OpenMUX.",
+            actionTitle: "Delete"
+        ) { [weak self] in
             self?.deleteVaultSession(sessionID: sessionID)
-        }
-        if let window = view.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn {
-                    performDelete()
-                }
-            }
-            return
-        }
-        if alert.runModal() == .alertFirstButtonReturn {
-            performDelete()
         }
     }
 
@@ -1538,62 +1514,43 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func toggleAgentSessionsPanel() {
-        let side = sidebarSide(owning: "agentSessions") ?? "right"
-        let collapsedKey = "omux.\(side)Sidebar.agentSessionsCollapsed"
-
-        let sidebarOpen = (side == "left") ? isSidebarVisible : isVaultSidebarVisible
-        if !sidebarOpen {
-            // Sidebar closed: open it and ensure agent sessions is expanded.
-            ensureSidebarVisible(owning: "agentSessions")
-            if side == "right", vaultSessions.isEmpty, vaultIsLoading == false {
-                reloadVaultSessions(reset: true)
-            }
-            if isAgentSessionsSectionCollapsed {
-                isAgentSessionsSectionCollapsed = false
-                UserDefaults.standard.set(false, forKey: collapsedKey)
-                splitView(owning: "agentSessions")?.setCollapsed(false, panelID: "agentSessions")
-                if let workspace = currentWorkspace { update(workspace: workspace) }
-            }
-        } else if isAgentSessionsSectionCollapsed {
-            // Sidebar open, widget collapsed: expand it.
-            isAgentSessionsSectionCollapsed = false
-            UserDefaults.standard.set(false, forKey: collapsedKey)
-            splitView(owning: "agentSessions")?.setCollapsed(false, panelID: "agentSessions")
-            if let workspace = currentWorkspace { update(workspace: workspace) }
-        } else {
-            // Sidebar open, widget expanded: collapse it.
-            isAgentSessionsSectionCollapsed = true
-            UserDefaults.standard.set(true, forKey: collapsedKey)
-            splitView(owning: "agentSessions")?.setCollapsed(true, panelID: "agentSessions")
-            if let workspace = currentWorkspace { update(workspace: workspace) }
+        if isVaultSidebarVisible == false, vaultSessions.isEmpty, vaultIsLoading == false {
+            reloadVaultSessions(reset: true)
         }
+        toggleSidebarPanel(panelID: "agentSessions", isCollapsed: &isAgentSessionsSectionCollapsed)
     }
 
     func toggleWorktreesPanel() {
-        let side = sidebarSide(owning: "worktrees") ?? "right"
-        let collapsedKey = "omux.\(side)Sidebar.worktreesCollapsed"
+        toggleSidebarPanel(panelID: "worktrees", isCollapsed: &isWorktreesSectionCollapsed)
+    }
 
+    /// Opens the sidebar that owns `panelID` (if closed) and toggles the panel's collapsed state.
+    ///
+    /// - If the sidebar is closed: opens it and expands the panel if it was collapsed.
+    /// - If the sidebar is open and the panel is collapsed: expands it.
+    /// - If the sidebar is open and the panel is expanded: collapses it.
+    private func toggleSidebarPanel(panelID: String, isCollapsed: inout Bool) {
+        let side = sidebarSide(owning: panelID) ?? "right"
+        let collapsedKey = "omux.\(side)Sidebar.\(panelID)Collapsed"
         let sidebarOpen = (side == "left") ? isSidebarVisible : isVaultSidebarVisible
+
         if !sidebarOpen {
-            // Sidebar closed: open it and ensure worktrees widget is expanded.
-            ensureSidebarVisible(owning: "worktrees")
-            if isWorktreesSectionCollapsed {
-                isWorktreesSectionCollapsed = false
+            ensureSidebarVisible(owning: panelID)
+            if isCollapsed {
+                isCollapsed = false
                 UserDefaults.standard.set(false, forKey: collapsedKey)
-                splitView(owning: "worktrees")?.setCollapsed(false, panelID: "worktrees")
+                splitView(owning: panelID)?.setCollapsed(false, panelID: panelID)
                 if let workspace = currentWorkspace { update(workspace: workspace) }
             }
-        } else if isWorktreesSectionCollapsed {
-            // Sidebar open, widget collapsed: expand it.
-            isWorktreesSectionCollapsed = false
+        } else if isCollapsed {
+            isCollapsed = false
             UserDefaults.standard.set(false, forKey: collapsedKey)
-            splitView(owning: "worktrees")?.setCollapsed(false, panelID: "worktrees")
+            splitView(owning: panelID)?.setCollapsed(false, panelID: panelID)
             if let workspace = currentWorkspace { update(workspace: workspace) }
         } else {
-            // Sidebar open, widget expanded: collapse it.
-            isWorktreesSectionCollapsed = true
+            isCollapsed = true
             UserDefaults.standard.set(true, forKey: collapsedKey)
-            splitView(owning: "worktrees")?.setCollapsed(true, panelID: "worktrees")
+            splitView(owning: panelID)?.setCollapsed(true, panelID: panelID)
             if let workspace = currentWorkspace { update(workspace: workspace) }
         }
     }
@@ -1656,23 +1613,13 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func deleteWorktreePrompt(_ worktree: GitWorktree) {
-        let alert = NSAlert()
-        alert.messageText = "Remove Worktree"
-        alert.informativeText = "This will remove the worktree at \(worktree.path). The branch will not be deleted."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-
-        let performDelete = { [weak self] in
+        presentConfirmation(
+            title: "Remove Worktree",
+            message: "This will remove the worktree at \(worktree.path). The branch will not be deleted.",
+            actionTitle: "Remove"
+        ) { [weak self] in
             self?.deleteWorktree(worktree)
         }
-        if let window = view.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn { performDelete() }
-            }
-            return
-        }
-        if alert.runModal() == .alertFirstButtonReturn { performDelete() }
     }
 
     private func deleteWorktree(_ worktree: GitWorktree) {
@@ -1699,11 +1646,6 @@ final class WorkspaceShellViewController: NSViewController {
         branches: [String],
         onConfirm: @escaping (String, String?) -> Void
     ) {
-        let alert = NSAlert()
-        alert.messageText = "Create Worktree"
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-
         let defaultBranch = "worktree/\(UUID().uuidString.prefix(8).lowercased())"
 
         let branchLabel = NSTextField(labelWithString: "New branch name:")
@@ -1729,22 +1671,18 @@ final class WorkspaceShellViewController: NSViewController {
         accessory.addSubview(branchField)
         accessory.addSubview(fromLabel)
         accessory.addSubview(fromPopup)
-        alert.accessoryView = accessory
 
-        let performCreate: () -> Void = {
+        presentConfirmation(
+            title: "Create Worktree",
+            actionTitle: "Create",
+            alertStyle: .informational,
+            accessoryView: accessory
+        ) {
             let branch = branchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard branch.isEmpty == false else { return }
             let fromRef: String? = fromPopup.indexOfSelectedItem == 0 ? nil : fromPopup.titleOfSelectedItem
             onConfirm(branch, fromRef)
         }
-
-        if let window = view.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn { performCreate() }
-            }
-            return
-        }
-        if alert.runModal() == .alertFirstButtonReturn { performCreate() }
     }
 
     private func createWorktree(branch: String, fromRef: String?, repoDirectory: String) {
@@ -1798,26 +1736,23 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func toggleWorktreesCollapsed() {
-        isWorktreesSectionCollapsed.toggle()
-        let side = sidebarSide(owning: "worktrees") ?? "right"
-        UserDefaults.standard.set(isWorktreesSectionCollapsed, forKey: "omux.\(side)Sidebar.worktreesCollapsed")
-        splitView(owning: "worktrees")?.setCollapsed(isWorktreesSectionCollapsed, panelID: "worktrees")
-        if let workspace = currentWorkspace { update(workspace: workspace) }
+        togglePanelCollapsed(panelID: "worktrees", isCollapsed: &isWorktreesSectionCollapsed)
     }
 
     private func toggleAgentSessionsCollapsed() {
-        isAgentSessionsSectionCollapsed.toggle()
-        let side = sidebarSide(owning: "agentSessions") ?? "right"
-        UserDefaults.standard.set(isAgentSessionsSectionCollapsed, forKey: "omux.\(side)Sidebar.agentSessionsCollapsed")
-        splitView(owning: "agentSessions")?.setCollapsed(isAgentSessionsSectionCollapsed, panelID: "agentSessions")
-        if let workspace = currentWorkspace { update(workspace: workspace) }
+        togglePanelCollapsed(panelID: "agentSessions", isCollapsed: &isAgentSessionsSectionCollapsed)
     }
 
     private func toggleWorkspacesCollapsed() {
-        isWorkspacesSectionCollapsed.toggle()
-        let side = sidebarSide(owning: "workspaces") ?? "left"
-        UserDefaults.standard.set(isWorkspacesSectionCollapsed, forKey: "omux.\(side)Sidebar.workspacesCollapsed")
-        splitView(owning: "workspaces")?.setCollapsed(isWorkspacesSectionCollapsed, panelID: "workspaces")
+        togglePanelCollapsed(panelID: "workspaces", isCollapsed: &isWorkspacesSectionCollapsed)
+    }
+
+    /// Toggles the collapsed state of a sidebar panel and persists the new value.
+    private func togglePanelCollapsed(panelID: String, isCollapsed: inout Bool) {
+        isCollapsed.toggle()
+        let side = sidebarSide(owning: panelID) ?? "right"
+        UserDefaults.standard.set(isCollapsed, forKey: "omux.\(side)Sidebar.\(panelID)Collapsed")
+        splitView(owning: panelID)?.setCollapsed(isCollapsed, panelID: panelID)
         if let workspace = currentWorkspace { update(workspace: workspace) }
     }
 
@@ -2277,33 +2212,22 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
 
-        let alert = NSAlert()
-        alert.messageText = "Rename Workspace"
-        alert.informativeText = "Choose a new name for this workspace."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-
         let nameField = NSTextField(string: workspace.customName ?? workspace.name)
         nameField.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-        alert.accessoryView = nameField
 
-        let rename = { [weak self] in
+        presentConfirmation(
+            title: "Rename Workspace",
+            message: "Choose a new name for this workspace.",
+            actionTitle: "Rename",
+            alertStyle: .informational,
+            accessoryView: nameField
+        ) { [weak self] in
             guard let self else { return }
             do {
                 _ = try controller.renameWorkspace(workspace.id, to: nameField.stringValue)
             } catch {
                 assertionFailure("Failed to rename workspace: \(error)")
             }
-        }
-
-        if let window = view.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn {
-                    rename()
-                }
-            }
-        } else if alert.runModal() == .alertFirstButtonReturn {
-            rename()
         }
     }
 
@@ -2783,17 +2707,16 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func presentRenamePanePrompt(paneID: PaneID, currentTitle: String) {
-        let alert = NSAlert()
-        alert.messageText = "Rename Tab"
-        alert.informativeText = "Set a custom tab name. Leave empty to clear the custom name."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-
         let nameField = NSTextField(string: currentTitle)
         nameField.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-        alert.accessoryView = nameField
 
-        let rename = { [weak self] in
+        presentConfirmation(
+            title: "Rename Tab",
+            message: "Set a custom tab name. Leave empty to clear the custom name.",
+            actionTitle: "Save",
+            alertStyle: .informational,
+            accessoryView: nameField
+        ) { [weak self] in
             guard let self else { return }
             let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
@@ -2801,16 +2724,6 @@ final class WorkspaceShellViewController: NSViewController {
             } else {
                 _ = try? controller.setPaneAlias(paneID, to: trimmed)
             }
-        }
-
-        if let window = view.window {
-            alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn {
-                    rename()
-                }
-            }
-        } else if alert.runModal() == .alertFirstButtonReturn {
-            rename()
         }
     }
 
@@ -3981,14 +3894,7 @@ fileprivate final class WorkspacesSidebarWidget: NSView {
         scrollContent.spacing = 0
         scrollContent.translatesAutoresizingMaskIntoConstraints = false
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.documentView = scrollContent
+        scrollView.configureSidebarScrollView(documentView: scrollContent)
         // Allow SidebarSplitView to compress this widget vertically.
         scrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
@@ -4092,7 +3998,7 @@ fileprivate final class WorkspacesSidebarWidget: NSView {
 }
 
 @MainActor
-final class WorkspaceSidebarView: NSView {
+final class WorkspaceSidebarView: SidebarContainerView {
     fileprivate let workspacesWidget = WorkspacesSidebarWidget()
     fileprivate let splitView = SidebarSplitView()
     private let updateNoticeView = SidebarUpdateNoticeView()
@@ -4104,10 +4010,6 @@ final class WorkspaceSidebarView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        setAccessibilityRole(.group)
-        setAccessibilityElement(true)
 
         updateNoticeView.isHidden = true
         updateNoticeView.translatesAutoresizingMaskIntoConstraints = false
@@ -4157,22 +4059,17 @@ final class WorkspaceSidebarView: NSView {
         nil
     }
 
-    override var isFlipped: Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    func apply(theme: WorkspaceShellTheme) {
-        layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
+    override func applyBorderLayer(theme: WorkspaceShellTheme) {
         layer?.borderWidth = 0
         // Draw a 1px right-edge separator matching the VSCode style
-        let rightBorder = layer?.sublayers?.first(where: { $0.name == "sidebarRightBorder" }) ?? {
-            let l = CALayer()
-            l.name = "sidebarRightBorder"
-            layer?.addSublayer(l)
-            return l
-        }()
-        rightBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
-        rightBorder.frame = CGRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height)
-        rightBorder.autoresizingMask = [.layerMinXMargin, .layerHeightSizable]
+        let border = sidebarBorderLayer(named: "sidebarRightBorder")
+        border.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        border.frame = CGRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height)
+        border.autoresizingMask = [.layerMinXMargin, .layerHeightSizable]
+    }
+
+    override func apply(theme: WorkspaceShellTheme) {
+        super.apply(theme: theme)
         workspacesWidget.apply(theme: theme)
         splitView.applyTheme(theme)
         updateNoticeView.apply(theme: theme)
@@ -5435,7 +5332,7 @@ private extension Double {
 }
 
 @MainActor
-private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
+private final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelegate {
     struct WorkspaceFilterItem {
         let title: String
         let filter: WorkspaceShellViewController.VaultWorkspaceFilter
@@ -5481,10 +5378,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        setAccessibilityRole(.group)
-        setAccessibilityElement(true)
 
         refreshButton.isBordered = false
         refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Agent Sessions")
@@ -5534,14 +5427,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.documentView = stack
+        scrollView.configureSidebarScrollView(documentView: stack)
         scrollView.contentView.postsBoundsChangedNotifications = true
 
         statusLabel.font = .systemFont(ofSize: 11)
@@ -5652,30 +5538,21 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         nil
     }
 
-    // Keep the accessibility element flag in sync with visibility so that
-    // XCUITest's `exists` predicate returns `false` when the sidebar is hidden.
-    override var isHidden: Bool {
-        didSet { setAccessibilityElement(!isHidden) }
-    }
-
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
 
-    override var isFlipped: Bool { true }
+    override func applyBorderLayer(theme: WorkspaceShellTheme) {
+        // Draw a 1px left-edge separator matching the VSCode style
+        let border = sidebarBorderLayer(named: "vaultSidebarLeftBorder")
+        border.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        border.frame = CGRect(x: 0, y: 0, width: 1, height: bounds.height)
+        border.autoresizingMask = [.layerMaxXMargin, .layerHeightSizable]
+    }
 
-    func apply(theme: WorkspaceShellTheme) {
+    override func apply(theme: WorkspaceShellTheme) {
         currentTheme = theme
-        layer?.backgroundColor = theme.shell.sidebarBackground.cgColor
-        let leftBorder = layer?.sublayers?.first(where: { $0.name == "vaultSidebarLeftBorder" }) ?? {
-            let l = CALayer()
-            l.name = "vaultSidebarLeftBorder"
-            layer?.addSublayer(l)
-            return l
-        }()
-        leftBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
-        leftBorder.frame = CGRect(x: 0, y: 0, width: 1, height: bounds.height)
-        leftBorder.autoresizingMask = [.layerMaxXMargin, .layerHeightSizable]
+        super.apply(theme: theme)
         worktreesWidget.apply(theme: theme)
         splitView.applyTheme(theme)
         sectionHeader.applyTheme(theme)
@@ -6401,7 +6278,7 @@ enum RestoreBannerChoice {
 }
 
 @MainActor
-final class WorkspaceRestoreBannerView: NSView {
+final class WorkspaceRestoreBannerView: ThemedCardView {
     private let titleLabel = NSTextField(labelWithString: "Restore workspace?")
     private let messageLabel = NSTextField(labelWithString: "")
     private let cancelButton = AgentSessionModalButton(title: "Cancel", active: false)
@@ -6413,11 +6290,6 @@ final class WorkspaceRestoreBannerView: NSView {
     init(entry: RecentlyClosedWorkspaceEntry, theme: WorkspaceShellTheme) {
         self.entry = entry
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        setAccessibilityRole(.group)
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -6462,8 +6334,7 @@ final class WorkspaceRestoreBannerView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func apply(theme: WorkspaceShellTheme) {
-        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
-        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        applyCardTheme(theme)
         titleLabel.textColor = theme.shell.textPrimary
         messageLabel.textColor = theme.shell.textSecondary
         cancelButton.apply(theme: theme)
@@ -6480,7 +6351,7 @@ enum AgentSessionPathMismatchChoice {
 }
 
 @MainActor
-final class AgentSessionPathMismatchModalView: NSView {
+final class AgentSessionPathMismatchModalView: ThemedCardView {
     private let titleLabel = NSTextField(labelWithString: "Session Path Differs")
     private let messageLabel = NSTextField(labelWithString: "")
     private let resumeButton = AgentSessionModalButton(title: "Resume Here", active: true)
@@ -6494,11 +6365,6 @@ final class AgentSessionPathMismatchModalView: NSView {
         self.workingDirectory = workingDirectory
         self.connectedPaths = connectedPaths
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        setAccessibilityRole(.group)
 
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -6555,8 +6421,7 @@ final class AgentSessionPathMismatchModalView: NSView {
     }
 
     func apply(theme: WorkspaceShellTheme) {
-        layer?.backgroundColor = theme.shell.paneCardBackground.cgColor
-        layer?.borderColor = theme.shell.subduedBorder.cgColor
+        applyCardTheme(theme)
         titleLabel.textColor = theme.shell.textPrimary
         messageLabel.textColor = theme.shell.textSecondary
         resumeButton.apply(theme: theme)
@@ -6665,50 +6530,6 @@ final class FloatingModalOverlayView: NSView {
 }
 
 @MainActor
-final class FloatingPaneModalHeaderView: NSView {
-    var onMouseDownEvent: ((NSEvent) -> Void)?
-    var onMouseDraggedEvent: ((NSEvent) -> Void)?
-    var onMouseUpEvent: ((NSEvent) -> Void)?
-
-    override var isFlipped: Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {
-        onMouseDownEvent?(event)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        onMouseDraggedEvent?(event)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        onMouseUpEvent?(event)
-    }
-}
-
-@MainActor
-final class FloatingPaneModalResizeHandleView: NSView {
-    var onMouseDownEvent: ((NSEvent) -> Void)?
-    var onMouseDraggedEvent: ((NSEvent) -> Void)?
-    var onMouseUpEvent: ((NSEvent) -> Void)?
-
-    override var isFlipped: Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {
-        onMouseDownEvent?(event)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        onMouseDraggedEvent?(event)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        onMouseUpEvent?(event)
-    }
-}
-
-@MainActor
 final class FloatingPaneModalView: NSView {
     private static let minimumWidth = CGFloat(360)
     private static let minimumHeight = CGFloat(240)
@@ -6717,8 +6538,8 @@ final class FloatingPaneModalView: NSView {
     private let modalID: FloatingPaneModalID
     private let paneID: PaneID
     private let sourceStackID: PaneStackID
-    private let dragHandleView = FloatingPaneModalHeaderView()
-    private let resizeHandleView = FloatingPaneModalResizeHandleView()
+    private let dragHandleView = DraggableEventRelayView()
+    private let resizeHandleView = DraggableEventRelayView()
     private let resizeHandleGlyph = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = ChromePillButton()
@@ -8845,6 +8666,7 @@ private class ChromePillButton: NSControl {
     private var isActive = false
     private var isHovered = false
     private var currentTheme = WorkspaceShellTheme.defaultTheme
+    private var hoverTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -8939,14 +8761,7 @@ private class ChromePillButton: NSControl {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
-        guard !bounds.isEmpty else { return }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self,
-            userInfo: nil
-        ))
+        replaceTrackingArea(&hoverTrackingArea, options: [.mouseEnteredAndExited, .activeAlways])
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -9523,205 +9338,6 @@ private extension NSMenuItem {
     }
 }
 
-// MARK: - CountBadgeView
-
-/// A small circular badge that shows a number on a filled background.
-/// Background color matches the header text color; number color matches the sidebar background.
-@MainActor
-private final class CountBadgeView: NSView {
-    private let label = NSTextField(labelWithString: "")
-
-    override var isFlipped: Bool { true }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 8
-
-        label.font = .systemFont(ofSize: 9, weight: .bold)
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
-            widthAnchor.constraint(greaterThanOrEqualTo: label.widthAnchor, constant: 6),
-            heightAnchor.constraint(equalToConstant: 16),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    func render(count: Int, badgeColor: NSColor, numberColor: NSColor) {
-        label.stringValue = "\(count)"
-        layer?.backgroundColor = badgeColor.cgColor
-        label.textColor = numberColor
-    }
-}
-
-// MARK: - CollapsibleSectionHeaderView
-
-/// A reusable collapsible header row used by right-sidebar widget sections.
-/// Layout: [chevron] [TITLE]  [spacer]  [action buttons...]
-/// Clicking anywhere on the header fires `onToggle`.
-@MainActor
-private final class CollapsibleSectionHeaderView: NSView {
-    private let chevronView = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let badgeView = CountBadgeView()
-    private var actionButtons: [NSButton] = []
-    private var onToggle: (() -> Void)?
-    var onDragBegan: ((NSPoint) -> Void)?  // window coords of mouseDown
-    var onDragMoved: ((NSPoint) -> Void)?    // window coords point (x and y)
-    var onDragEnded: (() -> Void)?
-
-    private var mouseDownPoint: NSPoint = .zero
-    private var isDragging = false
-    private static let dragThreshold: CGFloat = 4
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        chevronView.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
-        chevronView.translatesAutoresizingMaskIntoConstraints = false
-        chevronView.setContentHuggingPriority(.required, for: .horizontal)
-
-        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        addSubview(chevronView)
-        addSubview(titleLabel)
-        addSubview(badgeView)
-
-        NSLayoutConstraint.activate([
-            chevronView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            chevronView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            chevronView.widthAnchor.constraint(equalToConstant: 14),
-            chevronView.heightAnchor.constraint(equalToConstant: 14),
-            titleLabel.leadingAnchor.constraint(equalTo: chevronView.trailingAnchor, constant: 4),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            badgeView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 5),
-            badgeView.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        // Let button clicks pass through immediately.
-        if actionButtons.contains(where: { $0.frame.contains(point) }) {
-            super.mouseDown(with: event)
-            return
-        }
-        mouseDownPoint = event.locationInWindow
-        isDragging = false
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if actionButtons.contains(where: { $0.frame.contains(point) }) { return }
-
-        let dy = event.locationInWindow.y - mouseDownPoint.y
-        let dx = event.locationInWindow.x - mouseDownPoint.x
-        let dist = sqrt(dx * dx + dy * dy)
-
-        if !isDragging {
-            guard dist >= Self.dragThreshold else { return }
-            isDragging = true
-            onDragBegan?(mouseDownPoint)
-        }
-        onDragMoved?(event.locationInWindow)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if isDragging {
-            isDragging = false
-            onDragEnded?()
-        } else {
-            // No drag — treat as a tap to toggle collapse.
-            let point = convert(event.locationInWindow, from: nil)
-            if !actionButtons.contains(where: { $0.frame.contains(point) }) {
-                onToggle?()
-            }
-        }
-    }
-
-    func render(
-        title: String,
-        count: Int? = nil,
-        isCollapsed: Bool,
-        actionButtons: [NSButton],
-        theme: WorkspaceShellTheme,
-        onToggle: @escaping () -> Void
-    ) {
-        self.onToggle = onToggle
-
-        titleLabel.stringValue = title
-        titleLabel.textColor = theme.shell.textMuted
-
-        let symbol = isCollapsed ? "chevron.right" : "chevron.down"
-        chevronView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        chevronView.contentTintColor = theme.shell.textMuted
-
-        if let count {
-            badgeView.isHidden = false
-            badgeView.render(
-                count: count,
-                badgeColor: theme.shell.textMuted,
-                numberColor: theme.shell.sidebarBackground
-            )
-        } else {
-            badgeView.isHidden = true
-        }
-
-        // Remove old action buttons.
-        for btn in self.actionButtons {
-            btn.removeFromSuperview()
-        }
-        self.actionButtons = actionButtons
-
-        // Add new action buttons from trailing edge inward.
-        var previousAnchor = trailingAnchor
-        for btn in actionButtons.reversed() {
-            btn.translatesAutoresizingMaskIntoConstraints = false
-            btn.isHidden = isCollapsed
-            addSubview(btn)
-            NSLayoutConstraint.activate([
-                btn.trailingAnchor.constraint(equalTo: previousAnchor),
-                btn.centerYAnchor.constraint(equalTo: centerYAnchor),
-                btn.widthAnchor.constraint(equalToConstant: 22),
-                btn.heightAnchor.constraint(equalToConstant: 22),
-            ])
-            previousAnchor = btn.leadingAnchor
-        }
-    }
-
-    func applyTheme(_ theme: WorkspaceShellTheme) {
-        chevronView.contentTintColor = theme.shell.textMuted
-        titleLabel.textColor = theme.shell.textMuted
-        for btn in actionButtons {
-            btn.contentTintColor = theme.shell.textMuted
-        }
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
-        // Let button clicks pass through — don't intercept them as a toggle.
-        let point = convert(event.locationInWindow, from: nil)
-        return hitTest(point) is NSButton == false
-    }
-}
-
 // MARK: - WorktreeRowButton
 
 /// A single row in the Git Worktrees list: branch + path + hover delete button.
@@ -9828,15 +9444,7 @@ private final class WorktreeRowButton: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let ta = trackingArea { removeTrackingArea(ta) }
-        let ta = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(ta)
-        trackingArea = ta
+        replaceTrackingArea(&trackingArea, options: [.mouseEnteredAndExited, .activeInActiveApp])
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -9916,14 +9524,7 @@ private final class GitWorktreesSidebarWidget: NSView {
         stack.spacing = 2
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.documentView = stack
+        scrollView.configureSidebarScrollView(documentView: stack)
 
         addSubview(header)
         addSubview(emptyLabel)
