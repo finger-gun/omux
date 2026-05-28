@@ -5,7 +5,7 @@ import AppKit
 /// Used as drag handles and resize handles in floating pane modals. The view itself
 /// does not interpret the events — callers provide the logic via the three callbacks.
 @MainActor
-final class DraggableEventRelayView: NSView {
+class DraggableEventRelayView: NSView {
     var onMouseDownEvent: ((NSEvent) -> Void)?
     var onMouseDraggedEvent: ((NSEvent) -> Void)?
     var onMouseUpEvent: ((NSEvent) -> Void)?
