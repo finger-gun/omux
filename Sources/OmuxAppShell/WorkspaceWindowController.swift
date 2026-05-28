@@ -411,9 +411,11 @@ final class WorkspaceShellViewController: NSViewController {
     private var worktreeBranches: [String] = []
     private var isWorktreesSectionCollapsed: Bool = UserDefaults.standard.bool(forKey: "omux.rightSidebar.worktreesCollapsed")
     private var isAgentSessionsSectionCollapsed: Bool = UserDefaults.standard.bool(forKey: "omux.rightSidebar.agentSessionsCollapsed")
+    private var isWorkspacesSectionCollapsed: Bool = UserDefaults.standard.bool(forKey: "omux.leftSidebar.workspacesCollapsed")
     private var paneMetadataRowsOverridesByPaneID: [PaneID: PaneMetadataRowsOverride] = [:]
     private let onClosePaneTab: @MainActor (PaneID) -> Void
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
+    private var sidebarDragCoordinator: SidebarDragCoordinator?
 
     private var floatingModalOverlayView: FloatingModalOverlayView {
         shellOverlayHostView.floatingModalOverlayView
@@ -595,6 +597,17 @@ final class WorkspaceShellViewController: NSViewController {
             shellOverlayHostView.bottomAnchor.constraint(equalTo: mainColumn.bottomAnchor),
         ]
         NSLayoutConstraint.activate(constraints)
+
+        // Wire cross-sidebar drag coordinator.
+        sidebarDragCoordinator = SidebarDragCoordinator(
+            leftSplit: sidebarView.splitView,
+            rightSplit: vaultSidebarView.splitView,
+            leftSidebarView: sidebarView,
+            rightSidebarView: vaultSidebarView
+        )
+        sidebarDragCoordinator?.onPanelOrderChanged = { [weak self] in
+            self?.persistSidebarPanelOrder()
+        }
 
         applySidebarVisibility()
         applyVaultSidebarVisibility()
@@ -794,6 +807,7 @@ final class WorkspaceShellViewController: NSViewController {
         let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
+            isWorkspacesCollapsed: isWorkspacesSectionCollapsed,
             theme: currentTheme,
             onSelectWorkspace: { [weak self] workspaceID in
                 _ = self?.controller.restore(workspaceID: workspaceID)
@@ -817,6 +831,9 @@ final class WorkspaceShellViewController: NSViewController {
             },
             onSelectPane: { [weak self] paneID in
                 _ = self?.controller.focus(paneID: paneID)
+            },
+            onToggleWorkspacesCollapse: { [weak self] in
+                self?.toggleWorkspacesCollapsed()
             }
         )
         let availableAgents = availableVaultAgents.union(vaultSessions.map(\.agent))
@@ -1521,56 +1538,62 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     func toggleAgentSessionsPanel() {
-        if !isVaultSidebarVisible {
+        let side = sidebarSide(owning: "agentSessions") ?? "right"
+        let collapsedKey = "omux.\(side)Sidebar.agentSessionsCollapsed"
+
+        let sidebarOpen = (side == "left") ? isSidebarVisible : isVaultSidebarVisible
+        if !sidebarOpen {
             // Sidebar closed: open it and ensure agent sessions is expanded.
-            isVaultSidebarVisible = true
-            applyVaultSidebarVisibility()
-            if vaultSessions.isEmpty, vaultIsLoading == false {
+            ensureSidebarVisible(owning: "agentSessions")
+            if side == "right", vaultSessions.isEmpty, vaultIsLoading == false {
                 reloadVaultSessions(reset: true)
             }
             if isAgentSessionsSectionCollapsed {
                 isAgentSessionsSectionCollapsed = false
-                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
-                vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+                UserDefaults.standard.set(false, forKey: collapsedKey)
+                splitView(owning: "agentSessions")?.setCollapsed(false, panelID: "agentSessions")
                 if let workspace = currentWorkspace { update(workspace: workspace) }
             }
         } else if isAgentSessionsSectionCollapsed {
             // Sidebar open, widget collapsed: expand it.
             isAgentSessionsSectionCollapsed = false
-            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
-            vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+            UserDefaults.standard.set(false, forKey: collapsedKey)
+            splitView(owning: "agentSessions")?.setCollapsed(false, panelID: "agentSessions")
             if let workspace = currentWorkspace { update(workspace: workspace) }
         } else {
             // Sidebar open, widget expanded: collapse it.
             isAgentSessionsSectionCollapsed = true
-            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.agentSessionsCollapsed")
-            vaultSidebarView.splitView.setCollapsed(true, panelID: "agentSessions")
+            UserDefaults.standard.set(true, forKey: collapsedKey)
+            splitView(owning: "agentSessions")?.setCollapsed(true, panelID: "agentSessions")
             if let workspace = currentWorkspace { update(workspace: workspace) }
         }
     }
 
     func toggleWorktreesPanel() {
-        if !isVaultSidebarVisible {
+        let side = sidebarSide(owning: "worktrees") ?? "right"
+        let collapsedKey = "omux.\(side)Sidebar.worktreesCollapsed"
+
+        let sidebarOpen = (side == "left") ? isSidebarVisible : isVaultSidebarVisible
+        if !sidebarOpen {
             // Sidebar closed: open it and ensure worktrees widget is expanded.
-            isVaultSidebarVisible = true
-            applyVaultSidebarVisibility()
+            ensureSidebarVisible(owning: "worktrees")
             if isWorktreesSectionCollapsed {
                 isWorktreesSectionCollapsed = false
-                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
-                vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+                UserDefaults.standard.set(false, forKey: collapsedKey)
+                splitView(owning: "worktrees")?.setCollapsed(false, panelID: "worktrees")
                 if let workspace = currentWorkspace { update(workspace: workspace) }
             }
         } else if isWorktreesSectionCollapsed {
             // Sidebar open, widget collapsed: expand it.
             isWorktreesSectionCollapsed = false
-            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
-            vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+            UserDefaults.standard.set(false, forKey: collapsedKey)
+            splitView(owning: "worktrees")?.setCollapsed(false, panelID: "worktrees")
             if let workspace = currentWorkspace { update(workspace: workspace) }
         } else {
             // Sidebar open, widget expanded: collapse it.
             isWorktreesSectionCollapsed = true
-            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.worktreesCollapsed")
-            vaultSidebarView.splitView.setCollapsed(true, panelID: "worktrees")
+            UserDefaults.standard.set(true, forKey: collapsedKey)
+            splitView(owning: "worktrees")?.setCollapsed(true, panelID: "worktrees")
             if let workspace = currentWorkspace { update(workspace: workspace) }
         }
     }
@@ -1742,18 +1765,67 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    /// Returns whichever split view currently owns the panel with the given ID.
+    private func splitView(owning panelID: String) -> SidebarSplitView? {
+        if sidebarView.splitView.panelIDs.contains(panelID) { return sidebarView.splitView }
+        if vaultSidebarView.splitView.panelIDs.contains(panelID) { return vaultSidebarView.splitView }
+        return nil
+    }
+
+    /// Returns "left" or "right" depending on which sidebar currently owns the panel.
+    private func sidebarSide(owning panelID: String) -> String? {
+        if sidebarView.splitView.panelIDs.contains(panelID) { return "left" }
+        if vaultSidebarView.splitView.panelIDs.contains(panelID) { return "right" }
+        return nil
+    }
+
+    /// Ensures the sidebar that owns `panelID` is visible. Returns false if the panel
+    /// cannot be found (caller should fall back to opening the default sidebar).
+    @discardableResult
+    private func ensureSidebarVisible(owning panelID: String) -> Bool {
+        guard let side = sidebarSide(owning: panelID) else { return false }
+        if side == "left" {
+            guard !isSidebarVisible else { return true }
+            isSidebarVisible = true
+            sidebarVisibilityStore.isSidebarVisible = true
+            applySidebarVisibility()
+        } else {
+            guard !isVaultSidebarVisible else { return true }
+            isVaultSidebarVisible = true
+            applyVaultSidebarVisibility()
+        }
+        return true
+    }
+
     private func toggleWorktreesCollapsed() {
         isWorktreesSectionCollapsed.toggle()
-        UserDefaults.standard.set(isWorktreesSectionCollapsed, forKey: "omux.rightSidebar.worktreesCollapsed")
-        vaultSidebarView.splitView.setCollapsed(isWorktreesSectionCollapsed, panelID: "worktrees")
+        let side = sidebarSide(owning: "worktrees") ?? "right"
+        UserDefaults.standard.set(isWorktreesSectionCollapsed, forKey: "omux.\(side)Sidebar.worktreesCollapsed")
+        splitView(owning: "worktrees")?.setCollapsed(isWorktreesSectionCollapsed, panelID: "worktrees")
         if let workspace = currentWorkspace { update(workspace: workspace) }
     }
 
     private func toggleAgentSessionsCollapsed() {
         isAgentSessionsSectionCollapsed.toggle()
-        UserDefaults.standard.set(isAgentSessionsSectionCollapsed, forKey: "omux.rightSidebar.agentSessionsCollapsed")
-        vaultSidebarView.splitView.setCollapsed(isAgentSessionsSectionCollapsed, panelID: "agentSessions")
+        let side = sidebarSide(owning: "agentSessions") ?? "right"
+        UserDefaults.standard.set(isAgentSessionsSectionCollapsed, forKey: "omux.\(side)Sidebar.agentSessionsCollapsed")
+        splitView(owning: "agentSessions")?.setCollapsed(isAgentSessionsSectionCollapsed, panelID: "agentSessions")
         if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
+    private func toggleWorkspacesCollapsed() {
+        isWorkspacesSectionCollapsed.toggle()
+        let side = sidebarSide(owning: "workspaces") ?? "left"
+        UserDefaults.standard.set(isWorkspacesSectionCollapsed, forKey: "omux.\(side)Sidebar.workspacesCollapsed")
+        splitView(owning: "workspaces")?.setCollapsed(isWorkspacesSectionCollapsed, panelID: "workspaces")
+        if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
+    private func persistSidebarPanelOrder() {
+        let leftOrder = sidebarView.splitView.panelIDs
+        let rightOrder = vaultSidebarView.splitView.panelIDs
+        UserDefaults.standard.set(leftOrder, forKey: "omux.leftSidebar.panelOrder")
+        UserDefaults.standard.set(rightOrder, forKey: "omux.rightSidebar.panelOrder")
     }
 
     private func applyVaultSidebarVisibility() {
@@ -3882,30 +3954,31 @@ private struct SidebarSectionAccessory {
     let action: () -> Void
 }
 
+// MARK: - WorkspacesSidebarWidget
+
 @MainActor
-final class WorkspaceSidebarView: NSView {
+fileprivate final class WorkspacesSidebarWidget: NSView {
+    static let collapsedHeight: CGFloat = 34   // 6 top + 22 header + 6 bottom
+
+    override var isFlipped: Bool { true }
+
+    let header = CollapsibleSectionHeaderView()
     private let workspacesSection = WorkspaceSidebarSectionView()
     private let scrollView = NSScrollView()
-    private let updateNoticeView = SidebarUpdateNoticeView()
-    private let container = NSStackView()
     private let scrollContent = NSStackView()
+
+    /// Forwarded to outer render call to get access to the section.
+    var sectionView: WorkspaceSidebarSectionView { workspacesSection }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        setAccessibilityRole(.group)
-        setAccessibilityElement(true)
 
-        container.orientation = .vertical
-        container.alignment = .leading
-        container.distribution = .fill
-        container.spacing = 0
-        container.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.orientation = .vertical
         scrollContent.alignment = .leading
         scrollContent.distribution = .fill
-        scrollContent.spacing = 10
+        scrollContent.spacing = 0
         scrollContent.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -3916,35 +3989,166 @@ final class WorkspaceSidebarView: NSView {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.documentView = scrollContent
-        scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        // Allow SidebarSplitView to compress this widget vertically.
         scrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
-        let header = workspacesSection.headerView
-        header.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(header)
-        addSubview(container)
         scrollContent.addArrangedSubview(workspacesSection)
-        container.addArrangedSubview(scrollView)
-        container.addArrangedSubview(updateNoticeView)
-        updateNoticeView.isHidden = true
+        addSubview(header)
+        addSubview(scrollView)
 
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            header.heightAnchor.constraint(equalToConstant: 22),
 
-            container.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            container.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            container.trailingAnchor.constraint(equalTo: trailingAnchor),
-            container.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-            scrollView.widthAnchor.constraint(equalTo: container.widthAnchor),
-            updateNoticeView.widthAnchor.constraint(equalTo: container.widthAnchor),
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            {
+                let c = scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+                c.priority = .defaultLow
+                return c
+            }(),
             scrollContent.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             scrollContent.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             scrollContent.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor, constant: -12),
             scrollContent.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
             workspacesSection.widthAnchor.constraint(equalTo: scrollContent.widthAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func render(
+        workspaceItems: [SidebarItem],
+        isCollapsed: Bool,
+        theme: WorkspaceShellTheme,
+        onCreateWorkspace: @escaping @MainActor () -> Void,
+        onDeleteWorkspace: @escaping @MainActor () -> Void,
+        canDeleteWorkspace: Bool,
+        onMoveWorkspace: @escaping @MainActor (WorkspaceID, Int) -> Void,
+        onToggleWorkspaceExpansion: @escaping @MainActor (WorkspaceID) -> Void,
+        onRenameWorkspace: @escaping @MainActor (WorkspaceID, String) -> Void,
+        onSelectWorkspace: @escaping @MainActor (WorkspaceID) -> Void,
+        onSelectPane: @escaping @MainActor (PaneID) -> Void,
+        onToggleCollapse: @escaping @MainActor () -> Void
+    ) {
+        let count = workspaceItems.filter { $0.kind == .workspace }.count
+        header.render(
+            title: "WORKSPACES",
+            count: count,
+            isCollapsed: isCollapsed,
+            actionButtons: {
+                let btn = NSButton()
+                btn.isBordered = false
+                btn.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Create workspace")
+                btn.target = self
+                btn.action = #selector(createWorkspacePressed)
+                btn.contentTintColor = theme.shell.textMuted
+                btn.translatesAutoresizingMaskIntoConstraints = false
+                self._onCreateWorkspace = onCreateWorkspace
+                return [btn]
+            }(),
+            theme: theme,
+            onToggle: onToggleCollapse
+        )
+
+        scrollView.isHidden = isCollapsed
+
+        workspacesSection.apply(theme: theme)
+        workspacesSection.renderButtons(
+            items: workspaceItems,
+            title: "WORKSPACES",
+            count: count,
+            emptyState: "No workspaces open",
+            theme: theme,
+            accessories: [],
+            onMoveWorkspace: onMoveWorkspace,
+            onToggleWorkspaceExpansion: onToggleWorkspaceExpansion,
+            onRenameWorkspace: onRenameWorkspace,
+            buttonHandler: { item in
+                switch item.action {
+                case .workspace(let workspaceID):
+                    onSelectWorkspace(workspaceID)
+                case .pane(let paneID):
+                    onSelectPane(paneID)
+                }
+            }
+        )
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        header.applyTheme(theme)
+        workspacesSection.apply(theme: theme)
+    }
+
+    private var _onCreateWorkspace: (() -> Void)?
+
+    @objc private func createWorkspacePressed() {
+        _onCreateWorkspace?()
+    }
+}
+
+@MainActor
+final class WorkspaceSidebarView: NSView {
+    fileprivate let workspacesWidget = WorkspacesSidebarWidget()
+    fileprivate let splitView = SidebarSplitView()
+    private let updateNoticeView = SidebarUpdateNoticeView()
+
+    /// Height constraint on updateNoticeView; set to 0 when hidden so splitView fills full height.
+    private var noticeHeightConstraint: NSLayoutConstraint?
+    /// Bottom padding constraint between updateNoticeView and sidebar bottom; active only when visible.
+    private var noticeBottomConstraint: NSLayoutConstraint?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        setAccessibilityRole(.group)
+        setAccessibilityElement(true)
+
+        updateNoticeView.isHidden = true
+        updateNoticeView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(splitView)
+        addSubview(updateNoticeView)
+
+        // Load persisted proportion for the workspaces panel (default 1.0 — only panel).
+        let workspacesProportion = CGFloat(
+            UserDefaults.standard.double(forKey: "omux.leftSidebar.workspacesProportion").nonZero ?? 1.0
+        )
+        splitView.setPanels([
+            SidebarSplitView.Panel(
+                view: workspacesWidget,
+                collapsedHeight: WorkspacesSidebarWidget.collapsedHeight,
+                isCollapsed: UserDefaults.standard.bool(forKey: "omux.leftSidebar.workspacesCollapsed"),
+                proportion: workspacesProportion,
+                defaultsKey: "omux.leftSidebar.workspacesProportion",
+                panelID: "workspaces",
+                headerView: workspacesWidget.header
+            ),
+        ])
+
+        // splitView fills from top down to the top edge of updateNoticeView.
+        // When updateNoticeView is hidden, its height collapses to 0 (noticeHeightConstraint),
+        // so splitView naturally fills the full sidebar height.
+        let noticeBottom = updateNoticeView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
+        let noticeHeight = updateNoticeView.heightAnchor.constraint(equalToConstant: 0)
+        noticeBottomConstraint = noticeBottom
+        noticeHeightConstraint = noticeHeight
+
+        NSLayoutConstraint.activate([
+            splitView.topAnchor.constraint(equalTo: topAnchor),
+            splitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            splitView.bottomAnchor.constraint(equalTo: updateNoticeView.topAnchor),
+
+            updateNoticeView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            updateNoticeView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            noticeBottom,
+            noticeHeight,
         ])
     }
 
@@ -3969,12 +4173,14 @@ final class WorkspaceSidebarView: NSView {
         rightBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         rightBorder.frame = CGRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height)
         rightBorder.autoresizingMask = [.layerMinXMargin, .layerHeightSizable]
-        workspacesSection.apply(theme: theme)
+        workspacesWidget.apply(theme: theme)
+        splitView.applyTheme(theme)
         updateNoticeView.apply(theme: theme)
     }
 
     func render(
         workspaceItems: [SidebarItem],
+        isWorkspacesCollapsed: Bool,
         theme: WorkspaceShellTheme,
         onSelectWorkspace: @escaping @MainActor (WorkspaceID) -> Void,
         onCreateWorkspace: @escaping @MainActor () -> Void,
@@ -3984,36 +4190,38 @@ final class WorkspaceSidebarView: NSView {
         onMoveWorkspace: @escaping @MainActor (WorkspaceID, Int) -> Void,
         onToggleWorkspaceExpansion: @escaping @MainActor (WorkspaceID) -> Void,
         onRenameWorkspace: @escaping @MainActor (WorkspaceID, String) -> Void,
-        onSelectPane: @escaping @MainActor (PaneID) -> Void
+        onSelectPane: @escaping @MainActor (PaneID) -> Void,
+        onToggleWorkspacesCollapse: @escaping @MainActor () -> Void
     ) {
         apply(theme: theme)
 
-        workspacesSection.renderButtons(
-            items: workspaceItems,
-            title: "WORKSPACES",
-            count: workspaceItems.filter { $0.kind == .workspace }.count,
-            emptyState: "No workspaces open",
+        splitView.setCollapsed(isWorkspacesCollapsed, panelID: "workspaces")
+        workspacesWidget.render(
+            workspaceItems: workspaceItems,
+            isCollapsed: isWorkspacesCollapsed,
             theme: theme,
-            accessories: [
-                SidebarSectionAccessory(
-                    content: .symbol(name: "plus", accessibilityLabel: "Create workspace"),
-                    isEnabled: true,
-                    action: onCreateWorkspace
-                ),
-            ],
+            onCreateWorkspace: onCreateWorkspace,
+            onDeleteWorkspace: onDeleteWorkspace,
+            canDeleteWorkspace: canDeleteWorkspace,
             onMoveWorkspace: onMoveWorkspace,
             onToggleWorkspaceExpansion: onToggleWorkspaceExpansion,
             onRenameWorkspace: onRenameWorkspace,
-            buttonHandler: { item in
-                switch item.action {
-                case .workspace(let workspaceID):
-                    onSelectWorkspace(workspaceID)
-                case .pane(let paneID):
-                    onSelectPane(paneID)
-                }
-            }
+            onSelectWorkspace: onSelectWorkspace,
+            onSelectPane: onSelectPane,
+            onToggleCollapse: onToggleWorkspacesCollapse
         )
         updateNoticeView.render(updateAvailability: updateAvailability)
+
+        // When notice is visible, remove the zero-height constraint so its intrinsic size is used
+        // and a 12pt bottom gap is applied. When hidden, collapse to zero height so splitView
+        // expands to fill the full sidebar.
+        if updateAvailability != nil {
+            noticeHeightConstraint?.isActive = false
+            noticeBottomConstraint?.constant = -12
+        } else {
+            noticeHeightConstraint?.isActive = true
+            noticeBottomConstraint?.constant = 0
+        }
     }
 
     var updateNoticeTextForTesting: String? {
@@ -4380,7 +4588,7 @@ private extension NSColor {
 /// Expanded panels share remaining space proportionally; proportions are persisted.
 /// Panels can be reordered by dragging their header row.
 @MainActor
-private final class SidebarSplitView: NSView {
+fileprivate final class SidebarSplitView: NSView {
 
     static let separatorThickness: CGFloat = 4
 
@@ -4389,7 +4597,7 @@ private final class SidebarSplitView: NSView {
         let collapsedHeight: CGFloat
         var isCollapsed: Bool
         var proportion: CGFloat
-        let defaultsKey: String
+        var defaultsKey: String
         let panelID: String
         let headerView: CollapsibleSectionHeaderView?
 
@@ -4423,9 +4631,15 @@ private final class SidebarSplitView: NSView {
         var targetInsertionIndex: Int?
         weak var ghostView: NSView?
         let ghostHeight: CGFloat
+        let dragOffset: NSPoint        // cursor offset from ghost origin at drag start
     }
     private var widgetDragState: WidgetDragState?
     private let dropZoneView = WidgetDropZoneView()
+
+    /// Coordinator callbacks — set by `SidebarDragCoordinator` to intercept cross-sidebar drag.
+    var onCoordinatorDragBegan: ((_ splitView: SidebarSplitView, _ panelIndex: Int, _ ghost: NSView, _ ghostHeight: CGFloat, _ dragOffset: NSPoint) -> Void)?
+    var onCoordinatorDragMoved: ((_ splitView: SidebarSplitView, _ windowY: CGFloat, _ windowX: CGFloat) -> Void)?
+    var onCoordinatorDragEnded: ((_ splitView: SidebarSplitView) -> Void)?
 
     override var isFlipped: Bool { true }
 
@@ -4468,11 +4682,11 @@ private final class SidebarSplitView: NSView {
         for (i, panel) in panels.enumerated() {
             guard let header = panel.headerView else { continue }
             let idx = i
-            header.onDragBegan = { [weak self] in
-                self?.beginWidgetDrag(panelIndex: idx)
+            header.onDragBegan = { [weak self] mouseDownPoint in
+                self?.beginWidgetDrag(panelIndex: idx, mouseDownPoint: mouseDownPoint)
             }
-            header.onDragMoved = { [weak self] windowY in
-                self?.updateWidgetDrag(windowY: windowY)
+            header.onDragMoved = { [weak self] windowPoint in
+                self?.updateWidgetDrag(windowY: windowPoint.y, windowX: windowPoint.x)
             }
             header.onDragEnded = { [weak self] in
                 self?.endWidgetDrag()
@@ -4483,6 +4697,11 @@ private final class SidebarSplitView: NSView {
     private func rebuildSeparators() {
         for sep in separators { sep.removeFromSuperview() }
         separators = []
+        guard panels.count > 1 else {
+            dropZoneView.removeFromSuperview()
+            addSubview(dropZoneView)
+            return
+        }
         for i in 0 ..< (panels.count - 1) {
             let sep = SidebarSeparatorView()
             let idx = i
@@ -4513,6 +4732,8 @@ private final class SidebarSplitView: NSView {
         needsLayout = true
     }
 
+    var panelIDs: [String] { panels.map(\.panelID) }
+
     // MARK: Layout
 
     override func layout() {
@@ -4526,7 +4747,22 @@ private final class SidebarSplitView: NSView {
         let separatorSpace = CGFloat(separators.count) * Self.separatorThickness
         let collapsedSpace = panels.filter(\.isCollapsed).reduce(0) { $0 + $1.collapsedHeight }
 
-        guard let dragState = widgetDragState, let insertionIdx = dragState.targetInsertionIndex else {
+        // Determine active insertion index and drop zone height from either
+        // an internal widget drag or an external (cross-sidebar) drag.
+        let activeInsertionIdx: Int?
+        let activeDropZoneHeight: CGFloat
+        if let dragState = widgetDragState, let idx = dragState.targetInsertionIndex {
+            activeInsertionIdx = idx
+            activeDropZoneHeight = dragState.ghostHeight
+        } else if let extState = externalDragState, let idx = extState.targetInsertionIndex {
+            activeInsertionIdx = idx
+            activeDropZoneHeight = extState.ghostHeight
+        } else {
+            activeInsertionIdx = nil
+            activeDropZoneHeight = 0
+        }
+
+        guard let insertionIdx = activeInsertionIdx else {
             // No active drag — normal layout, drop zone hidden.
             dropZoneView.isHidden = true
             let flexibleSpace = max(0, total - separatorSpace - collapsedSpace)
@@ -4545,7 +4781,7 @@ private final class SidebarSplitView: NSView {
 
         // Active drag: insert the drop zone into the flow at insertionIdx,
         // pushing real panels aside so the highlight occupies real space.
-        let dropZoneHeight = dragState.ghostHeight
+        let dropZoneHeight = activeDropZoneHeight
         let flexibleSpace = max(0, total - separatorSpace - collapsedSpace - dropZoneHeight)
 
         var y: CGFloat = 0
@@ -4600,29 +4836,60 @@ private final class SidebarSplitView: NSView {
 
     // MARK: Widget reorder drag
 
-    private func beginWidgetDrag(panelIndex: Int) {
+    private func beginWidgetDrag(panelIndex: Int, mouseDownPoint: NSPoint) {
         let sourceView = panels[panelIndex].headerView ?? panels[panelIndex].view
         let ghost = makeWidgetDragGhost(for: sourceView)
+        let ghostHeight = sourceView.bounds.height
+
+        // Compute the offset from the ghost's origin (in contentView coords) to the
+        // mousedown point (in window coords), so the ghost stays pinned under the
+        // exact spot the user clicked rather than recentering on the cursor.
+        var dragOffset = NSPoint.zero
+        if let ghost, let contentView = ghost.superview {
+            let mouseInContent = contentView.convert(mouseDownPoint, from: nil)
+            dragOffset = NSPoint(
+                x: mouseInContent.x - ghost.frame.origin.x,
+                y: mouseInContent.y - ghost.frame.origin.y
+            )
+        }
+
         widgetDragState = WidgetDragState(
             sourcePanelIndex: panelIndex,
             sourcePanelMinY: panels[panelIndex].view.frame.minY,
             targetInsertionIndex: nil,
             ghostView: ghost,
-            ghostHeight: sourceView.bounds.height
+            ghostHeight: ghostHeight,
+            dragOffset: dragOffset
         )
+        if let ghost {
+            onCoordinatorDragBegan?(self, panelIndex, ghost, ghostHeight, dragOffset)
+        }
         updateDropZone()
     }
 
-    private func updateWidgetDrag(windowY: CGFloat) {
+    private func updateWidgetDrag(windowY: CGFloat, windowX: CGFloat) {
+        // Always forward to the coordinator — it needs move events even after
+        // abortInternalDrag has cleared widgetDragState (i.e. during cross-sidebar drag).
+        onCoordinatorDragMoved?(self, windowY, windowX)
+
         guard var dragState = widgetDragState else { return }
         let localY = convert(NSPoint(x: 0, y: windowY), from: nil).y
         dragState.targetInsertionIndex = insertionIndex(for: localY, excluding: dragState.sourcePanelIndex)
         widgetDragState = dragState
-        updateWidgetDragGhost(dragState.ghostView, windowY: windowY)
+        updateWidgetDragGhost(dragState.ghostView, windowY: windowY, windowX: windowX, dragOffset: dragState.dragOffset)
         updateDropZone()
     }
 
+    /// Abort the internal drag without committing a reorder. Used by the coordinator
+    /// when it takes over cross-sidebar routing. The ghost is intentionally NOT removed
+    /// here — the coordinator still holds the strong reference and will remove it on drop.
+    func abortInternalDrag() {
+        widgetDragState = nil
+        needsLayout = true
+    }
+
     private func endWidgetDrag() {
+        onCoordinatorDragEnded?(self)
         defer {
             widgetDragState?.ghostView?.removeFromSuperview()
             widgetDragState = nil
@@ -4639,6 +4906,145 @@ private final class SidebarSplitView: NSView {
         rewireHeaderDragCallbacks()
         equalizeProportions()
         needsLayout = true
+    }
+
+    // MARK: Cross-sidebar drag API
+
+    /// Called by `SidebarDragCoordinator` when a drag enters this split view.
+    /// Pass `excludedPanelID` when the dragged panel still lives here (source sidebar re-entry)
+    /// so its own adjacent slots are suppressed.
+    func beginExternalDrag(ghost: NSView, panel: Panel, ghostHeight: CGFloat, excludedPanelID: String? = nil) {
+        externalDragState = ExternalDragState(
+            panel: panel,
+            ghostView: ghost,
+            ghostHeight: ghostHeight,
+            targetInsertionIndex: nil,
+            excludedPanelID: excludedPanelID
+        )
+    }
+
+    /// Updates the drop-zone position as the ghost moves (windowY is in window coordinates).
+    func updateExternalDrag(windowY: CGFloat) {
+        guard var state = externalDragState else { return }
+        let localY = convert(NSPoint(x: 0, y: windowY), from: nil).y
+        state.targetInsertionIndex = externalInsertionIndex(for: localY)
+        externalDragState = state
+        needsLayout = true
+    }
+
+    /// Commits the cross-sidebar drop. Removes the panel from the source split view
+    /// and inserts it here. Returns the migrated panel (with updated defaultsKey) or nil.
+    @discardableResult
+    func acceptExternalDrop(sidebarNamespace: String) -> Panel? {
+        defer {
+            externalDragState = nil
+            needsLayout = true
+        }
+        guard let state = externalDragState else { return nil }
+        var panel = state.panel
+        // Re-key proportion and collapsed defaults into the target sidebar namespace.
+        panel.defaultsKey = "\(sidebarNamespace).\(panel.panelID)Proportion"
+        let insertionIdx = state.targetInsertionIndex ?? panels.count
+        panels.insert(panel, at: min(insertionIdx, panels.count))
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        equalizeProportions()
+        needsLayout = true
+        return panel
+    }
+
+    /// Cancels an in-progress external drag without committing any insertion.
+    func cancelExternalDrag() {
+        externalDragState = nil
+        needsLayout = true
+    }
+
+    /// Commits the cross-sidebar drop using the real `panel` (which has a real view).
+    /// The external drag state must already be active and contain the computed insertion index.
+    func finishExternalDropWithPanel(_ panel: Panel, sidebarNamespace: String) {
+        defer {
+            externalDragState = nil
+            needsLayout = true
+        }
+        let insertionIdx = externalDragState?.targetInsertionIndex ?? panels.count
+        var newPanel = panel
+        newPanel.defaultsKey = "\(sidebarNamespace).\(panel.panelID)Proportion"
+        newPanel.view.translatesAutoresizingMaskIntoConstraints = true
+        newPanel.view.autoresizingMask = []
+        addSubview(newPanel.view)
+        // Bring drop zone to front.
+        dropZoneView.removeFromSuperview()
+        addSubview(dropZoneView)
+        panels.insert(newPanel, at: min(insertionIdx, panels.count))
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        equalizeProportions()
+        needsLayout = true
+    }
+
+    /// Removes the panel with the given panelID and returns it. Used by the coordinator
+    /// before transferring the panel to the target split view.
+    func extractPanel(panelID: String) -> Panel? {
+        guard let idx = panels.firstIndex(where: { $0.panelID == panelID }) else { return nil }
+        let panel = panels.remove(at: idx)
+        panel.view.removeFromSuperview()
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        equalizeProportions()
+        needsLayout = true
+        return panel
+    }
+
+    // MARK: External drag layout support
+
+    private struct ExternalDragState {
+        var panel: Panel
+        weak var ghostView: NSView?
+        let ghostHeight: CGFloat
+        var targetInsertionIndex: Int?
+        var excludedPanelID: String?   // when set, slots adjacent to this panel are suppressed
+    }
+    private var externalDragState: ExternalDragState?
+
+    private func externalInsertionIndex(for localY: CGFloat) -> Int? {
+        guard !panels.isEmpty else { return 0 }
+
+        // If a panel is excluded (e.g. dragging back to source sidebar where the panel
+        // still lives), suppress the slots immediately above and below it.
+        let excludedIndex: Int?
+        if let id = externalDragState?.excludedPanelID {
+            excludedIndex = panels.firstIndex(where: { $0.panelID == id })
+        } else {
+            excludedIndex = nil
+        }
+
+        func isValidSlot(_ slot: Int) -> Bool {
+            guard let ex = excludedIndex else { return true }
+            return slot != ex && slot != ex + 1
+        }
+
+        // Check slot 0: above or within the top threshold of the first panel.
+        let firstMinY = panels[0].view.frame.minY
+        if localY <= firstMinY + 34 && isValidSlot(0) { return 0 }
+
+        // Check between-panel slots.
+        for slot in 1 ..< panels.count {
+            let above = panels[slot - 1].view.frame.maxY
+            let below = panels[slot].view.frame.minY
+            let mid = (above + below) / 2
+            let upperThreshold = panels[slot - 1].view.frame.maxY - 34
+            let lowerThreshold = panels[slot].view.frame.minY + 34
+            if localY >= upperThreshold && localY <= lowerThreshold {
+                let candidate = localY <= mid ? slot - 1 : slot
+                return isValidSlot(candidate) ? candidate : nil
+            }
+        }
+
+        // Check slot after last panel.
+        let lastMaxY = panels[panels.count - 1].view.frame.maxY
+        if localY >= lastMaxY - 34 && isValidSlot(panels.count) { return panels.count }
+
+        return nil
     }
 
     private func makeWidgetDragGhost(for panelView: NSView) -> NSView? {
@@ -4667,9 +5073,11 @@ private final class SidebarSplitView: NSView {
         return ghost
     }
 
-    private func updateWidgetDragGhost(_ ghost: NSView?, windowY: CGFloat) {
-        guard let ghost else { return }
-        ghost.frame.origin.y = windowY - ghost.frame.height / 2
+    private func updateWidgetDragGhost(_ ghost: NSView?, windowY: CGFloat, windowX: CGFloat, dragOffset: NSPoint) {
+        guard let ghost, let contentView = ghost.superview else { return }
+        let local = contentView.convert(NSPoint(x: windowX, y: windowY), from: nil)
+        ghost.frame.origin.x = local.x - dragOffset.x
+        ghost.frame.origin.y = local.y - dragOffset.y
     }
 
     /// Returns the insertion index (0 = before panel 0, n = after last panel)
@@ -4737,6 +5145,203 @@ private final class SidebarSplitView: NSView {
         for panel in panels {
             UserDefaults.standard.set(Double(panel.proportion), forKey: panel.defaultsKey)
         }
+    }
+}
+
+
+// MARK: - SidebarDragCoordinator
+
+/// Coordinates cross-sidebar widget drag between the left (`leftSplit`) and right (`rightSplit`)
+/// `SidebarSplitView` instances. The coordinator intercepts drag callbacks from both split views
+/// and routes cross-boundary drags to the other split view.
+@MainActor
+private final class SidebarDragCoordinator {
+
+    private struct CrossSidebarDragState {
+        let sourceSplit: SidebarSplitView
+        let sourceNamespace: String
+        let panelID: String
+        weak var ghost: NSView?
+        let ghostHeight: CGFloat
+        let dragOffset: NSPoint
+        var crossSidebarActive: Bool = false
+        var currentTargetSplit: SidebarSplitView?
+    }
+
+    private weak var leftSplit: SidebarSplitView?
+    private weak var rightSplit: SidebarSplitView?
+    private weak var leftSidebarView: NSView?
+    private weak var rightSidebarView: NSView?
+    private var crossDragState: CrossSidebarDragState?
+
+    // Called after cross-sidebar drop to let the shell re-persist panel order.
+    var onPanelOrderChanged: (() -> Void)?
+
+    init(
+        leftSplit: SidebarSplitView,
+        rightSplit: SidebarSplitView,
+        leftSidebarView: NSView,
+        rightSidebarView: NSView
+    ) {
+        self.leftSplit = leftSplit
+        self.rightSplit = rightSplit
+        self.leftSidebarView = leftSidebarView
+        self.rightSidebarView = rightSidebarView
+        wireCallbacks()
+    }
+
+    private func wireCallbacks() {
+        guard let leftSplit, let rightSplit else { return }
+
+        leftSplit.onCoordinatorDragBegan = { [weak self] split, panelIndex, ghost, ghostHeight, dragOffset in
+            self?.handleDragBegan(split: split, panelIndex: panelIndex, ghost: ghost, ghostHeight: ghostHeight, dragOffset: dragOffset)
+        }
+        leftSplit.onCoordinatorDragMoved = { [weak self] split, windowY, windowX in
+            self?.handleDragMoved(split: split, windowY: windowY, windowX: windowX)
+        }
+        leftSplit.onCoordinatorDragEnded = { [weak self] split in
+            self?.handleDragEnded(split: split)
+        }
+
+        rightSplit.onCoordinatorDragBegan = { [weak self] split, panelIndex, ghost, ghostHeight, dragOffset in
+            self?.handleDragBegan(split: split, panelIndex: panelIndex, ghost: ghost, ghostHeight: ghostHeight, dragOffset: dragOffset)
+        }
+        rightSplit.onCoordinatorDragMoved = { [weak self] split, windowY, windowX in
+            self?.handleDragMoved(split: split, windowY: windowY, windowX: windowX)
+        }
+        rightSplit.onCoordinatorDragEnded = { [weak self] split in
+            self?.handleDragEnded(split: split)
+        }
+    }
+
+    private func handleDragBegan(split: SidebarSplitView, panelIndex: Int, ghost: NSView, ghostHeight: CGFloat, dragOffset: NSPoint) {
+        let sourceNamespace = (split === leftSplit) ? "omux.leftSidebar" : "omux.rightSidebar"
+        let panelID = split.panelIDs[panelIndex]
+        crossDragState = CrossSidebarDragState(
+            sourceSplit: split,
+            sourceNamespace: sourceNamespace,
+            panelID: panelID,
+            ghost: ghost,
+            ghostHeight: ghostHeight,
+            dragOffset: dragOffset,
+            currentTargetSplit: nil
+        )
+    }
+
+    private func handleDragMoved(split: SidebarSplitView, windowY: CGFloat, windowX: CGFloat) {
+        guard var state = crossDragState else { return }
+
+        let targetSplit = sidebarSplit(at: windowX)
+
+        if let targetSplit, targetSplit !== state.sourceSplit {
+            // Cursor is inside the opposite sidebar.
+            if !state.crossSidebarActive {
+                // First cross: abort the source's internal drag and enter cross-sidebar mode.
+                state.sourceSplit.abortInternalDrag()
+                state.crossSidebarActive = true
+            }
+            if state.currentTargetSplit !== targetSplit {
+                state.currentTargetSplit?.cancelExternalDrag()
+                targetSplit.beginExternalDrag(
+                    ghost: NSView(), // placeholder; ghost managed by coordinator
+                    panel: SidebarSplitView.Panel(
+                        view: NSView(),
+                        collapsedHeight: 34,
+                        isCollapsed: false,
+                        proportion: 0,
+                        defaultsKey: "",
+                        panelID: state.panelID
+                    ),
+                    ghostHeight: state.ghostHeight
+                )
+                state.currentTargetSplit = targetSplit
+            }
+            state.currentTargetSplit?.updateExternalDrag(windowY: windowY)
+        } else if state.crossSidebarActive {
+            if targetSplit === state.sourceSplit {
+                // Cursor moved back into source sidebar — show drop zones there.
+                if state.currentTargetSplit !== state.sourceSplit {
+                    state.currentTargetSplit?.cancelExternalDrag()
+                    state.sourceSplit.beginExternalDrag(
+                        ghost: NSView(),
+                        panel: SidebarSplitView.Panel(
+                            view: NSView(),
+                            collapsedHeight: 34,
+                            isCollapsed: false,
+                            proportion: 0,
+                            defaultsKey: "",
+                            panelID: state.panelID
+                        ),
+                        ghostHeight: state.ghostHeight,
+                        excludedPanelID: state.panelID   // panel still lives here; suppress its own slots
+                    )
+                    state.currentTargetSplit = state.sourceSplit
+                }
+                state.currentTargetSplit?.updateExternalDrag(windowY: windowY)
+            } else {
+                // Cursor is in the dead zone between sidebars — cancel any active drop zone.
+                state.currentTargetSplit?.cancelExternalDrag()
+                state.currentTargetSplit = nil
+            }
+        }
+
+        // Move the ghost to follow the cursor. Once crossSidebarActive the source split's
+        // updateWidgetDragGhost is no longer running (abortInternalDrag cleared it), so the
+        // coordinator owns ghost movement. We update here — after crossSidebarActive may have
+        // just been set — so the ghost moves on the very first crossing frame too.
+        if state.crossSidebarActive, let ghost = state.ghost, let contentView = ghost.superview {
+            let local = contentView.convert(NSPoint(x: windowX, y: windowY), from: nil)
+            ghost.frame.origin.x = local.x - state.dragOffset.x
+            ghost.frame.origin.y = local.y - state.dragOffset.y
+        }
+
+        crossDragState = state
+    }
+
+    private func handleDragEnded(split: SidebarSplitView) {
+        guard let state = crossDragState else { return }
+        crossDragState = nil
+
+        // Always clean up the ghost regardless of where the drop lands.
+        defer { state.ghost?.removeFromSuperview() }
+
+        guard state.crossSidebarActive else {
+            // Never left the source sidebar — normal same-sidebar reorder handled by the split view.
+            return
+        }
+
+        guard let targetSplit = state.currentTargetSplit else {
+            // Released in the dead zone between sidebars. Panel is still in the source,
+            // cancel any lingering external drag state and bail.
+            state.sourceSplit.cancelExternalDrag()
+            return
+        }
+
+        // Extract the real panel from the source split view (still there, abortInternalDrag
+        // only cleared widgetDragState, it didn't remove the panel).
+        guard var panel = state.sourceSplit.extractPanel(panelID: state.panelID) else {
+            targetSplit.cancelExternalDrag()
+            return
+        }
+
+        let targetNamespace = (targetSplit === leftSplit) ? "omux.leftSidebar" : "omux.rightSidebar"
+        panel.defaultsKey = "\(targetNamespace).\(panel.panelID)Proportion"
+
+        targetSplit.finishExternalDropWithPanel(panel, sidebarNamespace: targetNamespace)
+        onPanelOrderChanged?()
+    }
+
+    /// Returns the split view whose sidebar view contains `windowX`, or nil.
+    private func sidebarSplit(at windowX: CGFloat) -> SidebarSplitView? {
+        if let leftView = leftSidebarView {
+            let rect = leftView.convert(leftView.bounds, to: nil)
+            if rect.contains(NSPoint(x: windowX, y: rect.midY)) { return leftSplit }
+        }
+        if let rightView = rightSidebarView {
+            let rect = rightView.convert(rightView.bounds, to: nil)
+            if rect.contains(NSPoint(x: windowX, y: rect.midY)) { return rightSplit }
+        }
+        return nil
     }
 }
 
@@ -8970,8 +9575,8 @@ private final class CollapsibleSectionHeaderView: NSView {
     private let badgeView = CountBadgeView()
     private var actionButtons: [NSButton] = []
     private var onToggle: (() -> Void)?
-    var onDragBegan: (() -> Void)?
-    var onDragMoved: ((CGFloat) -> Void)?    // delta in window coords (y, increases upward)
+    var onDragBegan: ((NSPoint) -> Void)?  // window coords of mouseDown
+    var onDragMoved: ((NSPoint) -> Void)?    // window coords point (x and y)
     var onDragEnded: (() -> Void)?
 
     private var mouseDownPoint: NSPoint = .zero
@@ -9034,9 +9639,9 @@ private final class CollapsibleSectionHeaderView: NSView {
         if !isDragging {
             guard dist >= Self.dragThreshold else { return }
             isDragging = true
-            onDragBegan?()
+            onDragBegan?(mouseDownPoint)
         }
-        onDragMoved?(event.locationInWindow.y)
+        onDragMoved?(event.locationInWindow)
     }
 
     override func mouseUp(with event: NSEvent) {
