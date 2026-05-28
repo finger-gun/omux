@@ -54,9 +54,14 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
     }
 
     public struct Agent: Codable, Equatable, Sendable {
+        public let externalPlugins: [String: AgentExternalPlugin]
         public let enabled: Bool
         public let skillsEnabled: Bool
         public let tools: AgentTools
+    }
+
+    public struct AgentExternalPlugin: Codable, Equatable, Sendable {
+        public let enabled: Bool?
     }
 
     public struct Terminal: Codable, Equatable, Sendable {
@@ -523,6 +528,7 @@ public struct OmuxConfigEditor {
                     "listSkills": true,
                     "readSkill": true,
                 ],
+                "externalPlugins": true,
             ],
             "plugins": [
                 "markdownPreview": [
@@ -621,6 +627,15 @@ public enum OmuxConfigRenderer {
         lines.append("grep_files = \(config.agent.tools.grepFiles ? "true" : "false")")
         lines.append("list_skills = \(config.agent.tools.listSkills ? "true" : "false")")
         lines.append("read_skill = \(config.agent.tools.readSkill ? "true" : "false")")
+        for pluginName in config.agent.externalPlugins.keys.sorted() {
+            guard let setting = config.agent.externalPlugins[pluginName],
+                  let enabled = setting.enabled else {
+                continue
+            }
+            lines.append("")
+            lines.append("[agent.external.\(pluginName)]")
+            lines.append("enabled = \(enabled ? "true" : "false")")
+        }
         lines.append("")
         lines.append("[plugins.markdown-preview]")
         let markdownPreview = config.plugins.markdownPreview
@@ -787,6 +802,7 @@ private extension OmuxConfigExport.UI {
 private extension OmuxConfigExport.Agent {
     init(config: OmuxConfigAgent) {
         self.init(
+            externalPlugins: config.externalPlugins.mapValues { .init(enabled: $0.enabled) },
             enabled: config.enabled,
             skillsEnabled: config.skillsEnabled,
             tools: .init(config: config.tools)

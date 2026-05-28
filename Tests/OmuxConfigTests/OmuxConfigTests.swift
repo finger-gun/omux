@@ -802,6 +802,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("# colors_enabled = true"))
         #expect(contents.contains("[agent]"))
         #expect(contents.contains("skills_enabled = true"))
+        #expect(contents.contains("# [agent.external.example-plugin]"))
         #expect(contents.contains("[agent.tools]"))
         #expect(contents.contains("read_skill = true"))
         #expect(contents.contains("[agent-sessions]"))
@@ -925,6 +926,46 @@ struct OmuxConfigTests {
         #expect(result.hasErrors)
         #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent] key 'prompt'") })
         #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent.tools] key 'unknown'") })
+    }
+
+    @Test
+    func agentExternalPluginConfigParsesEnablement() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent.external.lookup-tools]
+            enabled = false
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agent.externalPlugins["lookup-tools"]?.enabled == false)
+    }
+
+    @Test
+    func unknownAgentExternalPluginKeysProduceDiagnostics() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent.external.lookup-tools]
+            callback = "__bad"
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent.external.lookup-tools] key 'callback'") })
     }
 
     @Test

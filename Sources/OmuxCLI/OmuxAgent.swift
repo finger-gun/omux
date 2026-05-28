@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OmuxControlPlane
 import OmuxConfig
@@ -235,6 +236,51 @@ struct OmuxAgentSkillReadResult: Equatable, Sendable {
     var files: [IncludedFile]
 }
 
+struct OmuxExternalAgentTool: Equatable, Sendable {
+    var pluginID: String
+    var pluginCommand: String
+    var toolID: String
+    var toolName: String
+    var description: String
+    var callback: String
+    var arguments: [String]
+    var inputHint: String?
+    var executableURL: URL
+    var pluginDirectoryURL: URL
+}
+
+struct OmuxExternalAgentToolRequest: Codable, Equatable, Sendable {
+    struct ToolMetadata: Codable, Equatable, Sendable {
+        var name: String
+        var pluginCommand: String
+        var toolID: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case pluginCommand = "plugin_command"
+            case toolID = "tool_id"
+        }
+    }
+
+    var tool: ToolMetadata
+    var input: String
+    var cwd: String
+    var focusedPaneID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tool
+        case input
+        case cwd
+        case focusedPaneID = "focused_pane_id"
+    }
+}
+
+struct OmuxExternalAgentToolResponse: Codable, Equatable, Sendable {
+    var ok: Bool
+    var output: String?
+    var error: String?
+}
+
 struct OmuxAgentGrepRequest: Equatable, Sendable {
     enum CaseMode: String, Equatable, Sendable {
         case smart
@@ -420,6 +466,120 @@ enum OmuxAgentSkillCatalog {
     }
 }
 
+enum OmuxExternalAgentToolCatalog {
+    static func discover(
+        configuration: OmuxConfigAgent,
+        pluginsDirectoryURL: URL = OmuxConfigPaths.pluginsDirectoryURL,
+        fileManager: FileManager = .default
+    ) -> [OmuxExternalAgentTool] {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: pluginsDirectoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return entries
+            .filter { isDirectory($0, fileManager: fileManager) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .flatMap { tools(forPluginDirectory: $0, configuration: configuration, fileManager: fileManager) }
+            .sorted { $0.toolName.localizedCaseInsensitiveCompare($1.toolName) == .orderedAscending }
+    }
+
+    private static func tools(
+        forPluginDirectory pluginDirectoryURL: URL,
+        configuration: OmuxConfigAgent,
+        fileManager: FileManager
+    ) -> [OmuxExternalAgentTool] {
+        let manifestURL = pluginDirectoryURL.appendingPathComponent("omux-plugin.toml", isDirectory: false)
+        guard fileManager.fileExists(atPath: manifestURL.path) else {
+            return []
+        }
+
+        let parseResult = OmuxTOMLParser.parse(fileAt: manifestURL)
+        guard let document = parseResult.document, parseResult.diagnostics.isEmpty else {
+            return []
+        }
+        guard document.value(for: "kind")?.stringValue == "plugin" else {
+            return []
+        }
+
+        let pluginID = document.value(for: "id")?.stringValue?.nilIfBlank ?? pluginDirectoryURL.lastPathComponent
+        let commandName = document.value(in: "plugin", for: "command")?.stringValue?.nilIfBlank ?? pluginID
+        let setting = configuration.externalPlugins[commandName] ?? configuration.externalPlugins[pluginID]
+        if setting?.enabled == false {
+            return []
+        }
+
+        let entrypoint = document.value(in: "plugin", for: "entrypoint")?.stringValue?.nilIfBlank ?? "plugin"
+        let executableURL = pluginDirectoryURL.appendingPathComponent(entrypoint, isDirectory: false)
+        guard isExecutableRegularFile(executableURL, fileManager: fileManager) else {
+            return []
+        }
+
+        let toolTables = document.tableNames
+            .filter { $0.hasPrefix("agent-tools.") }
+            .sorted()
+
+        return toolTables.compactMap { tableName in
+            let toolID = String(tableName.dropFirst("agent-tools.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard CLIPluginRegistryCommandValidator.isValidName(toolID),
+                  let description = document.value(in: tableName, for: "description")?.stringValue?.nilIfBlank,
+                  let callback = document.value(in: tableName, for: "callback")?.stringValue?.nilIfBlank else {
+                return nil
+            }
+
+            return OmuxExternalAgentTool(
+                pluginID: pluginID,
+                pluginCommand: commandName,
+                toolID: toolID,
+                toolName: "\(commandName).\(toolID)",
+                description: description,
+                callback: callback,
+                arguments: stringArray(document.value(in: tableName, for: "arguments")),
+                inputHint: document.value(in: tableName, for: "input_hint")?.stringValue?.nilIfBlank,
+                executableURL: executableURL,
+                pluginDirectoryURL: pluginDirectoryURL
+            )
+        }
+    }
+
+    private static func stringArray(_ value: OmuxTOMLValue?) -> [String] {
+        guard case .array(let values) = value else {
+            return []
+        }
+        return values.compactMap(\.stringValue)
+    }
+
+    private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    private static func isExecutableRegularFile(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false else {
+            return false
+        }
+        return fileManager.isExecutableFile(atPath: url.path)
+    }
+}
+
+private enum CLIPluginRegistryCommandValidator {
+    static func isValidName(_ value: String) -> Bool {
+        guard value.isEmpty == false,
+              value.first != "-",
+              value.first != "." else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        }
+    }
+}
+
 final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
     let rootURL: URL
     let allowReadAnywhere: Bool
@@ -431,6 +591,7 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
     let historyFetcher: OmuxAgentHistoryFetcher?
     let logger: (@Sendable (String) -> Void)?
     let toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)?
+    let externalToolTimeoutNanoseconds: UInt64
 
     init(
         rootURL: URL,
@@ -442,7 +603,8 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         omuxCommandRunner: OmuxAgentCLIRunner? = nil,
         historyFetcher: OmuxAgentHistoryFetcher? = nil,
         logger: (@Sendable (String) -> Void)? = nil,
-        toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)? = nil
+        toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)? = nil,
+        externalToolTimeoutNanoseconds: UInt64 = 30_000_000_000
     ) {
         self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
         self.allowReadAnywhere = allowReadAnywhere
@@ -454,6 +616,7 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         self.historyFetcher = historyFetcher
         self.logger = logger
         self.toolEventHandler = toolEventHandler
+        self.externalToolTimeoutNanoseconds = externalToolTimeoutNanoseconds
     }
 
     func readFile(path: String, startLine: Int?, endLine: Int?) -> String {
@@ -854,6 +1017,100 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         }
     }
 
+    func callExternalTool(_ tool: OmuxExternalAgentTool, input: String) async throws -> String {
+        logger?("calling tool: \(tool.toolName) plugin=\(tool.pluginCommand) callback=\(tool.callback)")
+        emitToolEvent(toolName: tool.toolName, phase: .started, detail: "plugin=\(tool.pluginCommand)")
+
+        let request = OmuxExternalAgentToolRequest(
+            tool: .init(name: tool.toolName, pluginCommand: tool.pluginCommand, toolID: tool.toolID),
+            input: input,
+            cwd: rootURL.path,
+            focusedPaneID: focusedPaneID
+        )
+        let requestData = try JSONEncoder().encode(request)
+
+        let process = Process()
+        process.executableURL = tool.executableURL
+        process.arguments = [tool.callback] + tool.arguments
+        process.currentDirectoryURL = rootURL
+        process.environment = externalToolEnvironment(for: tool)
+
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+
+        stdin.fileHandleForWriting.writeabilityHandler = { handle in
+            handle.writeabilityHandler = nil
+            do {
+                try handle.write(contentsOf: requestData)
+            } catch {
+            }
+            try? handle.close()
+        }
+
+        let stdoutHandle = stdout.fileHandleForReading
+        let stderrHandle = stderr.fileHandleForReading
+        let stdoutTask = Task.detached { stdoutHandle.readDataToEndOfFile() }
+        let stderrTask = Task.detached { stderrHandle.readDataToEndOfFile() }
+
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        while process.isRunning {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            if elapsed >= externalToolTimeoutNanoseconds {
+                process.terminate()
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if process.isRunning {
+                    process.interrupt()
+                }
+                if await Self.waitForExit(process, timeoutNanoseconds: 500_000_000) == false, process.processIdentifier > 0 {
+                    _ = kill(process.processIdentifier, SIGKILL)
+                    _ = await Self.waitForExit(process, timeoutNanoseconds: 1_000_000_000)
+                }
+                let stderrOutput = String(decoding: await stderrTask.value, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let detail = "timed out after \(externalToolTimeoutNanoseconds / 1_000_000_000)s"
+                logger?("tool failed: \(tool.toolName) error=\(detail)")
+                emitToolEvent(toolName: tool.toolName, phase: .failed, detail: detail)
+                throw NSError(
+                    domain: "OmuxExternalAgentTool",
+                    code: 124,
+                    userInfo: [NSLocalizedDescriptionKey: stderrOutput.isEmpty ? detail : "\(detail): \(stderrOutput)"]
+                )
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        let stdoutData = await stdoutTask.value
+        let stderrText = String(decoding: await stderrTask.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationStatus == 0 else {
+            let detail = "plugin exited with status \(process.terminationStatus)"
+            logger?("tool failed: \(tool.toolName) error=\(detail)")
+            emitToolEvent(toolName: tool.toolName, phase: .failed, detail: detail)
+            throw NSError(
+                domain: "OmuxExternalAgentTool",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: stderrText.isEmpty ? detail : stderrText]
+            )
+        }
+
+        let response = try JSONDecoder().decode(OmuxExternalAgentToolResponse.self, from: stdoutData)
+        if response.ok == false {
+            let detail = response.error?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank ?? "plugin returned an error"
+            logger?("tool failed: \(tool.toolName) error=\(detail)")
+            emitToolEvent(toolName: tool.toolName, phase: .failed, detail: detail)
+            throw NSError(domain: "OmuxExternalAgentTool", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+
+        let output = response.output ?? ""
+        logger?("completed tool: \(tool.toolName) bytes=\(output.utf8.count)")
+        emitToolEvent(toolName: tool.toolName, phase: .completed, detail: "plugin=\(tool.pluginCommand)", outputBytes: output.utf8.count, outputText: output)
+        return output
+    }
+
     private func validatedFileURL(path: String) -> (url: URL?, error: String?) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
@@ -894,6 +1151,20 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
             outputBytes: outputBytes,
             outputText: outputText
         ))
+    }
+
+    private func externalToolEnvironment(for tool: OmuxExternalAgentTool) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["OMUX_PLUGIN_COMMAND"] = tool.pluginCommand
+        environment["OMUX_PLUGIN_EXECUTABLE"] = tool.executableURL.path
+        environment["OMUX_PLUGINS_DIR"] = tool.pluginDirectoryURL.deletingLastPathComponent().path
+        environment["OMUX_AGENT_TOOL_NAME"] = tool.toolName
+        if environment["OMUX_CLI"] == nil,
+           let executableURL = Bundle.main.executableURL,
+           FileManager.default.isExecutableFile(atPath: executableURL.path) {
+            environment["OMUX_CLI"] = executableURL.lastPathComponent == "omux" ? executableURL.path : "omux"
+        }
+        return environment
     }
 
     private static func isWithinRoot(_ fileURL: URL, root: URL) -> Bool {
@@ -1011,6 +1282,17 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private static func waitForExit(_ process: Process, timeoutNanoseconds: UInt64) async -> Bool {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        while process.isRunning {
+            if DispatchTime.now().uptimeNanoseconds - startedAt >= timeoutNanoseconds {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
     }
 
     private static func defaultRGRunner(
@@ -1169,6 +1451,13 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
     }
 }
 
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     let omuxCommandRunner: OmuxAgentCLIRunner?
     let historyFetcher: OmuxAgentHistoryFetcher?
@@ -1224,6 +1513,7 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     File-content questions -> read_file
     OpenMUX control -> run_omux_cli
     Reusable workflow guidance -> skills tools
+    Specialized local workflows -> plugin tools when one clearly matches
 
     If required context is unavailable, say so plainly instead of guessing.
     Cite file paths when tool output informs the answer.
@@ -1389,6 +1679,8 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         if configuration.skillsEnabled && configuration.tools.readSkill {
             tools.append(OmuxReadSkillTool(access: access))
         }
+        let externalTools = OmuxExternalAgentToolCatalog.discover(configuration: configuration, fileManager: access.fileManager)
+        tools.append(contentsOf: externalTools.map { OmuxExternalAgentPluginTool(access: access, tool: $0) })
         return tools
     }
     #endif
@@ -1762,6 +2054,31 @@ struct OmuxReadSkillTool: Tool {
 
     func call(arguments: OmuxReadSkillArguments) async throws -> String {
         access.readSkill(name: arguments.name, includePaths: arguments.includePaths)
+    }
+}
+
+@available(macOS 26.0, *)
+@Generable
+struct OmuxExternalAgentPluginToolArguments {
+    @Guide(description: "Single text input for the plugin tool. Include the concrete query or payload the tool needs.")
+    let input: String
+}
+
+@available(macOS 26.0, *)
+struct OmuxExternalAgentPluginTool: Tool {
+    var name: String { tool.toolName }
+    var description: String {
+        if let inputHint = tool.inputHint, inputHint.isEmpty == false {
+            return "\(tool.description) Input hint: \(inputHint)"
+        }
+        return tool.description
+    }
+
+    let access: OmuxAgentWorkspaceAccess
+    let tool: OmuxExternalAgentTool
+
+    func call(arguments: OmuxExternalAgentPluginToolArguments) async throws -> String {
+        try await access.callExternalTool(tool, input: arguments.input)
     }
 }
 #endif

@@ -9,6 +9,7 @@ For bundled plugin user docs, see the [plugin index](./plugins/index.md).
 Plugins can:
 
 - register top-level `omux` commands
+- contribute custom `omux agent` tools
 - create, update, and close extension panes
 - choose whether extension panes open as docked pane tabs or floating modals
 - opt extension panes into host-mediated action callbacks
@@ -136,6 +137,12 @@ Installed manifest-based plugin callbacks also receive:
 |-------------------------|--------------------------------------------------------------|
 | `OMUX_PLUGIN_HOOK_NAME` | Hook name that caused OpenMUX to invoke the plugin callback. |
 
+Agent tool callbacks also receive:
+
+| Variable | Meaning |
+| --- | --- |
+| `OMUX_AGENT_TOOL_NAME` | Full agent tool name being invoked, such as `lookup.find-docs`. |
+
 Registry-installed plugins can subscribe to hooks directly in `omux-plugin.toml`:
 
 ```toml
@@ -145,6 +152,81 @@ arguments = ["codex", "title"]
 ```
 
 OpenMUX invokes the plugin entrypoint with the callback name and arguments, and writes the normal hook JSON payload to stdin. This lets a plugin stay self-contained instead of asking users to install forwarding scripts under `~/.omux/hooks/`.
+
+## Agent Tools Capability
+
+Installed manifest-based plugins can contribute custom tools to `omux agent`. This uses the same installed `omux-plugin.toml` discovery model as hook callbacks and Agent Sessions adapters, so the tool implementation can be any executable runtime the plugin already uses.
+
+### Manifest Contract
+
+Declare one or more tools under `[agent-tools.<tool-id>]`:
+
+```toml
+schema = 1
+id = "lookup"
+name = "Lookup Tools"
+description = "Repo-specific lookup helpers."
+version = "0.1.0"
+license = "Apache-2.0"
+kind = "plugin"
+
+[plugin]
+command = "lookup"
+entrypoint = "plugin"
+
+[agent-tools.find-docs]
+description = "Search internal docs and return matching entries."
+callback = "__omux_agent_tool"
+arguments = ["docs"]
+input_hint = "Natural-language query to search for."
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `[agent-tools.<tool-id>]` | Yes | Tool table keyed by a safe identifier. OpenMUX exposes the tool as `<plugin-command>.<tool-id>`. |
+| `description` | Yes | Public tool description shown to the model and `/tools`. |
+| `callback` | Yes | First argument passed to the plugin entrypoint when the tool runs. |
+| `arguments` | No | Extra callback arguments appended after `callback`. |
+| `input_hint` | No | Extra usage guidance appended to the tool description. |
+
+Agent tools are discovered only from installed manifest-based directory plugins under `~/.omux/plugins/<command>/`. Single-file executable plugins remain regular CLI plugins but do not contribute agent tools in v1.
+
+### Callback Contract
+
+OpenMUX invokes the plugin entrypoint with the callback and optional arguments:
+
+```sh
+~/.omux/plugins/lookup/plugin __omux_agent_tool docs
+```
+
+The callback receives JSON on stdin:
+
+```json
+{
+  "tool": {
+    "name": "lookup.find-docs",
+    "plugin_command": "lookup",
+    "tool_id": "find-docs"
+  },
+  "input": "search for pane metadata",
+  "cwd": "/Users/example/project",
+  "focused_pane_id": "pane-123"
+}
+```
+
+The callback must write only JSON to stdout and diagnostics to stderr. Success:
+
+```json
+{ "ok": true, "output": "matched docs" }
+```
+
+Failure:
+
+```json
+{ "ok": false, "error": "index not built yet" }
+```
+
+OpenMUX treats non-zero exit status, invalid JSON, or `ok = false` as a tool failure. Plugin-defined agent tools are available by default once installed; disable a provider with `[agent.external.<plugin-command>]` in `~/.omux/config.toml`.
 
 ## Agent Sessions Adapter Capability
 

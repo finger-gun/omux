@@ -153,7 +153,7 @@ Plugins can create extension panes with `omux extension-pane`, listen through ho
 
 - Modes: `omux agent` opens an ephemeral full-screen REPL by default. Use `omux agent -p "..."` for one-shot mode that prints a single plain-text response to stdout; non-interactive use requires `-p`.
 - Interactive features: The REPL supports multi-turn chat, streaming output, inline tool activity, status/footer telemetry, and host-handled slash commands such as `/help`, `/tools`, `/stats`, `/compact`, `/handoff`, and `/exit`.
-- File and history access: Both modes can read recent terminal history from OpenMUX, run non-interactive `omux` subcommands through a built-in tool, and read or grep files under the current working directory.
+- File, history, and plugin access: Both modes can read recent terminal history from OpenMUX, run non-interactive `omux` subcommands through built-in tools, read or grep files under the current working directory, and load plugin-defined tools from installed manifest plugins.
 - Flags and security: Use `--verbose` to print progress such as session startup and tool calls to stderr. Use `--allow-read-anywhere` to let the read-file tool open any readable local path; `grep` remains scoped to the current working directory.
 
 Official registries:

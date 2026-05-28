@@ -608,6 +608,96 @@ final class OmuxCLITests: XCTestCase {
         )
     }
 
+    func testExternalAgentToolDiscoveryFindsManifestToolsAndHonorsDisable() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("lookup", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try """
+        schema = 1
+        id = "lookup"
+        kind = "plugin"
+
+        [plugin]
+        command = "lookup"
+        entrypoint = "plugin"
+
+        [agent-tools.find-docs]
+        description = "Find docs"
+        callback = "__omux_agent_tool"
+        arguments = ["docs"]
+        input_hint = "Search query"
+        """.write(to: plugin.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nprintf ''\n".write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
+
+        let enabledTools = OmuxExternalAgentToolCatalog.discover(
+            configuration: OmuxConfigAgent(),
+            pluginsDirectoryURL: plugins
+        )
+        XCTAssertEqual(enabledTools.map(\.toolName), ["lookup.find-docs"])
+        XCTAssertEqual(enabledTools.first?.arguments, ["docs"])
+        XCTAssertEqual(enabledTools.first?.inputHint, "Search query")
+
+        let disabledTools = OmuxExternalAgentToolCatalog.discover(
+            configuration: OmuxConfigAgent(
+                externalPlugins: ["lookup": .init(enabled: false)]
+            ),
+            pluginsDirectoryURL: plugins
+        )
+        XCTAssertTrue(disabledTools.isEmpty)
+    }
+
+    func testExternalAgentToolExecutionPassesJSONPayloadAndReadsJSONResponse() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("lookup", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let outputURL = root.appendingPathComponent("request.json", isDirectory: false)
+        try """
+        #!/bin/sh
+        cat > "$OUTPUT_PATH"
+        printf '{"ok":true,"output":"matched docs"}'
+        """.write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
+        setenv("OUTPUT_PATH", outputURL.path, 1)
+        defer { unsetenv("OUTPUT_PATH") }
+
+        let tool = OmuxExternalAgentTool(
+            pluginID: "lookup",
+            pluginCommand: "lookup",
+            toolID: "find-docs",
+            toolName: "lookup.find-docs",
+            description: "Find docs",
+            callback: "__omux_agent_tool",
+            arguments: ["docs"],
+            inputHint: nil,
+            executableURL: plugin.appendingPathComponent("plugin"),
+            pluginDirectoryURL: plugin
+        )
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            focusedPaneID: "pane-7",
+            externalToolTimeoutNanoseconds: 3_000_000_000
+        )
+
+        let result = try await access.callExternalTool(tool, input: "search for sessions")
+        XCTAssertEqual(result, "matched docs")
+
+        let payload = try Data(contentsOf: outputURL)
+        let request = try JSONDecoder().decode(OmuxExternalAgentToolRequest.self, from: payload)
+        XCTAssertEqual(request.tool.name, "lookup.find-docs")
+        XCTAssertEqual(request.tool.pluginCommand, "lookup")
+        XCTAssertEqual(request.tool.toolID, "find-docs")
+        XCTAssertEqual(request.input, "search for sessions")
+        XCTAssertEqual(request.cwd, root.path)
+        XCTAssertEqual(request.focusedPaneID, "pane-7")
+    }
+
     func testAgentWorkspaceRunOmuxCLIFormatsOutput() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

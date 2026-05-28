@@ -151,7 +151,7 @@ Interactive mode:
 omux agent
 ```
 
-The REPL supports multi-turn chat, streaming output, inline tool activity, and host-handled commands such as `/tools`, `/stats`, and `/handoff`. By default it reads recent terminal history from OpenMUX and inspects files under the current working directory. For the config surface, see [Configuration and themes](./configuration.md#agent-settings).
+The REPL supports multi-turn chat, streaming output, inline tool activity, and host-handled commands such as `/tools`, `/stats`, and `/handoff`. By default it reads recent terminal history from OpenMUX and inspects files under the current working directory. Installed manifest plugins can add custom agent tools that show up in `/tools`; disable one with `[agent.external.<plugin-command>]` in `~/.omux/config.toml`. For the config surface, see [Configuration and themes](./configuration.md#agent-settings).
 
 ## 6. Customize the terminal
 

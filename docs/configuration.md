@@ -293,6 +293,9 @@ read_file = true
 grep_files = true
 list_skills = true
 read_skill = true
+
+[agent.external.lookup]
+enabled = false
 ```
 
 | Key | Type | Meaning |
@@ -313,6 +316,14 @@ Per-tool toggles live under `[agent.tools]`:
 | `read_skill` | boolean | Registers the skill reader tool when `skills_enabled = true`. |
 
 Repo-local skills live under `.agents/skills/*/SKILL.md` relative to the current working directory. User-local skills live under `~/.agents/skills/*/SKILL.md`. Repo-local names shadow user-local names when both exist.
+
+Installed manifest plugins can also contribute custom agent tools. Those plugin-defined tools are available by default and can be disabled per plugin under `[agent.external.<plugin-command>]`.
+
+Per-plugin overrides live under `[agent.external.<plugin-command>]`:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | boolean | Enables or disables one installed plugin tool provider for `omux agent`. Defaults to enabled when the table is absent. |
 
 ## Agent Sessions settings
 

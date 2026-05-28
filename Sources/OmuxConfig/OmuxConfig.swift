@@ -387,6 +387,14 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
 }
 
 public struct OmuxConfigAgent: Equatable, Sendable {
+    public struct ExternalPlugin: Equatable, Sendable {
+        public let enabled: Bool?
+
+        public init(enabled: Bool? = nil) {
+            self.enabled = enabled
+        }
+    }
+
     public struct Tools: Equatable, Sendable {
         public let readTerminalHistory: Bool
         public let listDirectory: Bool
@@ -418,15 +426,18 @@ public struct OmuxConfigAgent: Equatable, Sendable {
     public let enabled: Bool
     public let skillsEnabled: Bool
     public let tools: Tools
+    public let externalPlugins: [String: ExternalPlugin]
 
     public init(
         enabled: Bool = true,
         skillsEnabled: Bool = true,
-        tools: Tools = Tools()
+        tools: Tools = Tools(),
+        externalPlugins: [String: ExternalPlugin] = [:]
     ) {
         self.enabled = enabled
         self.skillsEnabled = skillsEnabled
         self.tools = tools
+        self.externalPlugins = externalPlugins
     }
 }
 
@@ -689,6 +700,10 @@ public enum OmuxConfigTemplate {
         [agent]
         enabled = true
         skills_enabled = true
+        # Installed plugin agent tools are available by default.
+        # Disable one provider with:
+        # [agent.external.example-plugin]
+        # enabled = false
 
         [agent.tools]
         read_terminal_history = true
@@ -1080,6 +1095,7 @@ public struct OmuxConfigLoader {
         }
 
         let agentSessionsTableNames = ["agent-sessions"]
+        let agentExternalTablePrefixes = ["agent.external."]
         let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
         let agentSessionsExternalTablePrefixes = agentSessionsTableNames.map { "\($0).external." }
         let allowedTables: Set<String> = [
@@ -1100,6 +1116,7 @@ public struct OmuxConfigLoader {
         ]
         for tableName in document.tableNames
         where allowedTables.contains(tableName) == false
+            && agentExternalTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false
             && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false
             && agentSessionsExternalTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
             diagnostics.append(
@@ -1749,6 +1766,61 @@ public struct OmuxConfigLoader {
                 break
             }
         }
+        var agentExternalPlugins = config.agent.externalPlugins
+        let orderedAgentExternalTablePrefixes = ["agent.external."]
+        for tablePrefix in orderedAgentExternalTablePrefixes {
+            let tableNames = document.tableNames
+                .filter { $0.hasPrefix(tablePrefix) }
+                .sorted()
+            for tableName in tableNames {
+                let pluginName = String(tableName.dropFirst(tablePrefix.count))
+                let trimmedPluginName = pluginName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmedPluginName.isEmpty == false,
+                      trimmedPluginName.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ $0.isEmpty == false }) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Malformed agent external plugin table [\(tableName)].",
+                            filePath: sourceURL.path
+                        )
+                    )
+                    continue
+                }
+                let allowedExternalKeys: Set<String> = ["enabled"]
+                var enabled: Bool?
+                for entry in document.entries(in: tableName) {
+                    guard allowedExternalKeys.contains(entry.key) else {
+                        diagnostics.append(
+                            OmuxConfigDiagnostic(
+                                severity: .error,
+                                message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                                filePath: sourceURL.path,
+                                line: entry.line
+                            )
+                        )
+                        continue
+                    }
+                    switch entry.key {
+                    case "enabled":
+                        guard let value = entry.value.boolValue else {
+                            diagnostics.append(
+                                OmuxConfigDiagnostic(
+                                    severity: .error,
+                                    message: "\(tableName).enabled must be a boolean.",
+                                    filePath: sourceURL.path,
+                                    line: entry.line
+                                )
+                            )
+                            continue
+                        }
+                        enabled = value
+                    default:
+                        break
+                    }
+                }
+                agentExternalPlugins[trimmedPluginName] = OmuxConfigAgent.ExternalPlugin(enabled: enabled)
+            }
+        }
         let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme", "presentation"]
         var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
         var markdownPreviewRenderer = config.plugins.markdownPreview.renderer
@@ -2259,7 +2331,8 @@ public struct OmuxConfigLoader {
                     grepFiles: agentGrepFiles,
                     listSkills: agentListSkills,
                     readSkill: agentReadSkill
-                )
+                ),
+                externalPlugins: agentExternalPlugins
             ),
             agentSessions: OmuxConfigAgentSessions(
                 enabled: agentSessionsEnabled,
