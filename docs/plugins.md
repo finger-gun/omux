@@ -226,7 +226,7 @@ Failure:
 { "ok": false, "error": "index not built yet" }
 ```
 
-OpenMUX treats non-zero exit status, invalid JSON, or `ok = false` as a tool failure. Plugin-defined agent tools are available by default once installed; disable a provider with `[agent.external.<plugin-command>]` in `~/.omux/config.toml`.
+OpenMUX treats non-zero exit status, invalid JSON, or `ok = false` as a tool failure. Plugin-defined agent tools are available by default once installed; disable a provider with `[agent.external.<plugin-command>]` in `~/.omux/config.toml`. By default the host gives each plugin-defined tool invocation 60 seconds before timing it out; adjust that with `[agent].external_tool_timeout_seconds`.
 
 ## Agent Sessions Adapter Capability
 

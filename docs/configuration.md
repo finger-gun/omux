@@ -284,6 +284,7 @@ Notes:
 [agent]
 enabled = true
 skills_enabled = true
+external_tool_timeout_seconds = 60
 
 [agent.tools]
 read_terminal_history = true
@@ -302,6 +303,7 @@ enabled = false
 | --- | --- | --- |
 | `enabled` | boolean | Enables or disables `omux agent` entirely. When `false`, the command exits with a clear CLI message. Defaults to `true`. |
 | `skills_enabled` | boolean | Enables repo-local and user-local read-only skill discovery under `.agents/skills/` and `~/.agents/skills/`. When `false`, both skill tools are suppressed even if their individual toggles are `true`. Defaults to `true`. |
+| `external_tool_timeout_seconds` | integer | Host timeout for one plugin-defined agent tool invocation, including any subprocess work the plugin performs. Defaults to `60`. |
 
 Per-tool toggles live under `[agent.tools]`:
 
@@ -317,7 +319,7 @@ Per-tool toggles live under `[agent.tools]`:
 
 Repo-local skills live under `.agents/skills/*/SKILL.md` relative to the current working directory. User-local skills live under `~/.agents/skills/*/SKILL.md`. Repo-local names shadow user-local names when both exist.
 
-Installed manifest plugins can also contribute custom agent tools. Those plugin-defined tools are available by default and can be disabled per plugin under `[agent.external.<plugin-command>]`.
+Installed manifest plugins can also contribute custom agent tools. Those plugin-defined tools are available by default, use the host timeout from `external_tool_timeout_seconds`, and can be disabled per plugin under `[agent.external.<plugin-command>]`.
 
 Per-plugin overrides live under `[agent.external.<plugin-command>]`:
 

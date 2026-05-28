@@ -10,6 +10,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let workspaceIsolateShellHistory: Bool
         public let agentEnabled: Bool
         public let agentSkillsEnabled: Bool
+        public let agentExternalToolTimeoutSeconds: Int
         public let agentTools: AgentTools
         public let inactivePaneOpacity: Double
         public let idleStatusClear: String
@@ -57,6 +58,7 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let externalPlugins: [String: AgentExternalPlugin]
         public let enabled: Bool
         public let skillsEnabled: Bool
+        public let externalToolTimeoutSeconds: Int
         public let tools: AgentTools
     }
 
@@ -157,6 +159,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
     public struct Agent: Codable, Equatable, Sendable {
         public var enabled: Bool?
         public var skillsEnabled: Bool?
+        public var externalToolTimeoutSeconds: Int?
         public var tools: AgentTools?
     }
 
@@ -407,6 +410,7 @@ public struct OmuxConfigEditor {
             agent: OmuxConfigAgent(
                 enabled: agentPayload?.enabled ?? current.agent.enabled,
                 skillsEnabled: agentPayload?.skillsEnabled ?? current.agent.skillsEnabled,
+                externalToolTimeoutSeconds: agentPayload?.externalToolTimeoutSeconds ?? current.agent.externalToolTimeoutSeconds,
                 tools: OmuxConfigAgent.Tools(
                     readTerminalHistory: agentToolsPayload?.readTerminalHistory ?? current.agent.tools.readTerminalHistory,
                     listDirectory: agentToolsPayload?.listDirectory ?? current.agent.tools.listDirectory,
@@ -519,6 +523,7 @@ public struct OmuxConfigEditor {
             "agent": [
                 "enabled": true,
                 "skillsEnabled": true,
+                "externalToolTimeoutSeconds": true,
                 "tools": [
                     "readTerminalHistory": true,
                     "listDirectory": true,
@@ -618,6 +623,7 @@ public enum OmuxConfigRenderer {
         lines.append("[agent]")
         lines.append("enabled = \(config.agent.enabled ? "true" : "false")")
         lines.append("skills_enabled = \(config.agent.skillsEnabled ? "true" : "false")")
+        lines.append("external_tool_timeout_seconds = \(config.agent.externalToolTimeoutSeconds)")
         lines.append("")
         lines.append("[agent.tools]")
         lines.append("read_terminal_history = \(config.agent.tools.readTerminalHistory ? "true" : "false")")
@@ -725,6 +731,7 @@ private extension OmuxConfigExport.Defaults {
             workspaceIsolateShellHistory: config.workspace.isolateShellHistory,
             agentEnabled: config.agent.enabled,
             agentSkillsEnabled: config.agent.skillsEnabled,
+            agentExternalToolTimeoutSeconds: config.agent.externalToolTimeoutSeconds,
             agentTools: .init(config: config.agent.tools),
             inactivePaneOpacity: config.ui.panes.inactiveOpacity,
             idleStatusClear: config.ui.panes.idleStatusClear.rawValue,
@@ -805,6 +812,7 @@ private extension OmuxConfigExport.Agent {
             externalPlugins: config.externalPlugins.mapValues { .init(enabled: $0.enabled) },
             enabled: config.enabled,
             skillsEnabled: config.skillsEnabled,
+            externalToolTimeoutSeconds: config.externalToolTimeoutSeconds,
             tools: .init(config: config.tools)
         )
     }

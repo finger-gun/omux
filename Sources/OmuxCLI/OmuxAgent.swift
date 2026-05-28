@@ -581,6 +581,8 @@ private enum CLIPluginRegistryCommandValidator {
 }
 
 final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
+    static let defaultExternalToolTimeoutNanoseconds: UInt64 = 60_000_000_000
+
     let rootURL: URL
     let allowReadAnywhere: Bool
     let focusedPaneID: String?
@@ -604,7 +606,7 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         historyFetcher: OmuxAgentHistoryFetcher? = nil,
         logger: (@Sendable (String) -> Void)? = nil,
         toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)? = nil,
-        externalToolTimeoutNanoseconds: UInt64 = 30_000_000_000
+        externalToolTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
         self.allowReadAnywhere = allowReadAnywhere
@@ -1536,6 +1538,7 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
             let access = Self.makeWorkspaceAccess(
                 workingDirectoryURL: workingDirectoryURL,
                 hostContext: hostContext,
+                configuration: agentConfiguration,
                 allowReadAnywhere: allowReadAnywhere,
                 omuxCommandRunner: omuxCommandRunner,
                 historyFetcher: historyFetcher,
@@ -1631,6 +1634,7 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
     static func makeWorkspaceAccess(
         workingDirectoryURL: URL,
         hostContext: String,
+        configuration: OmuxConfigAgent,
         allowReadAnywhere: Bool,
         omuxCommandRunner: OmuxAgentCLIRunner?,
         historyFetcher: OmuxAgentHistoryFetcher?,
@@ -1648,7 +1652,8 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
             omuxCommandRunner: omuxCommandRunner,
             historyFetcher: historyFetcher,
             logger: onVerbose,
-            toolEventHandler: onToolEvent
+            toolEventHandler: onToolEvent,
+            externalToolTimeoutNanoseconds: UInt64(configuration.externalToolTimeoutSeconds) * 1_000_000_000
         )
     }
 
@@ -1714,6 +1719,7 @@ struct OmuxSystemAgentChatSessionFactory: OmuxAgentChatSessionFactorying {
             let access = OmuxSystemAgentGenerator.makeWorkspaceAccess(
                 workingDirectoryURL: workingDirectoryURL,
                 hostContext: hostContext,
+                configuration: agentConfiguration,
                 allowReadAnywhere: allowReadAnywhere,
                 omuxCommandRunner: omuxCommandRunner,
                 historyFetcher: historyFetcher,

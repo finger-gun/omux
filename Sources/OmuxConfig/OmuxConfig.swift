@@ -387,6 +387,8 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
 }
 
 public struct OmuxConfigAgent: Equatable, Sendable {
+    public static let defaultExternalToolTimeoutSeconds = 60
+
     public struct ExternalPlugin: Equatable, Sendable {
         public let enabled: Bool?
 
@@ -425,17 +427,20 @@ public struct OmuxConfigAgent: Equatable, Sendable {
 
     public let enabled: Bool
     public let skillsEnabled: Bool
+    public let externalToolTimeoutSeconds: Int
     public let tools: Tools
     public let externalPlugins: [String: ExternalPlugin]
 
     public init(
         enabled: Bool = true,
         skillsEnabled: Bool = true,
+        externalToolTimeoutSeconds: Int = Self.defaultExternalToolTimeoutSeconds,
         tools: Tools = Tools(),
         externalPlugins: [String: ExternalPlugin] = [:]
     ) {
         self.enabled = enabled
         self.skillsEnabled = skillsEnabled
+        self.externalToolTimeoutSeconds = max(externalToolTimeoutSeconds, 1)
         self.tools = tools
         self.externalPlugins = externalPlugins
     }
@@ -700,6 +705,7 @@ public enum OmuxConfigTemplate {
         [agent]
         enabled = true
         skills_enabled = true
+        external_tool_timeout_seconds = \(OmuxConfigAgent.defaultExternalToolTimeoutSeconds)
         # Installed plugin agent tools are available by default.
         # Disable one provider with:
         # [agent.external.example-plugin]
@@ -1658,9 +1664,10 @@ public struct OmuxConfigLoader {
             }
         }
 
-        let agentAllowedKeys: Set<String> = ["enabled", "skills_enabled"]
+        let agentAllowedKeys: Set<String> = ["enabled", "skills_enabled", "external_tool_timeout_seconds"]
         var agentEnabled = config.agent.enabled
         var agentSkillsEnabled = config.agent.skillsEnabled
+        var agentExternalToolTimeoutSeconds = config.agent.externalToolTimeoutSeconds
         for entry in document.entries(in: "agent") {
             guard agentAllowedKeys.contains(entry.key) else {
                 diagnostics.append(
@@ -1701,6 +1708,30 @@ public struct OmuxConfigLoader {
                     continue
                 }
                 agentSkillsEnabled = value
+            case "external_tool_timeout_seconds":
+                guard let value = entry.value.intValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.external_tool_timeout_seconds must be an integer.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard value > 0 else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.external_tool_timeout_seconds must be greater than 0.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentExternalToolTimeoutSeconds = value
             default:
                 break
             }
@@ -2323,6 +2354,7 @@ public struct OmuxConfigLoader {
             agent: OmuxConfigAgent(
                 enabled: agentEnabled,
                 skillsEnabled: agentSkillsEnabled,
+                externalToolTimeoutSeconds: agentExternalToolTimeoutSeconds,
                 tools: OmuxConfigAgent.Tools(
                     readTerminalHistory: agentReadTerminalHistory,
                     listDirectory: agentListDirectory,

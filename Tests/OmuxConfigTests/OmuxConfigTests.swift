@@ -802,6 +802,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("# colors_enabled = true"))
         #expect(contents.contains("[agent]"))
         #expect(contents.contains("skills_enabled = true"))
+        #expect(contents.contains("external_tool_timeout_seconds = 60"))
         #expect(contents.contains("# [agent.external.example-plugin]"))
         #expect(contents.contains("[agent.tools]"))
         #expect(contents.contains("read_skill = true"))
@@ -878,6 +879,7 @@ struct OmuxConfigTests {
             [agent]
             enabled = false
             skills_enabled = false
+            external_tool_timeout_seconds = 90
 
             [agent.tools]
             read_terminal_history = false
@@ -895,6 +897,7 @@ struct OmuxConfigTests {
         #expect(result.hasErrors == false)
         #expect(result.config.agent.enabled == false)
         #expect(result.config.agent.skillsEnabled == false)
+        #expect(result.config.agent.externalToolTimeoutSeconds == 90)
         #expect(result.config.agent.tools.readTerminalHistory == false)
         #expect(result.config.agent.tools.listDirectory == true)
         #expect(result.config.agent.tools.runOmuxCLI == false)
@@ -926,6 +929,26 @@ struct OmuxConfigTests {
         #expect(result.hasErrors)
         #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent] key 'prompt'") })
         #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent.tools] key 'unknown'") })
+    }
+
+    @Test
+    func invalidAgentExternalToolTimeoutProducesDiagnostics() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent]
+            external_tool_timeout_seconds = 0
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains { $0.message.contains("agent.external_tool_timeout_seconds must be greater than 0.") })
     }
 
     @Test

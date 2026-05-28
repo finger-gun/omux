@@ -698,6 +698,25 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(request.focusedPaneID, "pane-7")
     }
 
+    func testMakeWorkspaceAccessUsesConfiguredExternalToolTimeout() {
+        let access = OmuxSystemAgentGenerator.makeWorkspaceAccess(
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp/omux-test", isDirectory: true),
+            hostContext: """
+            Host context:
+            openmux.focused.paneID: pane-9
+            """,
+            configuration: OmuxConfigAgent(externalToolTimeoutSeconds: 75),
+            allowReadAnywhere: false,
+            omuxCommandRunner: nil,
+            historyFetcher: nil,
+            onVerbose: nil,
+            onToolEvent: nil
+        )
+
+        XCTAssertEqual(access.focusedPaneID, "pane-9")
+        XCTAssertEqual(access.externalToolTimeoutNanoseconds, 75_000_000_000)
+    }
+
     func testAgentWorkspaceRunOmuxCLIFormatsOutput() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
