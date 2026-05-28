@@ -387,7 +387,7 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
 }
 
 public struct OmuxConfigAgent: Equatable, Sendable {
-    public static let defaultExternalToolTimeoutSeconds = 60
+    public static let defaultExternalToolTimeoutSeconds = 120
 
     public struct ExternalPlugin: Equatable, Sendable {
         public let enabled: Bool?

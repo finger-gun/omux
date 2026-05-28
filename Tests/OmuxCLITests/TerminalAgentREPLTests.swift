@@ -63,6 +63,24 @@ final class TerminalAgentREPLTests: XCTestCase {
         XCTAssertTrue(driver.renderedText.contains("compose"))
     }
 
+    func testRenderingDoesNotCallModelTokenCounter() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("typing without submitting"), size: .init(rows: 16, columns: 80))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.tokenCountCalls, 0)
+        XCTAssertGreaterThan(driver.renderCount, 1)
+    }
+
     func testWrappedTranscriptRenderCleanly() {
         let session = FakeSession()
         session.response = "This is a long assistant response that should wrap onto another visual line in the transcript."
@@ -364,6 +382,7 @@ private final class FakeSession: OmuxAgentChatSessioning {
     var response = "done"
     var toolEvents: [OmuxAgentToolEvent] = []
     var toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)?
+    private(set) var tokenCountCalls = 0
 
     func send(prompt: String, onPartial: @escaping @Sendable (String) -> Void) async throws -> String {
         sentPrompts.append(prompt)
@@ -399,7 +418,8 @@ private final class FakeSession: OmuxAgentChatSessioning {
     }
 
     func tokenCount(for text: String) -> Int? {
-        max(1, text.utf8.count / 4)
+        tokenCountCalls += 1
+        return max(1, text.utf8.count / 4)
     }
 }
 

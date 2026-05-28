@@ -802,7 +802,7 @@ struct OmuxConfigTests {
         #expect(contents.contains("# colors_enabled = true"))
         #expect(contents.contains("[agent]"))
         #expect(contents.contains("skills_enabled = true"))
-        #expect(contents.contains("external_tool_timeout_seconds = 60"))
+        #expect(contents.contains("external_tool_timeout_seconds = \(OmuxConfigAgent.defaultExternalToolTimeoutSeconds)"))
         #expect(contents.contains("# [agent.external.example-plugin]"))
         #expect(contents.contains("[agent.tools]"))
         #expect(contents.contains("read_skill = true"))

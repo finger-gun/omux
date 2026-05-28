@@ -1014,9 +1014,6 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     }
 
     private func estimateTokens(for text: String) -> Int {
-        if let counted = session?.tokenCount(for: text) {
-            return counted
-        }
         let utf8Count = text.utf8.count
         guard utf8Count > 0 else { return 0 }
         return max(1, Int(ceil(Double(utf8Count) / 4.0)))

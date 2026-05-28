@@ -581,7 +581,7 @@ private enum CLIPluginRegistryCommandValidator {
 }
 
 final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
-    static let defaultExternalToolTimeoutNanoseconds: UInt64 = 60_000_000_000
+    static let defaultExternalToolTimeoutNanoseconds = UInt64(OmuxConfigAgent.defaultExternalToolTimeoutSeconds) * 1_000_000_000
 
     let rootURL: URL
     let allowReadAnywhere: Bool
@@ -606,7 +606,7 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
         historyFetcher: OmuxAgentHistoryFetcher? = nil,
         logger: (@Sendable (String) -> Void)? = nil,
         toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)? = nil,
-        externalToolTimeoutNanoseconds: UInt64 = 60_000_000_000
+        externalToolTimeoutNanoseconds: UInt64 = OmuxAgentWorkspaceAccess.defaultExternalToolTimeoutNanoseconds
     ) {
         self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
         self.allowReadAnywhere = allowReadAnywhere
@@ -1617,20 +1617,6 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         )
     }
 
-    #if canImport(FoundationModels)
-    @available(macOS 26.0, *)
-    static func requireAvailableModel(
-        onVerbose: (@Sendable (String) -> Void)?
-    ) throws -> SystemLanguageModel {
-        onVerbose?("checking Apple Foundation Models availability")
-        let model = SystemLanguageModel.default
-        guard model.isAvailable else {
-            onVerbose?("Apple Foundation Models unavailable on this host")
-            throw OmuxAgentError.unavailable
-        }
-        return model
-    }
-
     static func makeWorkspaceAccess(
         workingDirectoryURL: URL,
         hostContext: String,
@@ -1655,6 +1641,20 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
             toolEventHandler: onToolEvent,
             externalToolTimeoutNanoseconds: UInt64(configuration.externalToolTimeoutSeconds) * 1_000_000_000
         )
+    }
+
+    #if canImport(FoundationModels)
+    @available(macOS 26.0, *)
+    static func requireAvailableModel(
+        onVerbose: (@Sendable (String) -> Void)?
+    ) throws -> SystemLanguageModel {
+        onVerbose?("checking Apple Foundation Models availability")
+        let model = SystemLanguageModel.default
+        guard model.isAvailable else {
+            onVerbose?("Apple Foundation Models unavailable on this host")
+            throw OmuxAgentError.unavailable
+        }
+        return model
     }
 
     @available(macOS 26.0, *)
