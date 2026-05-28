@@ -42,6 +42,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var reindexAgentSessionsMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
     private weak var toggleVaultSidebarMenuItem: NSMenuItem?
+    private weak var toggleWorktreesMenuItem: NSMenuItem?
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
     private weak var commandPaletteCommandMenuItem: NSMenuItem?
     private weak var findInPaneMenuItem: NSMenuItem?
@@ -642,6 +643,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         windowController?.toggleVaultSidebarVisibility()
     }
 
+    @objc private func toggleWorktreesFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.toggleWorktreesVisibility()
+    }
+
     @objc private func toggleAgentSessionsFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.toggleAgentSessionsVisibility()
@@ -1185,6 +1191,14 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         toggleVaultSidebarMenuItem.target = self
         viewMenu.addItem(toggleVaultSidebarMenuItem)
 
+        let toggleWorktreesMenuItem = NSMenuItem(
+            title: "Toggle Git Worktrees",
+            action: #selector(toggleWorktreesFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        toggleWorktreesMenuItem.target = self
+        viewMenu.addItem(toggleWorktreesMenuItem)
+
         viewMenu.addItem(.separator())
 
         let commandPaletteWorkspaceMenuItem = NSMenuItem(
@@ -1215,6 +1229,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
         self.toggleVaultSidebarMenuItem = toggleVaultSidebarMenuItem
+        self.toggleWorktreesMenuItem = toggleWorktreesMenuItem
         self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
         self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
         self.findInPaneMenuItem = findInPaneMenuItem
@@ -1270,6 +1285,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         reindexAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible && vaultStore != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
         toggleVaultSidebarMenuItem?.isEnabled = hasWorkspace
+        toggleWorktreesMenuItem?.isEnabled = hasWorkspace
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace

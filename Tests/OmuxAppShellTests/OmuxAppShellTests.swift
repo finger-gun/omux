@@ -220,6 +220,7 @@ final class OmuxAppShellTests: XCTestCase {
             key: "b",
             modifiers: [.command, .option]
         ) ?? false)
+        XCTAssertNotNil(viewMenu?.items.first { $0.title == "Toggle Git Worktrees" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {

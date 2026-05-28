@@ -280,6 +280,10 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.toggleAgentSessionsPanel()
     }
 
+    func toggleWorktreesVisibility() {
+        rootViewController.toggleWorktreesPanel()
+    }
+
     func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
         rootViewController.presentAgentSessionsPalette(keyBindings: keyBindings)
     }
@@ -1541,6 +1545,32 @@ final class WorkspaceShellViewController: NSViewController {
             isAgentSessionsSectionCollapsed = true
             UserDefaults.standard.set(true, forKey: "omux.rightSidebar.agentSessionsCollapsed")
             vaultSidebarView.splitView.setCollapsed(true, panelID: "agentSessions")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        }
+    }
+
+    func toggleWorktreesPanel() {
+        if !isVaultSidebarVisible {
+            // Sidebar closed: open it and ensure worktrees widget is expanded.
+            isVaultSidebarVisible = true
+            applyVaultSidebarVisibility()
+            if isWorktreesSectionCollapsed {
+                isWorktreesSectionCollapsed = false
+                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
+                vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+                if let workspace = currentWorkspace { update(workspace: workspace) }
+            }
+        } else if isWorktreesSectionCollapsed {
+            // Sidebar open, widget collapsed: expand it.
+            isWorktreesSectionCollapsed = false
+            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
+            vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        } else {
+            // Sidebar open, widget expanded: collapse it.
+            isWorktreesSectionCollapsed = true
+            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.worktreesCollapsed")
+            vaultSidebarView.splitView.setCollapsed(true, panelID: "worktrees")
             if let workspace = currentWorkspace { update(workspace: workspace) }
         }
     }
