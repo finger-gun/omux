@@ -99,6 +99,7 @@ Available sandboxes:
 | Name | Script | Use it for |
 | --- | --- | --- |
 | `uitest` | `Scripts/sandbox-uitest.sh` | UI test suite and general manual testing. 2 workspaces × 2 tabs × 2-pane split across three stub git repos. |
+| `demo` | `Scripts/sandbox-demo.sh` | Realistic demo with 4 workspaces: OpenMUX (the app itself) + three fictional client projects (Northlight, VaultPay, Fieldnotes) each with plausible directory structures. |
 
 To add a new sandbox, create `Scripts/sandbox-<name>.sh` (follow `sandbox-uitest.sh` as a template) and run `make app sandbox=<name>`.
 
