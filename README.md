@@ -47,21 +47,17 @@ OpenMUX is a native macOS terminal workspace. It gives you workspaces, tabs, spl
 
 The goal is simple: keep the terminal powerful, inspectable, and open to your workflow.
 
-## What works today
+## Why OpenMUX?
 
-OpenMUX is a beta, but the core workflow is usable:
+OpenMUX is built for developers who want a terminal workspace that stays native, scriptable, and inspectable instead of turning into a browser shell or a closed workflow product.
 
-- native AppKit shell with a terminal-first layout
-- workspaces, top-level tabs, split panes, and pane-local tabs
-- persistent shell sessions with direct typing, paste, drag-and-drop text/URLs/files, resize, command injection, isolated shell history, and bounded scrollback restore
-- local `omux` CLI and JSON-RPC control plane
-- external hook system, official hook registry, and `omux events`
-- fuzzy-search theme picker and token-based themes
-- command palette, focused-pane find, and keyboard-first pane/workspace actions
-- Agent Sessions for local coding-agent history, including built-in Copilot/Codex/Gemini adapters and registry-hosted adapters such as OpenCode, KiloCode, and OMP
-- Markdown Preview, plugin command discovery, extension panes, floating pane modals, native menu contributions, and the official plugin registry
-- XCUIAutomation coverage for the native app shell in CI
-- explicit keyboard-correctness work for ISO layouts, Option behavior, dead keys, compose input, and IME-sensitive flows
+- Terminal first: workspaces, split panes, pane-local tabs, shell history isolation, bounded scrollback restore, and keyboard-first navigation are core product behavior.
+- Open by design: the local `omux` CLI, JSON-RPC control plane, hooks, and event stream are public surfaces, not private implementation details.
+- AI-friendly, not AI-first: OpenMUX includes local agent tooling and Agent Sessions, but the terminal remains the product and automation remains user-controlled.
+- Native and hackable: the app shell is AppKit-first, plugin and hook surfaces are plain local executables, and user-owned configuration stays in `~/.omux/`.
+
+
+OpenMUX is still in beta, but the main features are already broad and stable.
 
 ## Start here
 
@@ -76,7 +72,7 @@ This installs `OpenMUX.app` and links the bundled `omux` CLI at `~/.local/bin/om
 User docs:
 
 - [Getting started](./docs/getting-started.md) - install, first launch, CLI setup, workspaces, panes, themes, hooks, plugins, and the release installer script.
-- [Configuration and themes](./docs/configuration.md) - `~/.omux/config.toml`, themes, terminal settings, keybindings, and plugin config.
+- [Configuration and themes](./docs/configuration.md) - `~/.omux/config.toml`, themes, terminal settings, keybindings, local agent settings, and plugin config.
 - [Agent Sessions](./docs/agent-sessions.md) - search, resume, monitor, and delete locally indexed coding-agent sessions from built-in and plugin-provided adapters.
 - [Hooks](./docs/hooks.md) - executable user hooks, registry installs, hook payloads, and automation examples.
 - [Plugins](./docs/plugins/index.md) - bundled plugins, registry installs, and plugin management.
@@ -153,10 +149,10 @@ OpenMUX has two plugin and automation surfaces:
 
 Plugins can create extension panes with `omux extension-pane`, listen through hooks, call back into the public CLI, and contribute native menu items. Hooks are executable event handlers under `~/.omux/hooks/`.
 
-`omux agent` is an experimental local Apple Foundation Models command.
+`omux agent` is a local assistant for quick automation, repo inspection, and simple OpenMUX control.
 
 - Modes: `omux agent` opens an ephemeral full-screen REPL by default. Use `omux agent -p "..."` for one-shot mode that prints a single plain-text response to stdout; non-interactive use requires `-p`.
-- Interactive features: The REPL supports multi-turn chat, streaming output, inline tool activity, and host-handled slash commands such as `/help`, `/tools`, `/stats`, `/compact`, and `/exit`.
+- Interactive features: The REPL supports multi-turn chat, streaming output, inline tool activity, status/footer telemetry, and host-handled slash commands such as `/help`, `/tools`, `/stats`, `/compact`, `/handoff`, and `/exit`.
 - File and history access: Both modes can read recent terminal history from OpenMUX, run non-interactive `omux` subcommands through a built-in tool, and read or grep files under the current working directory.
 - Flags and security: Use `--verbose` to print progress such as session startup and tool calls to stderr. Use `--allow-read-anywhere` to let the read-file tool open any readable local path; `grep` remains scoped to the current working directory.
 

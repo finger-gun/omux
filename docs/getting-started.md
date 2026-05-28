@@ -1,6 +1,6 @@
 # Getting Started with OpenMUX
 
-OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, user hooks, bundled and external plugins, Agent Sessions, and extension panes.
+OpenMUX is a beta macOS terminal workspace. It gives you native windows, workspaces, tabs, split panes, persistent shell sessions, themes, a local `omux` CLI, a local agent, user hooks, bundled and external plugins, Agent Sessions, and extension panes.
 
 This guide is for people who want to use OpenMUX, not contribute to its internals.
 
@@ -134,7 +134,26 @@ omux send-text --workspace <workspace-id> -- "notes only"
 omux run --focused -- "git status"
 ```
 
-## 5. Customize the terminal
+## 5. Try the local agent
+
+OpenMUX includes a local `omux agent` command for quick repo inspection, terminal-history questions, and simple OpenMUX control.
+
+One-shot examples:
+
+```bash
+omux agent -p "Summarize the last commands from my focused pane."
+omux agent -p "Find where pane status handling lives in this repo."
+```
+
+Interactive mode:
+
+```bash
+omux agent
+```
+
+The REPL supports multi-turn chat, streaming output, inline tool activity, and host-handled commands such as `/tools`, `/stats`, and `/handoff`. By default it reads recent terminal history from OpenMUX and inspects files under the current working directory. For the config surface, see [Configuration and themes](./configuration.md#agent-settings).
+
+## 6. Customize the terminal
 
 Create a starter config:
 
@@ -223,7 +242,7 @@ omux settings-ui
 
 For all supported keybindings, default workspace root behavior, theme tokens, built-in themes, registry settings, plugin settings, and Ghostty pass-through rules, see [Configuration and themes](./configuration.md).
 
-## 6. Add a simple hook
+## 7. Add a simple hook
 
 Hooks are executable files that react to OpenMUX events. They live under `~/.omux/hooks/<hook-name>/`.
 

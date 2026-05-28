@@ -278,7 +278,7 @@ Notes:
 
 ## Agent settings
 
-`omux agent` is intentionally small: a local assistant for quick automation, repo inspection, and simple OpenMUX control. The `[agent]` table controls whether the command is enabled at all and which read-only model tools are registered.
+`omux agent` is intentionally small: a local assistant for quick automation, repo inspection, and simple OpenMUX control. It supports one-shot prompts with `omux agent -p "..."` and an interactive REPL with host-handled commands such as `/tools`, `/stats`, and `/handoff`. The `[agent]` table controls whether the command is enabled at all and which read-only model tools are registered.
 
 ```toml
 [agent]
