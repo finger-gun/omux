@@ -1175,7 +1175,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let viewMenu = NSMenu(title: "View")
 
         let toggleSidebarMenuItem = NSMenuItem(
-            title: "Toggle Left Sidebar",
+            title: "Left Sidebar",
             action: #selector(toggleSidebarFromMenu(_:)),
             keyEquivalent: ""
         )
@@ -1183,7 +1183,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         viewMenu.addItem(toggleSidebarMenuItem)
 
         let toggleVaultSidebarMenuItem = NSMenuItem(
-            title: "Toggle Right Sidebar",
+            title: "Right Sidebar",
             action: #selector(toggleVaultSidebarFromMenu(_:)),
             keyEquivalent: "b"
         )
@@ -1192,7 +1192,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         viewMenu.addItem(toggleVaultSidebarMenuItem)
 
         let toggleWorktreesMenuItem = NSMenuItem(
-            title: "Toggle Git Worktrees",
+            title: "Git Worktrees",
             action: #selector(toggleWorktreesFromMenu(_:)),
             keyEquivalent: ""
         )

@@ -99,10 +99,10 @@ final class RightSidebarTests: OmuxUITestsBase {
         let viewMenu = app.menuBars.menuBarItems["View"]
         XCTAssertTrue(viewMenu.waitForExistence(timeout: 5), "View menu should exist")
         viewMenu.click()
-        let menuItem = app.menuItems["Toggle Right Sidebar"]
+        let menuItem = app.menuItems["Right Sidebar"]
         XCTAssertTrue(
             menuItem.waitForExistence(timeout: 3),
-            "View menu should contain 'Toggle Right Sidebar' item"
+            "View menu should contain 'Right Sidebar' item"
         )
         // Dismiss menu without activating.
         app.typeKey(.escape, modifierFlags: [])

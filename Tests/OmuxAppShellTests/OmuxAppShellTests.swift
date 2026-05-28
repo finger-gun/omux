@@ -122,7 +122,7 @@ final class OmuxAppShellTests: XCTestCase {
             modifiers: [.command]
         ) ?? true)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
-            title: "Toggle Left Sidebar",
+            title: "Left Sidebar",
             key: "b",
             modifiers: [.command]
         ) ?? false)
@@ -216,11 +216,11 @@ final class OmuxAppShellTests: XCTestCase {
         ) ?? false)
         XCTAssertNil(viewMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertTrue(viewMenu?.items.containsShortcut(
-            title: "Toggle Right Sidebar",
+            title: "Right Sidebar",
             key: "b",
             modifiers: [.command, .option]
         ) ?? false)
-        XCTAssertNotNil(viewMenu?.items.first { $0.title == "Toggle Git Worktrees" })
+        XCTAssertNotNil(viewMenu?.items.first { $0.title == "Git Worktrees" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
