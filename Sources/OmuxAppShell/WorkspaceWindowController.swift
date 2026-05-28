@@ -1,6 +1,7 @@
 import AppKit
 import OmuxAIStatusPlugin
 import OmuxConfig
+import OmuxControlPlane
 import OmuxCore
 import OmuxTerminalBridge
 import OmuxVault
@@ -437,6 +438,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.onExtensionPaneAction = onExtensionPaneAction
         super.init(nibName: nil, bundle: nil)
         configureVaultSourceIndexing()
+        subscribeToCommandFinished()
     }
 
     deinit {
@@ -732,6 +734,7 @@ final class WorkspaceShellViewController: NSViewController {
         let previousWorkspace = currentWorkspace
         let previousWorkspaceID = currentWorkspace?.id
         let previousFocusedPaneID = currentWorkspace?.focusedPane?.id
+        let previousFocusedPaneWorkingDirectory = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory
         let shouldRestoreFocus = shouldRestoreFocus(
             previousWorkspaceID: previousWorkspaceID,
             previousFocusedPaneID: previousFocusedPaneID,
@@ -751,8 +754,11 @@ final class WorkspaceShellViewController: NSViewController {
         currentWorkspace = workspace
         dismissIrrelevantRestoreBanners(for: workspace)
         let focusedPaneID = workspace.focusedPane?.id
-        // Reload worktrees when focused pane working directory changes.
-        if previousFocusedPaneID != focusedPaneID || previousWorkspaceID != workspace.id {
+        let focusedPaneWorkingDirectory = workspace.focusedPane?.terminalSession?.workingDirectory
+        // Reload worktrees when focused pane or its working directory changes.
+        if previousFocusedPaneID != focusedPaneID
+            || previousWorkspaceID != workspace.id
+            || previousFocusedPaneWorkingDirectory != focusedPaneWorkingDirectory {
             reloadWorktrees()
         }
         apply(theme: currentTheme)
@@ -1519,6 +1525,22 @@ final class WorkspaceShellViewController: NSViewController {
 
     // MARK: - Worktrees
 
+    /// Subscribes to `commandFinished` terminal events on the `WorkspaceController`
+    /// so that manual `git worktree` CLI commands refresh the widget immediately.
+    private func subscribeToCommandFinished() {
+        let previous = controller.onTerminalEvent
+        controller.onTerminalEvent = { [weak self] event in
+            previous?(event)
+            guard event.name == ControlPlaneTerminalEventName.commandFinished.rawValue else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let focusedPaneID = self.currentWorkspace?.focusedPane?.id,
+                      event.paneID == focusedPaneID else { return }
+                self.reloadWorktrees()
+            }
+        }
+    }
+
     private func reloadWorktrees() {
         guard let cwd = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory else {
             worktrees = []
@@ -1596,33 +1618,31 @@ final class WorkspaceShellViewController: NSViewController {
         alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
 
-        let accessory = NSStackView()
-        accessory.orientation = .vertical
-        accessory.alignment = .leading
-        accessory.spacing = 8
-        accessory.translatesAutoresizingMaskIntoConstraints = false
+        let defaultBranch = "worktree/\(UUID().uuidString.prefix(8).lowercased())"
 
         let branchLabel = NSTextField(labelWithString: "New branch name:")
         branchLabel.font = .systemFont(ofSize: 12)
-        let defaultBranch = "worktree/\(UUID().uuidString.prefix(8).lowercased())"
+        branchLabel.frame = NSRect(x: 0, y: 96, width: 300, height: 16)
+
         let branchField = NSTextField()
         branchField.stringValue = defaultBranch
         branchField.font = .systemFont(ofSize: 13)
-        branchField.translatesAutoresizingMaskIntoConstraints = false
-        branchField.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        branchField.frame = NSRect(x: 0, y: 64, width: 300, height: 24)
 
         let fromLabel = NSTextField(labelWithString: "Base branch:")
         fromLabel.font = .systemFont(ofSize: 12)
+        fromLabel.frame = NSRect(x: 0, y: 36, width: 300, height: 16)
+
         let fromPopup = NSPopUpButton()
         fromPopup.addItem(withTitle: "(current HEAD)")
         for b in branches { fromPopup.addItem(withTitle: b) }
-        fromPopup.translatesAutoresizingMaskIntoConstraints = false
-        fromPopup.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        fromPopup.frame = NSRect(x: 0, y: 0, width: 300, height: 26)
 
-        accessory.addArrangedSubview(branchLabel)
-        accessory.addArrangedSubview(branchField)
-        accessory.addArrangedSubview(fromLabel)
-        accessory.addArrangedSubview(fromPopup)
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 130))
+        accessory.addSubview(branchLabel)
+        accessory.addSubview(branchField)
+        accessory.addSubview(fromLabel)
+        accessory.addSubview(fromPopup)
         alert.accessoryView = accessory
 
         let performCreate: () -> Void = {
@@ -4333,12 +4353,25 @@ private final class SidebarSplitView: NSView {
     private var separators: [SidebarSeparatorView] = []
     private var theme: WorkspaceShellTheme = .defaultTheme
 
+    // MARK: Widget reorder drag state
+    private struct WidgetDragState {
+        let sourcePanelIndex: Int
+        let sourcePanelMinY: CGFloat   // stable Y captured at drag start, before any drop zone shifts
+        var targetInsertionIndex: Int?
+        weak var ghostView: NSView?
+        let ghostHeight: CGFloat
+    }
+    private var widgetDragState: WidgetDragState?
+    private let dropZoneView = WidgetDropZoneView()
+
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        dropZoneView.isHidden = true
+        addSubview(dropZoneView)
     }
 
     @available(*, unavailable)
@@ -4358,9 +4391,30 @@ private final class SidebarSplitView: NSView {
             addSubview(panel.view)
         }
 
+        // Bring drop zone to front so it renders above panel views.
+        dropZoneView.removeFromSuperview()
+        addSubview(dropZoneView)
+
         rebuildSeparators()
+        rewireHeaderDragCallbacks()
         rebalanceProportions()
         needsLayout = true
+    }
+
+    private func rewireHeaderDragCallbacks() {
+        for (i, panel) in panels.enumerated() {
+            guard let header = panel.headerView else { continue }
+            let idx = i
+            header.onDragBegan = { [weak self] in
+                self?.beginWidgetDrag(panelIndex: idx)
+            }
+            header.onDragMoved = { [weak self] windowY in
+                self?.updateWidgetDrag(windowY: windowY)
+            }
+            header.onDragEnded = { [weak self] in
+                self?.endWidgetDrag()
+            }
+        }
     }
 
     private func rebuildSeparators() {
@@ -4376,11 +4430,15 @@ private final class SidebarSplitView: NSView {
             addSubview(sep)
             separators.append(sep)
         }
+        // Keep drop zone on top.
+        dropZoneView.removeFromSuperview()
+        addSubview(dropZoneView)
     }
 
     func applyTheme(_ t: WorkspaceShellTheme) {
         theme = t
         for sep in separators { sep.apply(theme: t) }
+        dropZoneView.apply(theme: t)
     }
 
     // MARK: Collapse
@@ -4404,10 +4462,36 @@ private final class SidebarSplitView: NSView {
         let width = bounds.width
         let separatorSpace = CGFloat(separators.count) * Self.separatorThickness
         let collapsedSpace = panels.filter(\.isCollapsed).reduce(0) { $0 + $1.collapsedHeight }
-        let flexibleSpace = max(0, total - separatorSpace - collapsedSpace)
+
+        guard let dragState = widgetDragState, let insertionIdx = dragState.targetInsertionIndex else {
+            // No active drag — normal layout, drop zone hidden.
+            dropZoneView.isHidden = true
+            let flexibleSpace = max(0, total - separatorSpace - collapsedSpace)
+            var y: CGFloat = 0
+            for (i, panel) in panels.enumerated() {
+                let h: CGFloat = panel.isCollapsed ? panel.collapsedHeight : (flexibleSpace * panel.proportion).rounded()
+                panel.view.frame = NSRect(x: 0, y: y, width: width, height: h)
+                y += h
+                if i < separators.count {
+                    separators[i].frame = NSRect(x: 0, y: y, width: width, height: Self.separatorThickness)
+                    y += Self.separatorThickness
+                }
+            }
+            return
+        }
+
+        // Active drag: insert the drop zone into the flow at insertionIdx,
+        // pushing real panels aside so the highlight occupies real space.
+        let dropZoneHeight = dragState.ghostHeight
+        let flexibleSpace = max(0, total - separatorSpace - collapsedSpace - dropZoneHeight)
 
         var y: CGFloat = 0
         for (i, panel) in panels.enumerated() {
+            if i == insertionIdx {
+                dropZoneView.frame = NSRect(x: 0, y: y, width: width, height: dropZoneHeight)
+                dropZoneView.isHidden = false
+                y += dropZoneHeight
+            }
             let h: CGFloat = panel.isCollapsed ? panel.collapsedHeight : (flexibleSpace * panel.proportion).rounded()
             panel.view.frame = NSRect(x: 0, y: y, width: width, height: h)
             y += h
@@ -4415,6 +4499,11 @@ private final class SidebarSplitView: NSView {
                 separators[i].frame = NSRect(x: 0, y: y, width: width, height: Self.separatorThickness)
                 y += Self.separatorThickness
             }
+        }
+        // Insertion after last panel.
+        if insertionIdx >= panels.count {
+            dropZoneView.frame = NSRect(x: 0, y: y, width: width, height: dropZoneHeight)
+            dropZoneView.isHidden = false
         }
     }
 
@@ -4446,8 +4535,118 @@ private final class SidebarSplitView: NSView {
         needsLayout = true
     }
 
+    // MARK: Widget reorder drag
+
+    private func beginWidgetDrag(panelIndex: Int) {
+        let sourceView = panels[panelIndex].headerView ?? panels[panelIndex].view
+        let ghost = makeWidgetDragGhost(for: sourceView)
+        widgetDragState = WidgetDragState(
+            sourcePanelIndex: panelIndex,
+            sourcePanelMinY: panels[panelIndex].view.frame.minY,
+            targetInsertionIndex: nil,
+            ghostView: ghost,
+            ghostHeight: sourceView.bounds.height
+        )
+        updateDropZone()
+    }
+
+    private func updateWidgetDrag(windowY: CGFloat) {
+        guard var dragState = widgetDragState else { return }
+        let localY = convert(NSPoint(x: 0, y: windowY), from: nil).y
+        dragState.targetInsertionIndex = insertionIndex(for: localY, excluding: dragState.sourcePanelIndex)
+        widgetDragState = dragState
+        updateWidgetDragGhost(dragState.ghostView, windowY: windowY)
+        updateDropZone()
+    }
+
+    private func endWidgetDrag() {
+        defer {
+            widgetDragState?.ghostView?.removeFromSuperview()
+            widgetDragState = nil
+            needsLayout = true
+        }
+        guard let dragState = widgetDragState, var dst = dragState.targetInsertionIndex else { return }
+        let src = dragState.sourcePanelIndex
+        var reordered = panels
+        let moved = reordered.remove(at: src)
+        if dst > src { dst -= 1 }
+        reordered.insert(moved, at: dst)
+        panels = reordered
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        equalizeProportions()
+        needsLayout = true
+    }
+
+    private func makeWidgetDragGhost(for panelView: NSView) -> NSView? {
+        guard let contentView = window?.contentView else { return nil }
+        let size = panelView.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let snapshot = NSImage(size: size, flipped: false) { [weak panelView] _ in
+            guard let layer = panelView?.layer else { return false }
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            layer.render(in: ctx)
+            return true
+        }
+
+        let ghost = NSImageView(image: snapshot)
+        ghost.wantsLayer = true
+        ghost.layer?.opacity = 0.82
+        ghost.layer?.cornerRadius = 3
+        ghost.layer?.shadowOpacity = 0.28
+        ghost.layer?.shadowRadius = 10
+        ghost.layer?.shadowColor = NSColor.black.cgColor
+        ghost.layer?.shadowOffset = CGSize(width: 0, height: -3)
+
+        ghost.frame = panelView.convert(panelView.bounds, to: nil)
+        contentView.addSubview(ghost, positioned: .above, relativeTo: nil)
+        return ghost
+    }
+
+    private func updateWidgetDragGhost(_ ghost: NSView?, windowY: CGFloat) {
+        guard let ghost else { return }
+        ghost.frame.origin.y = windowY - ghost.frame.height / 2
+    }
+
+    /// Returns the insertion index (0 = before panel 0, n = after last panel)
+    /// only when the cursor is within the activation zone of a valid slot.
+    /// Each slot activates when the cursor is in the outer quarter of an adjacent panel.
+    /// Returns nil when the cursor is in the middle of a panel (no active drop zone).
+    private func insertionIndex(for localY: CGFloat, excluding src: Int) -> Int? {
+        let validSlots = Set((0 ... panels.count).filter { $0 != src && $0 != src + 1 })
+        guard !validSlots.isEmpty else { return nil }
+
+        // Activate the slot when the cursor gets within one header-height of the
+        // panel boundary, so the drop zone appears as the dragged widget approaches
+        // the other panel — not immediately on drag start.
+        let srcMinY = widgetDragState?.sourcePanelMinY ?? panels[src].view.frame.minY
+        let proximityThreshold: CGFloat = 34   // one collapsed header height
+
+        for slot in 0 ... panels.count {
+            guard validSlots.contains(slot) else { continue }
+            if slot > src + 1 {
+                // Boundary is the bottom edge of the source panel.
+                let srcHeight = panels[src].isCollapsed ? panels[src].collapsedHeight : panels[src].view.frame.height
+                let boundary = srcMinY + srcHeight
+                if localY > boundary - proximityThreshold { return slot }
+            }
+            if slot < src {
+                // Boundary is the top edge of the source panel.
+                let boundary = srcMinY
+                if localY < boundary + proximityThreshold { return slot }
+            }
+        }
+        return nil
+    }
+
+    private func updateDropZone() {
+        needsLayout = true
+    }
+
     // MARK: Proportion management
 
+    /// Normalizes proportions so expanded panels fill exactly 1.0 total, preserving relative ratios.
     private func rebalanceProportions() {
         let expandedIndices = panels.indices.filter { !panels[$0].isCollapsed }
         guard !expandedIndices.isEmpty else { return }
@@ -4458,6 +4657,16 @@ private final class SidebarSplitView: NSView {
         } else {
             for i in expandedIndices { panels[i].proportion /= currentSum }
         }
+        persistProportions()
+    }
+
+    /// Gives each expanded panel an equal proportion. Used after a reorder so that
+    /// swapped proportions don't cause unexpected size changes.
+    private func equalizeProportions() {
+        let expandedIndices = panels.indices.filter { !panels[$0].isCollapsed }
+        guard !expandedIndices.isEmpty else { return }
+        let share = 1.0 / CGFloat(expandedIndices.count)
+        for i in expandedIndices { panels[i].proportion = share }
         persistProportions()
     }
 
@@ -4498,7 +4707,7 @@ private final class SidebarSeparatorView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func apply(theme: WorkspaceShellTheme) {
-        line.layer?.backgroundColor = theme.shell.subduedBorder.cgColor
+        line.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
     }
 
     override var mouseDownCanMoveWindow: Bool { false }
@@ -4518,6 +4727,31 @@ private final class SidebarSeparatorView: NSView {
         let delta = -(event.locationInWindow.y - dragOrigin)
         dragOrigin = event.locationInWindow.y
         onDrag?(delta)
+    }
+}
+
+// MARK: - WidgetDropZoneView
+
+/// A horizontal highlight band rendered in `SidebarSplitView` during a widget
+/// reorder drag. It sits between panels to show where the dragged widget will land.
+@MainActor
+private final class WidgetDropZoneView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 2
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.shell.selection.withAlphaComponent(0.35).cgColor
+        layer?.borderColor = theme.shell.selection.withAlphaComponent(0.8).cgColor
+        layer?.borderWidth = 1.5
     }
 }
 
@@ -4719,7 +4953,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         splitView.setPanels([
             SidebarSplitView.Panel(
                 view: worktreesWidget,
-                collapsedHeight: GitWorktreesSidebarWidget.collapsedHeight,
+                collapsedHeight: 34,
                 isCollapsed: UserDefaults.standard.bool(forKey: "omux.rightSidebar.worktreesCollapsed"),
                 proportion: worktreesProportion / total,
                 defaultsKey: "omux.rightSidebar.worktreesProportion",
@@ -8621,6 +8855,46 @@ private extension NSMenuItem {
     }
 }
 
+// MARK: - CountBadgeView
+
+/// A small circular badge that shows a number on a filled background.
+/// Background color matches the header text color; number color matches the sidebar background.
+@MainActor
+private final class CountBadgeView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+
+        label.font = .systemFont(ofSize: 9, weight: .bold)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
+            widthAnchor.constraint(greaterThanOrEqualTo: label.widthAnchor, constant: 6),
+            heightAnchor.constraint(equalToConstant: 16),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func render(count: Int, badgeColor: NSColor, numberColor: NSColor) {
+        label.stringValue = "\(count)"
+        layer?.backgroundColor = badgeColor.cgColor
+        label.textColor = numberColor
+    }
+}
+
 // MARK: - CollapsibleSectionHeaderView
 
 /// A reusable collapsible header row used by right-sidebar widget sections.
@@ -8630,6 +8904,7 @@ private extension NSMenuItem {
 private final class CollapsibleSectionHeaderView: NSView {
     private let chevronView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let badgeView = CountBadgeView()
     private var actionButtons: [NSButton] = []
     private var onToggle: (() -> Void)?
     var onDragBegan: (() -> Void)?
@@ -8655,6 +8930,7 @@ private final class CollapsibleSectionHeaderView: NSView {
 
         addSubview(chevronView)
         addSubview(titleLabel)
+        addSubview(badgeView)
 
         NSLayoutConstraint.activate([
             chevronView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -8663,6 +8939,8 @@ private final class CollapsibleSectionHeaderView: NSView {
             chevronView.heightAnchor.constraint(equalToConstant: 14),
             titleLabel.leadingAnchor.constraint(equalTo: chevronView.trailingAnchor, constant: 4),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            badgeView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 5),
+            badgeView.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -8713,6 +8991,7 @@ private final class CollapsibleSectionHeaderView: NSView {
 
     func render(
         title: String,
+        count: Int? = nil,
         isCollapsed: Bool,
         actionButtons: [NSButton],
         theme: WorkspaceShellTheme,
@@ -8726,6 +9005,17 @@ private final class CollapsibleSectionHeaderView: NSView {
         let symbol = isCollapsed ? "chevron.right" : "chevron.down"
         chevronView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         chevronView.contentTintColor = theme.shell.textMuted
+
+        if let count {
+            badgeView.isHidden = false
+            badgeView.render(
+                count: count,
+                badgeColor: theme.shell.textMuted,
+                numberColor: theme.shell.sidebarBackground
+            )
+        } else {
+            badgeView.isHidden = true
+        }
 
         // Remove old action buttons.
         for btn in self.actionButtons {
@@ -8826,8 +9116,6 @@ private final class WorktreeRowButton: NSView {
             pathLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
         ])
 
-        let click = NSClickGestureRecognizer(target: self, action: #selector(rowTapped))
-        addGestureRecognizer(click)
     }
 
     @available(*, unavailable)
@@ -8895,10 +9183,11 @@ private final class WorktreeRowButton: NSView {
         updateBackground()
     }
 
-    @objc private func rowTapped() {
+    override func mouseDown(with event: NSEvent) {
+        // hitTest routes button-area clicks to the button itself, so mouseDown
+        // on the row only fires when the user clicks outside the delete button.
         onNavigate?()
     }
-
     @objc private func deletePressed() {
         onDelete?()
     }
@@ -8917,7 +9206,9 @@ private final class WorktreeRowButton: NSView {
 /// A self-contained widget section for the right sidebar that lists git worktrees.
 @MainActor
 private final class GitWorktreesSidebarWidget: NSView {
-    static let collapsedHeight: CGFloat = 28   // 6 top padding + 22 header
+    static let collapsedHeight: CGFloat = 34   // 6 top padding + 22 header + 6 bottom padding
+
+    override var isFlipped: Bool { true }
 
     let header = CollapsibleSectionHeaderView()
     private let refreshButton = NSButton()
@@ -8983,7 +9274,11 @@ private final class GitWorktreesSidebarWidget: NSView {
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
             scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            {
+                let c = scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+                c.priority = .defaultLow
+                return c
+            }(),
 
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
@@ -9011,8 +9306,10 @@ private final class GitWorktreesSidebarWidget: NSView {
         self.onRefresh = onRefresh
         self.onToggleCollapse = onToggleCollapse
 
+        let count = worktrees.isEmpty ? nil : worktrees.count
         header.render(
             title: "GIT WORKTREES",
+            count: count,
             isCollapsed: isCollapsed,
             actionButtons: [refreshButton, addButton],
             theme: theme,
