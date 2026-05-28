@@ -18,16 +18,12 @@ final class RightSidebarTests: OmuxUITestsBase {
     /// Toggles the **whole** right sidebar via the new Alt+Cmd+B shortcut
     /// ("Toggle Right Sidebar" in the View menu).
     private func toggleRightSidebar() {
-        Thread.sleep(forTimeInterval: 0.4)
         app.typeKey("b", modifierFlags: [.command, .option])
-        Thread.sleep(forTimeInterval: 1.0)
     }
 
     /// Toggles the agent sessions widget via the existing ⇧⌘B shortcut.
     private func toggleAgentSessions() {
-        Thread.sleep(forTimeInterval: 0.4)
         app.typeKey("b", modifierFlags: [.command, .shift])
-        Thread.sleep(forTimeInterval: 1.0)
     }
 
     @discardableResult
@@ -52,14 +48,14 @@ final class RightSidebarTests: OmuxUITestsBase {
     private func ensureSidebarClosed() {
         guard isSidebarOpen else { return }
         toggleRightSidebar()
-        _ = waitForSidebarClosed(timeout: 5)
+        XCTAssertTrue(waitForSidebarClosed(timeout: 5), "Sidebar should have closed")
     }
 
     /// Ensures the sidebar is open before tests that need it.
     private func ensureSidebarOpen() {
         guard !isSidebarOpen else { return }
         toggleRightSidebar()
-        _ = waitForSidebarOpen(timeout: 5)
+        XCTAssertTrue(waitForSidebarOpen(timeout: 5), "Sidebar should have opened")
     }
 
     // MARK: - Toggle Right Sidebar (Alt+Cmd+B)

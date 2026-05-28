@@ -1,5 +1,21 @@
 import Foundation
 
+// MARK: - Helpers
+
+/// A lock-protected data buffer that can be safely captured in @Sendable closures.
+private final class LockedBuffer: @unchecked Sendable {
+    private var data = Data()
+    private let lock = NSLock()
+
+    func append(_ chunk: Data) {
+        lock.withLock { data.append(chunk) }
+    }
+
+    var snapshot: Data {
+        lock.withLock { data }
+    }
+}
+
 // MARK: - Model
 
 struct GitWorktree: Equatable {
@@ -79,13 +95,12 @@ enum GitWorktreeResolver {
         if let fromRef {
             args.append(fromRef)
         }
-        if let output = runGit(args) {
-            return .success(output)
+        let (exitCode, stdout, stderr) = runGitFull(args)
+        if exitCode == 0 {
+            return .success(stdout)
         }
-        if let errorOutput = runGitRaw(["-C", directory, "worktree", "add", "-b", branch, path] + (fromRef.map { [$0] } ?? [])) {
-            return .failure(GitWorktreeError.gitError(errorOutput))
-        }
-        return .failure(GitWorktreeError.gitError("git worktree add failed"))
+        let message = stderr.isEmpty ? (stdout.isEmpty ? "git worktree add failed" : stdout) : stderr
+        return .failure(GitWorktreeError.gitError(message))
     }
 
     // MARK: Remove worktree
@@ -114,6 +129,49 @@ enum GitWorktreeResolver {
 
     // MARK: Private git runner
 
+    /// Runs git once, returns (terminationStatus, stdout, stderr) with async pipe draining
+    /// to avoid deadlock when output exceeds the OS pipe buffer.
+    private static func runGitFull(_ arguments: [String]) -> (Int32, String, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        let outBuffer = LockedBuffer()
+        let errBuffer = LockedBuffer()
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            outBuffer.append(chunk)
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            errBuffer.append(chunk)
+        }
+        do {
+            let finished = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in finished.signal() }
+            try process.run()
+            finished.wait()
+        } catch {
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            return (-1, "", "")
+        }
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        let outTail = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errTail = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        if !outTail.isEmpty { outBuffer.append(outTail) }
+        if !errTail.isEmpty { errBuffer.append(errTail) }
+        let stdout = String(decoding: outBuffer.snapshot, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = String(decoding: errBuffer.snapshot, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (process.terminationStatus, stdout, stderr)
+    }
+
     private static func runGit(_ arguments: [String]) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -122,39 +180,65 @@ enum GitWorktreeResolver {
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
+        let outBuffer = LockedBuffer()
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            outBuffer.append(chunk)
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { _ in }
         do {
             let finished = DispatchSemaphore(value: 0)
             process.terminationHandler = { _ in finished.signal() }
             try process.run()
             finished.wait()
         } catch {
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
             return nil
         }
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        // Drain any remaining bytes after termination.
+        let tail = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        if !tail.isEmpty { outBuffer.append(tail) }
         guard process.terminationStatus == 0 else { return nil }
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(decoding: data, as: UTF8.self)
+        let output = String(decoding: outBuffer.snapshot, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return output.isEmpty ? nil : output
     }
 
-    /// Runs git but returns stderr on failure.
+    /// Runs git and returns stderr output (used to surface error messages).
     private static func runGitRaw(_ arguments: [String]) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
+        let outputPipe = Pipe()
         let errorPipe = Pipe()
-        process.standardOutput = Pipe()
+        process.standardOutput = outputPipe
         process.standardError = errorPipe
+        let errBuffer = LockedBuffer()
+        outputPipe.fileHandleForReading.readabilityHandler = { _ in }
+        errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            errBuffer.append(chunk)
+        }
         do {
             let finished = DispatchSemaphore(value: 0)
             process.terminationHandler = { _ in finished.signal() }
             try process.run()
             finished.wait()
         } catch {
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
             return nil
         }
-        let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(decoding: data, as: UTF8.self)
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        let tail = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        if !tail.isEmpty { errBuffer.append(tail) }
+        let output = String(decoding: errBuffer.snapshot, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return output.isEmpty ? nil : output
     }

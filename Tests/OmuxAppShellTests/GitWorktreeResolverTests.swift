@@ -45,7 +45,15 @@ final class GitWorktreeResolverTests: XCTestCase {
         process.standardError = pipe
         try process.run()
         process.waitUntilExit()
-        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "GitTestHelper",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed: \(output)"]
+            )
+        }
+        return output
     }
 
     // MARK: - listWorktrees
