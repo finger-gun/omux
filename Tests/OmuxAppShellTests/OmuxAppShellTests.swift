@@ -64,6 +64,21 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    @MainActor
+    private func appDelegateFixture() -> OpenMUXAppDelegate {
+        OpenMUXAppDelegate(
+            preparedConfiguration: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: OmuxWorkspacePathResolver.defaultRootPath,
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            ),
+            pluginMenuContributionProvider: { [] }
+        )
+    }
+
     private func targetPaneID(in response: JSONRPCResponse) -> PaneID? {
         guard case .object(let object)? = response.result,
               case .object(let target)? = object["target"],
@@ -77,7 +92,7 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuUsesScopeShortcutLadder() {
-        let delegate = OpenMUXAppDelegate()
+        let delegate = appDelegateFixture()
         let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(.defaults)
 
@@ -316,7 +331,7 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuReflectsReboundAndUnboundKeybindings() throws {
-        let delegate = OpenMUXAppDelegate()
+        let delegate = appDelegateFixture()
         let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(
             .effective(overrides: [

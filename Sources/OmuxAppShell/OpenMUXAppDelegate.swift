@@ -59,11 +59,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
-    public override init() {
-        self.pluginMenuContributionProvider = {
+    public override convenience init() {
+        self.init(
+            preparedConfiguration: OpenMUXConfigurationCoordinator.prepareInitialState(),
+            pluginMenuContributionProvider: {
+                PluginMenuContributionRegistry().contributions()
+            }
+        )
+    }
+
+    init(
+        preparedConfiguration: OpenMUXPreparedConfiguration,
+        pluginMenuContributionProvider: @escaping () -> [PluginMenuContribution] = {
             PluginMenuContributionRegistry().contributions()
         }
-        let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
+    ) {
+        self.pluginMenuContributionProvider = pluginMenuContributionProvider
         preparedConfiguration.diagnostics.forEach { diagnostic in
             let prefix = diagnostic.severity == .warning ? "warning" : "error"
             fputs("\(prefix): \(diagnostic.message)\n", stderr)
