@@ -30,8 +30,12 @@ class OmuxUITestsBase: XCTestCase {
         MainActor.assumeIsolated {
             let a = XCUIApplication(bundleIdentifier: "dev.fingergun.omux.debug")
             a.launchEnvironment["OMUX_UI_TEST"] = "1"
-            // Prevent the app from loading persisted workspace state during tests.
-            a.launchEnvironment["OMUX_RESET_WORKSPACE"] = "1"
+            // Run against the sandbox fixture so tests have a known, deterministic
+            // workspace state (2 workspaces × 2 tabs × 2-pane split) and never
+            // touch real user data. The sandbox is set up by Scripts/setup-sandbox.sh
+            // which make ui-test runs before launching xcodebuild.
+            a.launchEnvironment["OMUX_HOME"] = "/tmp/omux-sandbox"
+            a.launchEnvironment["OMUX_APP_SUPPORT_DIR"] = "/tmp/omux-sandbox/AppSupport"
             sharedApp = a
             a.launch()
 

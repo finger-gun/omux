@@ -102,6 +102,7 @@ generate-xcodeproj: check-xcodegen
 
 ui-test: generate-xcodeproj build
 	rm -rf .build/ui-test-results.xcresult .build/UITestApp
+	./Scripts/setup-sandbox.sh
 	./Scripts/wrap-app-for-uitest.sh
 	xcodebuild test \
 		-project OpenMUX.xcodeproj \
