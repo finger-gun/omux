@@ -11,6 +11,20 @@ enum TerminalAgentREPLEvent: Equatable {
     case enter
     case newline
     case backspace
+    case left
+    case right
+    case wordLeft
+    case wordRight
+    case lineStart
+    case lineEnd
+    case selectLeft
+    case selectRight
+    case selectWordLeft
+    case selectWordRight
+    case selectLineStart
+    case selectLineEnd
+    case deleteWordBackward
+    case deleteLineBackward
     case up
     case down
     case pageUp
@@ -36,6 +50,15 @@ protocol TerminalAgentREPLDriver {
 }
 
 struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
+    private struct KeyboardModifiers: OptionSet {
+        let rawValue: Int
+
+        static let shift = KeyboardModifiers(rawValue: 1 << 0)
+        static let alt = KeyboardModifiers(rawValue: 1 << 1)
+        static let control = KeyboardModifiers(rawValue: 1 << 2)
+        static let command = KeyboardModifiers(rawValue: 1 << 3)
+    }
+
     private final class DriverState {
         var signalSource: DispatchSourceSignal?
         private let lock = NSLock()
@@ -141,6 +164,10 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
             switch byte {
             case 0x03:
                 return .ctrlC
+            case 0x15:
+                return .deleteLineBackward
+            case 0x17:
+                return .deleteWordBackward
             case 0x0A:
                 return .newline
             case 0x0D:
@@ -214,8 +241,30 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
         guard let second = readByte(timeoutMicroseconds: 50_000) else {
             return .escape
         }
-        guard second == 0x5B else {
-            return .escape
+        if second == 0x4F {
+            guard let third = readByte(timeoutMicroseconds: 50_000) else {
+                return .escape
+            }
+            switch third {
+            case 0x48:
+                return .lineStart
+            case 0x46:
+                return .lineEnd
+            default:
+                return .escape
+            }
+        }
+        if second != 0x5B {
+            switch second {
+            case 0x62:
+                return .wordLeft
+            case 0x66:
+                return .wordRight
+            case 0x7F:
+                return .deleteWordBackward
+            default:
+                return .escape
+            }
         }
 
         var bytes: [UInt8] = []
@@ -245,6 +294,14 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
             return .up
         case 0x42:
             return .down
+        case 0x43:
+            return horizontalEvent(body: String(decoding: bytes.dropLast(), as: UTF8.self), isRight: true)
+        case 0x44:
+            return horizontalEvent(body: String(decoding: bytes.dropLast(), as: UTF8.self), isRight: false)
+        case 0x48:
+            return lineBoundaryEvent(body: String(decoding: bytes.dropLast(), as: UTF8.self), isEnd: false)
+        case 0x46:
+            return lineBoundaryEvent(body: String(decoding: bytes.dropLast(), as: UTF8.self), isEnd: true)
         case 0x7E:
             let body = String(decoding: bytes.dropLast(), as: UTF8.self)
             if body == "5" {
@@ -262,10 +319,74 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
             if body == "13;2" {
                 return .newline
             }
+            if let backspaceEvent = kittyBackspaceEvent(body: body) {
+                return backspaceEvent
+            }
             return .other
         default:
             return .other
         }
+    }
+
+    private static func horizontalEvent(body: String, isRight: Bool) -> TerminalAgentREPLEvent {
+        let modifiers = modifiers(fromCSIParameterBody: body)
+        switch modifiers {
+        case [.shift]:
+            return isRight ? .selectRight : .selectLeft
+        case [.alt]:
+            return isRight ? .wordRight : .wordLeft
+        case [.shift, .alt]:
+            return isRight ? .selectWordRight : .selectWordLeft
+        case [.command]:
+            return isRight ? .lineEnd : .lineStart
+        case [.shift, .command]:
+            return isRight ? .selectLineEnd : .selectLineStart
+        default:
+            return isRight ? .right : .left
+        }
+    }
+
+    private static func lineBoundaryEvent(body: String, isEnd: Bool) -> TerminalAgentREPLEvent {
+        let modifiers = modifiers(fromCSIParameterBody: body)
+        switch modifiers {
+        case [.shift]:
+            return isEnd ? .selectLineEnd : .selectLineStart
+        default:
+            return isEnd ? .lineEnd : .lineStart
+        }
+    }
+
+    private static func kittyBackspaceEvent(body: String) -> TerminalAgentREPLEvent? {
+        let components = body.split(separator: ";", omittingEmptySubsequences: false)
+        guard let keyComponent = components.first,
+              let keyCode = Int(keyComponent),
+              keyCode == 8 || keyCode == 127 else {
+            return nil
+        }
+        let modifierValue = components.dropFirst().first.flatMap { Int($0) } ?? 1
+        let modifiers = modifiers(fromEncodedValue: modifierValue)
+        if modifiers.contains(.command) {
+            return .deleteLineBackward
+        }
+        if modifiers.contains(.control) || modifiers.contains(.alt) {
+            return .deleteWordBackward
+        }
+        return .backspace
+    }
+
+    private static func modifiers(fromCSIParameterBody body: String) -> KeyboardModifiers {
+        guard body.isEmpty == false else {
+            return []
+        }
+        let modifierValue = body.split(separator: ";").last.flatMap { Int($0) } ?? 1
+        return modifiers(fromEncodedValue: modifierValue)
+    }
+
+    private static func modifiers(fromEncodedValue value: Int) -> KeyboardModifiers {
+        guard value > 1 else {
+            return []
+        }
+        return KeyboardModifiers(rawValue: max(0, value - 1))
     }
 
     private func write(_ text: String) {
@@ -402,6 +523,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     private var transcript: [TranscriptEntry] = []
     private var contextTurns: [TranscriptEntry] = []
     private var input = ""
+    private var inputCursorOffset = 0
+    private var inputSelectionAnchorOffset: Int?
     private var stateLabel = "starting"
     private var scrollOffset = 0
     private var shouldExit = false
@@ -492,14 +615,43 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         case .newline:
             insertComposerNewline()
         case .backspace:
-            guard input.isEmpty == false else { return }
-            input.removeLast()
+            deleteCharacterBeforeCursor()
+            clampSlashSelection()
+        case .deleteWordBackward:
+            deleteWordBeforeCursor()
+            clampSlashSelection()
+        case .deleteLineBackward:
+            deleteLineBeforeCursor()
             clampSlashSelection()
         case .enter:
             submitInputIfNeeded()
         case .character(let character):
-            input.append(character)
+            insertCharacterAtCursor(character)
             clampSlashSelection()
+        case .left:
+            moveCursor(to: inputCursorOffset - 1, extendSelection: false)
+        case .right:
+            moveCursor(to: inputCursorOffset + 1, extendSelection: false)
+        case .wordLeft:
+            moveCursor(to: previousWordBoundary(from: inputCursorOffset), extendSelection: false)
+        case .wordRight:
+            moveCursor(to: nextWordBoundary(from: inputCursorOffset), extendSelection: false)
+        case .lineStart:
+            moveCursor(to: currentLineStart(from: inputCursorOffset), extendSelection: false)
+        case .lineEnd:
+            moveCursor(to: currentLineEnd(from: inputCursorOffset), extendSelection: false)
+        case .selectLeft:
+            moveCursor(to: inputCursorOffset - 1, extendSelection: true)
+        case .selectRight:
+            moveCursor(to: inputCursorOffset + 1, extendSelection: true)
+        case .selectWordLeft:
+            moveCursor(to: previousWordBoundary(from: inputCursorOffset), extendSelection: true)
+        case .selectWordRight:
+            moveCursor(to: nextWordBoundary(from: inputCursorOffset), extendSelection: true)
+        case .selectLineStart:
+            moveCursor(to: currentLineStart(from: inputCursorOffset), extendSelection: true)
+        case .selectLineEnd:
+            moveCursor(to: currentLineEnd(from: inputCursorOffset), extendSelection: true)
         case .up:
             if updateSlashSelection(delta: -1) == false {
                 scrollOffset += 1
@@ -530,6 +682,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             promptText = selectedSlashCommand
         }
         input = ""
+        inputCursorOffset = 0
+        inputSelectionAnchorOffset = nil
         slashSelectionIndex = 0
 
         if trimmed.hasPrefix("/") {
@@ -592,7 +746,148 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         if input.isEmpty {
             return
         }
-        input.append("\n")
+        insertCharacterAtCursor("\n")
+    }
+
+    private func insertCharacterAtCursor(_ character: Character) {
+        _ = replaceSelectionIfNeeded(with: "")
+        let index = input.index(input.startIndex, offsetBy: min(inputCursorOffset, input.count))
+        input.insert(character, at: index)
+        inputCursorOffset += 1
+        inputSelectionAnchorOffset = nil
+    }
+
+    private func deleteCharacterBeforeCursor() {
+        if replaceSelectionIfNeeded(with: "") {
+            return
+        }
+        guard inputCursorOffset > 0, input.isEmpty == false else { return }
+        let removeIndex = input.index(input.startIndex, offsetBy: inputCursorOffset - 1)
+        input.remove(at: removeIndex)
+        inputCursorOffset -= 1
+        inputSelectionAnchorOffset = nil
+    }
+
+    private func deleteWordBeforeCursor() {
+        if replaceSelectionIfNeeded(with: "") {
+            return
+        }
+        let boundary = previousWordBoundary(from: inputCursorOffset)
+        replaceRange(boundary..<inputCursorOffset, with: "")
+    }
+
+    private func deleteLineBeforeCursor() {
+        if replaceSelectionIfNeeded(with: "") {
+            return
+        }
+        let boundary = currentLineStart(from: inputCursorOffset)
+        replaceRange(boundary..<inputCursorOffset, with: "")
+    }
+
+    private func moveCursor(to newOffset: Int, extendSelection: Bool) {
+        let clamped = max(0, min(input.count, newOffset))
+        if extendSelection {
+            if inputSelectionAnchorOffset == nil {
+                inputSelectionAnchorOffset = inputCursorOffset
+            }
+        } else {
+            inputSelectionAnchorOffset = nil
+        }
+        inputCursorOffset = clamped
+        if inputSelectionAnchorOffset == inputCursorOffset {
+            inputSelectionAnchorOffset = nil
+        }
+    }
+
+    private func replaceSelectionIfNeeded(with replacement: String) -> Bool {
+        guard let range = selectedInputRange() else {
+            return false
+        }
+        replaceRange(range, with: replacement)
+        return true
+    }
+
+    private func replaceRange(_ range: Range<Int>, with replacement: String) {
+        guard range.lowerBound <= range.upperBound else { return }
+        let lowerIndex = input.index(input.startIndex, offsetBy: range.lowerBound)
+        let upperIndex = input.index(input.startIndex, offsetBy: range.upperBound)
+        input.replaceSubrange(lowerIndex..<upperIndex, with: replacement)
+        inputCursorOffset = range.lowerBound + replacement.count
+        inputSelectionAnchorOffset = nil
+    }
+
+    private func selectedInputRange() -> Range<Int>? {
+        guard let inputSelectionAnchorOffset,
+              inputSelectionAnchorOffset != inputCursorOffset else {
+            return nil
+        }
+        return min(inputSelectionAnchorOffset, inputCursorOffset)..<max(inputSelectionAnchorOffset, inputCursorOffset)
+    }
+
+    private func previousWordBoundary(from offset: Int) -> Int {
+        let characters = Array(input)
+        var index = max(0, min(offset, characters.count))
+        while index > 0, characters[index - 1].isWhitespace {
+            index -= 1
+        }
+        guard index > 0 else { return 0 }
+        if isWordCharacter(characters[index - 1]) {
+            while index > 0, isWordCharacter(characters[index - 1]) {
+                index -= 1
+            }
+            return index
+        }
+        while index > 0,
+              characters[index - 1].isWhitespace == false,
+              isWordCharacter(characters[index - 1]) == false {
+            index -= 1
+        }
+        return index
+    }
+
+    private func nextWordBoundary(from offset: Int) -> Int {
+        let characters = Array(input)
+        var index = max(0, min(offset, characters.count))
+        while index < characters.count, characters[index].isWhitespace {
+            index += 1
+        }
+        guard index < characters.count else { return characters.count }
+        if isWordCharacter(characters[index]) {
+            while index < characters.count, isWordCharacter(characters[index]) {
+                index += 1
+            }
+            return index
+        }
+        while index < characters.count,
+              characters[index].isWhitespace == false,
+              isWordCharacter(characters[index]) == false {
+            index += 1
+        }
+        return index
+    }
+
+    private func currentLineStart(from offset: Int) -> Int {
+        let characters = Array(input)
+        var index = max(0, min(offset, characters.count))
+        while index > 0, characters[index - 1] != "\n" {
+            index -= 1
+        }
+        return index
+    }
+
+    private func currentLineEnd(from offset: Int) -> Int {
+        let characters = Array(input)
+        var index = max(0, min(offset, characters.count))
+        while index < characters.count, characters[index] != "\n" {
+            index += 1
+        }
+        return index
+    }
+
+    private func isWordCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
     }
 
     private func runSlashCommand(_ command: String) {
@@ -606,7 +901,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         )
         switch command {
         case "/help":
-            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /compact /handoff /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Up/Down to scroll.")
+            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /compact /handoff /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Left/Right plus Option/Command modifiers to edit input, Up/Down to scroll.")
         case "/clear":
             transcript.removeAll()
             addEntry(kind: .note, text: "Cleared visible transcript. Session context is still active.")
@@ -893,15 +1188,15 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
     private func composerLines(width: Int, styled: Bool, slashOverlay: SlashOverlayState?) -> [String] {
         let innerWidth = max(16, width - 12)
         let placeholder = "Write a request. Enter sends, Shift-Enter or Ctrl-J adds a newline."
-        let composedText = input.isEmpty ? placeholder : input
+        let composedText = input.isEmpty ? "▌ \(placeholder)" : inputDisplayText()
         let wrappedInput = wrapLine(
             composedText,
             width: innerWidth,
             continuationPrefix: ""
         )
-        let visibleInput = Array(wrappedInput.suffix(2))
+        let visibleInput = visibleComposerInputLines(wrappedInput)
         let title = toned("compose", tone: .lavender, styled: styled)
-        let controls = fit("enter send   shift-enter newline   / commands", width: max(1, innerWidth - 12))
+        let controls = fit("enter send   shift-enter newline   ←/→ edit   opt/cmd nav   / commands", width: max(1, innerWidth - 12))
         let top = panelLine(
             lead: rail(tone: .accent, styled: styled),
             content: title + "  " + toned(controls, tone: .muted, styled: styled),
@@ -910,7 +1205,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         )
 
         let inputLines = visibleInput.enumerated().map { index, line in
-            let prefix = index == 0 ? "▌ " : "  "
+            let prefix = "  "
             let tone: Tone = input.isEmpty ? .muted : .strong
             return panelLine(
                 lead: rail(tone: .accent, styled: styled),
@@ -937,6 +1232,25 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
             + [top]
             + normalizedInputLines
             + [backgroundFill(width: width, styled: styled)]
+    }
+
+    private func inputDisplayText() -> String {
+        let offset = min(inputCursorOffset, input.count)
+        let index = input.index(input.startIndex, offsetBy: offset)
+        var rendered = input
+        rendered.insert("▌", at: index)
+        return rendered
+    }
+
+    private func visibleComposerInputLines(_ wrappedInput: [String]) -> [String] {
+        guard wrappedInput.count > 2 else {
+            return wrappedInput
+        }
+        if let cursorLine = wrappedInput.firstIndex(where: { $0.contains("▌") }) {
+            let start = min(max(0, cursorLine), max(0, wrappedInput.count - 2))
+            return Array(wrappedInput[start..<min(wrappedInput.count, start + 2)])
+        }
+        return Array(wrappedInput.suffix(2))
     }
 
     private func scrollSummary(lineCount: Int, visibleRows: Int) -> String {

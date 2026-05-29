@@ -12,7 +12,7 @@ final class OmuxCLITests: XCTestCase {
     private final class FakeAgentGenerator: OmuxAgentGenerating {
         var result: Result<String, Error>
         var streamedChunks: [String]
-        private(set) var requests: [(prompt: String, systemInstruction: String?, hostContext: String, workingDirectoryURL: URL)] = []
+        private(set) var requests: [(prompt: String, systemInstruction: String?, hostContext: String, agentConfiguration: OmuxConfigAgent, workingDirectoryURL: URL)] = []
 
         init(
             result: Result<String, Error> = .success("done"),
@@ -32,8 +32,7 @@ final class OmuxCLITests: XCTestCase {
             onVerbose: (@Sendable (String) -> Void)?,
             onPartial: @escaping (String) -> Void
         ) async throws -> String {
-            _ = agentConfiguration
-            requests.append((prompt: prompt, systemInstruction: systemInstruction, hostContext: hostContext, workingDirectoryURL: workingDirectoryURL))
+            requests.append((prompt: prompt, systemInstruction: systemInstruction, hostContext: hostContext, agentConfiguration: agentConfiguration, workingDirectoryURL: workingDirectoryURL))
             for chunk in streamedChunks {
                 onPartial(chunk)
             }
@@ -269,6 +268,46 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertTrue(generator.requests.first?.hostContext.contains("agent.fileReadScope: any-readable-path") == true)
     }
 
+    func testAgentCommandParsesEnabledToolsAllowList() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--enabledTools=agenttools.webpage,read_file", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.agentConfiguration.enabledTools, ["agenttools.webpage", "read_file"])
+    }
+
+    func testAgentCommandParsesEnabledToolsNone() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--enabled-tools", "none", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.agentConfiguration.enabledTools, [])
+    }
+
     func testAgentCommandWithoutPromptRunsREPLWhenTTYAvailable() {
         var replRequests: [OmuxAgentREPLRequest] = []
         let command = OmuxCLICommand(
@@ -338,7 +377,7 @@ final class OmuxCLITests: XCTestCase {
         let exitCode = command.run(arguments: ["omux", "agent", "hello"])
 
         XCTAssertEqual(exitCode, 1)
-        XCTAssertEqual(output, ["usage: omux agent [--verbose] [--allow-read-anywhere] [--system <text>] [-p|--prompt <text>]"])
+        XCTAssertEqual(output, ["usage: omux agent [--verbose] [--allow-read-anywhere] [--enabled-tools <names>|--enabledTools=<names>] [--system <text>] [-p|--prompt <text>]"])
     }
 
     func testAgentCommandInjectsFocusedOpenMUXContextFromEnvironmentAndHistory() throws {
@@ -648,6 +687,51 @@ final class OmuxCLITests: XCTestCase {
             pluginsDirectoryURL: plugins
         )
         XCTAssertTrue(disabledTools.isEmpty)
+    }
+
+    func testAgentToolAllowListPredicateHonorsExactNamesAndPluginProviders() {
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent()
+            )
+        )
+        XCTAssertFalse(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent(enabledTools: [])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent(enabledTools: ["read_file"])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["lookup"])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["lookup.find-docs"])
+            )
+        )
+        XCTAssertFalse(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["read_file"])
+            )
+        )
     }
 
     func testExternalAgentToolExecutionPassesJSONPayloadAndReadsJSONResponse() async throws {

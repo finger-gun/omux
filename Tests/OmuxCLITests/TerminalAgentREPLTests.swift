@@ -118,8 +118,24 @@ final class TerminalAgentREPLTests: XCTestCase {
     func testCSIArrowAndPagingParsingStillWorks() {
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x41]), .up)
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x42]), .down)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x43]), .right)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x44]), .left)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;3D".utf8)), .wordLeft)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;3C".utf8)), .wordRight)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;9D".utf8)), .lineStart)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;9C".utf8)), .lineEnd)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;2D".utf8)), .selectLeft)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;2C".utf8)), .selectRight)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;4D".utf8)), .selectWordLeft)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;4C".utf8)), .selectWordRight)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;10D".utf8)), .selectLineStart)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("1;10C".utf8)), .selectLineEnd)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x48]), .lineStart)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI([0x46]), .lineEnd)
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("5~".utf8)), .pageUp)
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("6~".utf8)), .pageDown)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("127;5u".utf8)), .deleteWordBackward)
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("127;9u".utf8)), .deleteLineBackward)
     }
 
     func testResizeEventTriggersImmediateRerender() {
@@ -207,6 +223,130 @@ final class TerminalAgentREPLTests: XCTestCase {
 
         XCTAssertEqual(runner.run(), 0)
         XCTAssertEqual(session.sentPrompts, ["  hello\nworld  "])
+    }
+
+    func testComposerSupportsCursorEditingWithinInput() {
+        let session = FakeSession()
+        session.response = "done"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [.character("a"), .character("c"), .left, .character("b"), .enter, .escape])
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.sentPrompts, ["abc"])
+    }
+
+    func testComposerRendersCursorAtCurrentInputPosition() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [.character("a"), .character("b"), .left, .escape], size: .init(rows: 16, columns: 80))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("a▌b"))
+    }
+
+    func testComposerSupportsWordAndLineNavigationEditing() {
+        let session = FakeSession()
+        session.response = "done"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [
+            .character("f"), .character("o"), .character("o"),
+            .character(" "), .character("b"), .character("a"), .character("r"),
+            .wordLeft, .character("X"), .lineStart, .character(">"), .lineEnd, .character("<"),
+            .enter, .escape
+        ])
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.sentPrompts, [">foo Xbar<"])
+    }
+
+    func testComposerSupportsWordAndLineDeletion() {
+        let session = FakeSession()
+        session.response = "done"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [
+            .character("a"), .character("l"), .character("p"), .character("h"), .character("a"),
+            .character(" "), .character("b"), .character("e"), .character("t"), .character("a"),
+            .deleteWordBackward,
+            .character("g"), .character("a"), .character("m"), .character("m"), .character("a"),
+            .deleteLineBackward,
+            .character("o"), .character("k"),
+            .enter, .escape
+        ])
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.sentPrompts, ["ok"])
+    }
+
+    func testComposerSupportsShiftSelectionReplacement() {
+        let session = FakeSession()
+        session.response = "done"
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [
+            .character("h"), .character("e"), .character("l"), .character("l"), .character("o"),
+            .lineStart, .selectWordRight, .character("H"), .enter, .escape
+        ])
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertEqual(session.sentPrompts, ["H"])
+    }
+
+    func testComposerKeepsCursorVisibleDuringKeyboardSelection() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: [.character("t"), .character("e"), .character("s"), .character("t"), .lineStart, .selectWordRight, .escape], size: .init(rows: 16, columns: 80))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("test▌") || driver.renderedText.contains("▌test"))
+        XCTAssertFalse(driver.renderedText.contains("["))
+        XCTAssertFalse(driver.renderedText.contains("]"))
     }
 
     func testStyledRenderKeepsFooterStatusAndPathVisible() {

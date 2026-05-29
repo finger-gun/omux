@@ -1643,6 +1643,23 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         )
     }
 
+    static func isToolEnabledByInvocationAllowList(
+        toolName: String,
+        providerName: String?,
+        configuration: OmuxConfigAgent
+    ) -> Bool {
+        guard let enabledTools = configuration.enabledTools else {
+            return true
+        }
+        if enabledTools.contains(toolName) {
+            return true
+        }
+        if let providerName, enabledTools.contains(providerName) {
+            return true
+        }
+        return false
+    }
+
     #if canImport(FoundationModels)
     @available(macOS 26.0, *)
     static func requireAvailableModel(
@@ -1662,31 +1679,45 @@ struct OmuxSystemAgentGenerator: OmuxAgentGenerating {
         access: OmuxAgentWorkspaceAccess,
         configuration: OmuxConfigAgent
     ) -> [any Tool] {
-        var tools: [any Tool] = []
+        var tools: [(tool: any Tool, provider: String?)] = []
         if configuration.tools.readTerminalHistory {
-            tools.append(OmuxReadTerminalHistoryTool(access: access))
+            tools.append((OmuxReadTerminalHistoryTool(access: access), nil))
         }
         if configuration.tools.listDirectory {
-            tools.append(OmuxListDirectoryTool(access: access))
+            tools.append((OmuxListDirectoryTool(access: access), nil))
         }
         if configuration.tools.runOmuxCLI {
-            tools.append(OmuxRunCLICommandTool(access: access))
+            tools.append((OmuxRunCLICommandTool(access: access), nil))
         }
         if configuration.tools.readFile {
-            tools.append(OmuxReadFileTool(access: access))
+            tools.append((OmuxReadFileTool(access: access), nil))
         }
         if configuration.tools.grepFiles {
-            tools.append(OmuxGrepTool(access: access))
+            tools.append((OmuxGrepTool(access: access), nil))
         }
         if configuration.skillsEnabled && configuration.tools.listSkills {
-            tools.append(OmuxListSkillsTool(access: access))
+            tools.append((OmuxListSkillsTool(access: access), nil))
         }
         if configuration.skillsEnabled && configuration.tools.readSkill {
-            tools.append(OmuxReadSkillTool(access: access))
+            tools.append((OmuxReadSkillTool(access: access), nil))
         }
         let externalTools = OmuxExternalAgentToolCatalog.discover(configuration: configuration, fileManager: access.fileManager)
-        tools.append(contentsOf: externalTools.map { OmuxExternalAgentPluginTool(access: access, tool: $0) })
-        return tools
+        tools.append(contentsOf: externalTools.map { externalTool in
+            (OmuxExternalAgentPluginTool(access: access, tool: externalTool), externalTool.pluginCommand)
+        })
+        guard configuration.enabledTools != nil else {
+            return tools.map(\.tool)
+        }
+        return tools.compactMap { candidate in
+            if isToolEnabledByInvocationAllowList(
+                toolName: candidate.tool.name,
+                providerName: candidate.provider,
+                configuration: configuration
+            ) {
+                return candidate.tool
+            }
+            return nil
+        }
     }
     #endif
 }

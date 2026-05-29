@@ -321,6 +321,15 @@ Repo-local skills live under `.agents/skills/*/SKILL.md` relative to the current
 
 Installed manifest plugins can also contribute custom agent tools. Those plugin-defined tools are available by default, use the host timeout from `external_tool_timeout_seconds`, and can be disabled per plugin under `[agent.external.<plugin-command>]`.
 
+For a single invocation, `omux agent` can further narrow the registered tools without changing config:
+
+```sh
+omux agent --enabled-tools read_file,agenttools.webpage -p "..."
+omux agent --enabled-tools none -p "..."
+```
+
+The allow-list matches built-in tool names such as `read_file`, exact plugin tool names such as `agenttools.webpage.read-url`, and plugin provider names such as `agenttools.webpage`. When this flag is absent, config decides which tools are registered.
+
 Per-plugin overrides live under `[agent.external.<plugin-command>]`:
 
 | Key | Type | Meaning |

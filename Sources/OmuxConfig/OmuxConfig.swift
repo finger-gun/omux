@@ -430,19 +430,22 @@ public struct OmuxConfigAgent: Equatable, Sendable {
     public let externalToolTimeoutSeconds: Int
     public let tools: Tools
     public let externalPlugins: [String: ExternalPlugin]
+    public let enabledTools: Set<String>?
 
     public init(
         enabled: Bool = true,
         skillsEnabled: Bool = true,
         externalToolTimeoutSeconds: Int = Self.defaultExternalToolTimeoutSeconds,
         tools: Tools = Tools(),
-        externalPlugins: [String: ExternalPlugin] = [:]
+        externalPlugins: [String: ExternalPlugin] = [:],
+        enabledTools: Set<String>? = nil
     ) {
         self.enabled = enabled
         self.skillsEnabled = skillsEnabled
         self.externalToolTimeoutSeconds = max(externalToolTimeoutSeconds, 1)
         self.tools = tools
         self.externalPlugins = externalPlugins
+        self.enabledTools = enabledTools
     }
 }
 
@@ -2364,7 +2367,8 @@ public struct OmuxConfigLoader {
                     listSkills: agentListSkills,
                     readSkill: agentReadSkill
                 ),
-                externalPlugins: agentExternalPlugins
+                externalPlugins: agentExternalPlugins,
+                enabledTools: config.agent.enabledTools
             ),
             agentSessions: OmuxConfigAgentSessions(
                 enabled: agentSessionsEnabled,

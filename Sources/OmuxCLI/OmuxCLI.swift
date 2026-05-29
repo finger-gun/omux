@@ -638,7 +638,7 @@ public struct OmuxCLICommand {
     }
 
     public static let usage = OpenMUXCLICommandCatalog.usage
-    private static let agentUsage = "usage: omux agent [--verbose] [--allow-read-anywhere] [--system <text>] [-p|--prompt <text>]"
+    private static let agentUsage = "usage: omux agent [--verbose] [--allow-read-anywhere] [--enabled-tools <names>|--enabledTools=<names>] [--system <text>] [-p|--prompt <text>]"
 
     private func runAgentCommand(arguments: [String]) -> Int32 {
         guard let request = parseAgentRequest(arguments) else {
@@ -652,6 +652,19 @@ public struct OmuxCLICommand {
             return 1
         }
         let agentConfiguration = configResult.config.agent
+        let effectiveAgentConfiguration: OmuxConfigAgent
+        if let enabledTools = request.enabledTools {
+            effectiveAgentConfiguration = OmuxConfigAgent(
+                enabled: agentConfiguration.enabled,
+                skillsEnabled: agentConfiguration.skillsEnabled,
+                externalToolTimeoutSeconds: agentConfiguration.externalToolTimeoutSeconds,
+                tools: agentConfiguration.tools,
+                externalPlugins: agentConfiguration.externalPlugins,
+                enabledTools: enabledTools
+            )
+        } else {
+            effectiveAgentConfiguration = agentConfiguration
+        }
         guard agentConfiguration.enabled else {
             writeLine("omux agent is disabled by [agent].enabled = false in ~/.omux/config.toml.")
             return 1
@@ -684,7 +697,7 @@ public struct OmuxCLICommand {
                     prompt: prompt
                 ),
                 hostContext: hostContext.promptBlock,
-                agentConfiguration: agentConfiguration,
+                agentConfiguration: effectiveAgentConfiguration,
                 observationClient: observationClient,
                 observationContext: observationContext,
                 workingDirectoryURL: workingDirectoryURL
@@ -704,7 +717,7 @@ public struct OmuxCLICommand {
                 systemInstruction: request.systemInstruction,
                 verbose: request.verbose,
                 allowReadAnywhere: request.allowReadAnywhere,
-                agentConfiguration: agentConfiguration
+                agentConfiguration: effectiveAgentConfiguration
             ),
             hostContext.promptBlock,
             hostContext,
@@ -720,6 +733,7 @@ public struct OmuxCLICommand {
         var systemInstruction: String?
         var verbose: Bool
         var allowReadAnywhere: Bool
+        var enabledTools: Set<String>?
         var prompt: String?
     }
 
@@ -728,9 +742,28 @@ public struct OmuxCLICommand {
         var systemInstruction: String?
         var verbose = false
         var allowReadAnywhere = false
+        var enabledTools: Set<String>?
         var prompt: String?
 
         while let argument = remaining.first {
+            if let value = Self.agentOptionValue(argument, longName: "--enabled-tools") ?? Self.agentOptionValue(argument, longName: "--enabledTools") {
+                guard let parsed = Self.parseEnabledTools(value) else {
+                    return nil
+                }
+                enabledTools = parsed
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "--enabled-tools" || argument == "--enabledTools" {
+                remaining = remaining.dropFirst()
+                guard let value = remaining.first,
+                      let parsed = Self.parseEnabledTools(value) else {
+                    return nil
+                }
+                enabledTools = parsed
+                remaining = remaining.dropFirst()
+                continue
+            }
             if argument == "--verbose" {
                 verbose = true
                 remaining = remaining.dropFirst()
@@ -772,8 +805,31 @@ public struct OmuxCLICommand {
             systemInstruction: systemInstruction,
             verbose: verbose,
             allowReadAnywhere: allowReadAnywhere,
+            enabledTools: enabledTools,
             prompt: prompt
         )
+    }
+
+    private static func agentOptionValue(_ argument: String, longName: String) -> String? {
+        let prefix = longName + "="
+        guard argument.hasPrefix(prefix) else {
+            return nil
+        }
+        return String(argument.dropFirst(prefix.count))
+    }
+
+    private static func parseEnabledTools(_ rawValue: String) -> Set<String>? {
+        let names = rawValue
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard names.isEmpty == false,
+              names.allSatisfy({ $0.isEmpty == false }) else {
+            return nil
+        }
+        if names.count == 1, names[0].lowercased() == "none" {
+            return []
+        }
+        return Set(names)
     }
 
     private func resolveCLIPath(_ path: String, relativeTo baseURL: URL) -> String {
