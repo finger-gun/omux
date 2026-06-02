@@ -234,9 +234,7 @@ public struct OmuxCLICommand {
             isAgentREPLAvailable: TerminalAgentREPLDefaultDriver().isAvailable,
             runAgentREPL: { request, hostContext, hostMetadata, workingDirectoryURL in
                 OmuxAgentREPLRunner(
-                    writeErrorLine: {
-                        FileHandle.standardError.write(Data(($0 + "\n").utf8))
-                    },
+                    writeErrorLine: writeErrorLine,
                     request: request,
                     hostContext: hostContext,
                     hostMetadata: hostMetadata,

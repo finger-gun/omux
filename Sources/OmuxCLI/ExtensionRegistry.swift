@@ -355,7 +355,8 @@ struct OmuxExtensionCatalogClient {
         }
         if kind == .plugin {
             for tableName in document.tableNames.filter({ $0.hasPrefix("agent-tools.") }).sorted() {
-                let toolID = String(tableName.dropFirst("agent-tools.".count))
+                let rawToolID = String(tableName.dropFirst("agent-tools.".count))
+                let toolID = rawToolID.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
                 guard OmuxExtensionPackageValidator.validatePackageID(toolID) else {
                     throw OmuxExtensionRegistryError.invalidManifest("invalid agent tool id '\(toolID)'")
                 }

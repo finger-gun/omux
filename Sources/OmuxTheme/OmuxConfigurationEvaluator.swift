@@ -20,6 +20,8 @@ public struct OmuxConfigurationEvaluation: Sendable {
         self.config = config
         self.compilerOutput = compilerOutput
         self.diagnostics = diagnostics
+        // fallbackTheme is only used when compilerOutput is nil because
+        // compiled themes take precedence over the provided theme parameter.
         self.fallbackTheme = compilerOutput == nil ? theme : nil
     }
 

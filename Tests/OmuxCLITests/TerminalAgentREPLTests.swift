@@ -478,7 +478,6 @@ final class TerminalAgentREPLTests: XCTestCase {
 
     func testToolsCommandReflectsConfigFilteredTools() {
         let session = FakeSession()
-        session.toolNames = ["list_directory", "read_file"]
         let driver = FakeDriver(events: .text("/tools\n/exit\n"))
         let runner = OmuxAgentREPLRunner(
             writeErrorLine: { _ in },
@@ -495,8 +494,8 @@ final class TerminalAgentREPLTests: XCTestCase {
                         runOmuxCLI: false,
                         readFile: true,
                         grepFiles: false,
-                        listSkills: true,
-                        readSkill: true
+                        listSkills: false,
+                        readSkill: false
                     )
                 )
             ),
@@ -523,6 +522,19 @@ private final class FakeSession: OmuxAgentChatSessioning {
     var toolEvents: [OmuxAgentToolEvent] = []
     var toolEventHandler: (@Sendable (OmuxAgentToolEvent) -> Void)?
     private(set) var tokenCountCalls = 0
+
+    func configureFromAgentConfiguration(_ configuration: OmuxConfigAgent) {
+        var names: [String] = []
+        let tools = configuration.tools
+        if tools.readTerminalHistory { names.append("read_terminal_history") }
+        if tools.listDirectory { names.append("list_directory") }
+        if tools.runOmuxCLI { names.append("run_omux_cli") }
+        if tools.readFile { names.append("read_file") }
+        if tools.grepFiles { names.append("grep_files") }
+        if tools.listSkills { names.append("list_skills") }
+        if tools.readSkill { names.append("read_skill") }
+        toolNames = names
+    }
 
     func send(prompt: String, onPartial: @escaping @Sendable (String) -> Void) async throws -> String {
         sentPrompts.append(prompt)
@@ -582,10 +594,10 @@ private final class FakeFactory: OmuxAgentChatSessionFactorying {
     ) throws -> AnyOmuxAgentChatSession {
         _ = systemInstruction
         _ = hostContext
-        _ = agentConfiguration
         _ = workingDirectoryURL
         _ = allowReadAnywhere
         _ = onVerbose
+        session.configureFromAgentConfiguration(agentConfiguration)
         session.toolEventHandler = onToolEvent
         makeCount += 1
         return AnyOmuxAgentChatSession(session)

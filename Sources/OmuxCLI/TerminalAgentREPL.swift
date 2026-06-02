@@ -337,6 +337,10 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
             return isRight ? .wordRight : .wordLeft
         case [.shift, .alt]:
             return isRight ? .selectWordRight : .selectWordLeft
+        case [.control]:
+            return isRight ? .wordRight : .wordLeft
+        case [.shift, .control]:
+            return isRight ? .selectWordRight : .selectWordLeft
         case [.command]:
             return isRight ? .lineEnd : .lineStart
         case [.shift, .command]:

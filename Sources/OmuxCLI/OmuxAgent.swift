@@ -1056,8 +1056,23 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
 
         let stdoutHandle = stdout.fileHandleForReading
         let stderrHandle = stderr.fileHandleForReading
-        let stdoutTask = Task.detached { stdoutHandle.readDataToEndOfFile() }
-        let stderrTask = Task.detached { stderrHandle.readDataToEndOfFile() }
+        let externalToolOutputByteLimit = 10_000_000
+        let stdoutTask = Task.detached {
+            var data = Data()
+            while data.count < externalToolOutputByteLimit {
+                guard let chunk = try? stdoutHandle.read(upToCount: 65_536), chunk.isEmpty == false else { break }
+                data.append(chunk)
+            }
+            return data
+        }
+        let stderrTask = Task.detached {
+            var data = Data()
+            while data.count < externalToolOutputByteLimit {
+                guard let chunk = try? stderrHandle.read(upToCount: 65_536), chunk.isEmpty == false else { break }
+                data.append(chunk)
+            }
+            return data
+        }
 
         let startedAt = DispatchTime.now().uptimeNanoseconds
         while process.isRunning {
@@ -1156,7 +1171,7 @@ final class OmuxAgentWorkspaceAccess: @unchecked Sendable {
     }
 
     private func externalToolEnvironment(for tool: OmuxExternalAgentTool) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+        var environment: [String: String] = [:]
         environment["OMUX_PLUGIN_COMMAND"] = tool.pluginCommand
         environment["OMUX_PLUGIN_EXECUTABLE"] = tool.executableURL.path
         environment["OMUX_PLUGINS_DIR"] = tool.pluginDirectoryURL.deletingLastPathComponent().path

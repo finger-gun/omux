@@ -161,6 +161,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var skillsEnabled: Bool?
         public var externalToolTimeoutSeconds: Int?
         public var tools: AgentTools?
+        public var externalPlugins: [String: AgentExternalPlugin]?
     }
 
     public struct AgentTools: Codable, Equatable, Sendable {
@@ -171,6 +172,10 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var grepFiles: Bool?
         public var listSkills: Bool?
         public var readSkill: Bool?
+    }
+
+    public struct AgentExternalPlugin: Codable, Equatable, Sendable {
+        public var enabled: Bool?
     }
 
     public struct UI: Codable, Equatable, Sendable {
@@ -304,6 +309,20 @@ public struct OmuxConfigEditor {
         }
 
         let current = currentResult.config
+        if let externalToolTimeout = payload.agent?.externalToolTimeoutSeconds, externalToolTimeout <= 0 {
+            return OmuxConfigApplyResult(
+                applied: false,
+                path: (current.sourceURL ?? OmuxConfigPaths.configFileURL).path,
+                backupPath: nil,
+                diagnostics: [
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "agent.external_tool_timeout_seconds must be greater than 0.",
+                        filePath: jsonFileURL.path
+                    ),
+                ]
+            )
+        }
         let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
         let updated = updatedConfig(from: current, applying: payload, sourceURL: configURL)
         let rendered = OmuxConfigRenderer.render(config: updated)
@@ -419,7 +438,14 @@ public struct OmuxConfigEditor {
                     grepFiles: agentToolsPayload?.grepFiles ?? current.agent.tools.grepFiles,
                     listSkills: agentToolsPayload?.listSkills ?? current.agent.tools.listSkills,
                     readSkill: agentToolsPayload?.readSkill ?? current.agent.tools.readSkill
-                )
+                ),
+                externalPlugins: agentPayload?.externalPlugins.map { extPlugins in
+                    var merged = current.agent.externalPlugins
+                    for (key, value) in extPlugins {
+                        merged[key] = OmuxConfigAgent.ExternalPlugin(enabled: value.enabled ?? merged[key]?.enabled)
+                    }
+                    return merged
+                } ?? current.agent.externalPlugins
             ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
@@ -639,7 +665,7 @@ public enum OmuxConfigRenderer {
                 continue
             }
             lines.append("")
-            lines.append("[agent.external.\(pluginName)]")
+            lines.append("[\(render(.string("agent.external.\(pluginName)")))]")
             lines.append("enabled = \(enabled ? "true" : "false")")
         }
         lines.append("")

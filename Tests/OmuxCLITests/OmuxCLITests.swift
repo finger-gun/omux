@@ -742,14 +742,13 @@ final class OmuxCLITests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let outputURL = root.appendingPathComponent("request.json", isDirectory: false)
+        let pluginScript = plugin.appendingPathComponent("plugin")
         try """
         #!/bin/sh
-        cat > "$OUTPUT_PATH"
+        cat > "\(outputURL.path)"
         printf '{"ok":true,"output":"matched docs"}'
-        """.write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
-        setenv("OUTPUT_PATH", outputURL.path, 1)
-        defer { unsetenv("OUTPUT_PATH") }
+        """.write(to: pluginScript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pluginScript.path)
 
         let tool = OmuxExternalAgentTool(
             pluginID: "lookup",
