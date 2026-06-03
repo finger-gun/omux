@@ -24,6 +24,58 @@ final class TerminalAgentREPLTests: XCTestCase {
         XCTAssertTrue(driver.renderedText.contains("grep_files"))
     }
 
+    func testSkillsSlashCommandListsDiscoveredSkills() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try """
+        ---
+        name: demo
+        description: repo helper
+        ---
+        body
+        """.write(to: root.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("/skills\n/exit\n"), size: .init(rows: 80, columns: 200))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(systemInstruction: nil, verbose: false, allowReadAnywhere: false),
+            hostContext: "Host context:\ncurrentWorkingDirectory: \(root.path)",
+            workingDirectoryURL: root,
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("Skills:"))
+        XCTAssertTrue(driver.renderedText.contains("demo"))
+    }
+
+    func testSkillsSlashCommandReportsDisabledSkills() {
+        let session = FakeSession()
+        let factory = FakeFactory(session: session)
+        let driver = FakeDriver(events: .text("/skills\n/exit\n"))
+        let runner = OmuxAgentREPLRunner(
+            writeErrorLine: { _ in },
+            request: OmuxAgentREPLRequest(
+                systemInstruction: nil,
+                verbose: false,
+                allowReadAnywhere: false,
+                agentConfiguration: OmuxConfigAgent(skillsEnabled: false)
+            ),
+            hostContext: "Host context:\ncurrentWorkingDirectory: /tmp",
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            sessionFactory: factory,
+            driver: driver
+        )
+
+        XCTAssertEqual(runner.run(), 0)
+        XCTAssertTrue(driver.renderedText.contains("Skills are disabled"))
+    }
+
     func testCompactRebuildsSessionAndRequestsSummary() {
         let session = FakeSession()
         session.response = "answer"
@@ -136,6 +188,18 @@ final class TerminalAgentREPLTests: XCTestCase {
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("6~".utf8)), .pageDown)
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("127;5u".utf8)), .deleteWordBackward)
         XCTAssertEqual(TerminalAgentREPLDefaultDriver.parseCSI(Array("127;9u".utf8)), .deleteLineBackward)
+    }
+
+    func testUTF8CharacterDecodingAcceptsCommonMultibyteInput() {
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.decodeUTF8Character(Array("å".utf8)), "å")
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.decodeUTF8Character(Array("ö".utf8)), "ö")
+        XCTAssertEqual(TerminalAgentREPLDefaultDriver.decodeUTF8Character(Array("€".utf8)), "€")
+    }
+
+    func testUTF8CharacterDecodingRejectsInvalidSequences() {
+        XCTAssertNil(TerminalAgentREPLDefaultDriver.decodeUTF8Character([0xC3]))
+        XCTAssertNil(TerminalAgentREPLDefaultDriver.decodeUTF8Character([0xC3, 0x28]))
+        XCTAssertNil(TerminalAgentREPLDefaultDriver.decodeUTF8Character([0x80]))
     }
 
     func testResizeEventTriggersImmediateRerender() {
@@ -443,7 +507,7 @@ final class TerminalAgentREPLTests: XCTestCase {
         )
 
         XCTAssertEqual(runner.run(), 0)
-        XCTAssertTrue(driver.renderedText.contains("/handoff"))
+        XCTAssertTrue(driver.renderedText.contains("/skills"))
         XCTAssertTrue(driver.renderedText.contains("/compact"))
         XCTAssertFalse(driver.renderedText.contains("/help"))
     }

@@ -182,6 +182,9 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
                 }
                 return .character(Character(scalar))
             default:
+                if let character = readUTF8Character(startingWith: byte) {
+                    return .character(character)
+                }
                 return .other
             }
         }
@@ -280,6 +283,26 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
         return Self.parseCSI(bytes)
     }
 
+    private func readUTF8Character(startingWith firstByte: UInt8) -> Character? {
+        var bytes = [firstByte]
+        let expectedLength = Self.expectedUTF8SequenceLength(for: firstByte)
+        guard expectedLength > 1 else {
+            return nil
+        }
+
+        while bytes.count < expectedLength {
+            guard let nextByte = readByte(timeoutMicroseconds: 50_000) else {
+                return nil
+            }
+            guard Self.isUTF8ContinuationByte(nextByte) else {
+                return nil
+            }
+            bytes.append(nextByte)
+        }
+
+        return Self.decodeUTF8Character(bytes)
+    }
+
     private func consumeResizeEvent() -> Bool {
         state.consumeResizeEvent()
     }
@@ -326,6 +349,45 @@ struct TerminalAgentREPLDefaultDriver: TerminalAgentREPLDriver {
         default:
             return .other
         }
+    }
+
+    static func decodeUTF8Character(_ bytes: [UInt8]) -> Character? {
+        guard bytes.isEmpty == false else {
+            return nil
+        }
+        let expectedLength = expectedUTF8SequenceLength(for: bytes[0])
+        guard expectedLength == bytes.count else {
+            return nil
+        }
+        guard bytes.dropFirst().allSatisfy(isUTF8ContinuationByte) else {
+            return nil
+        }
+
+        let decoded = String(decoding: bytes, as: UTF8.self)
+        guard decoded.utf8.count == bytes.count,
+              decoded.contains("\u{FFFD}") == false,
+              let character = decoded.first,
+              decoded.count == 1 else {
+            return nil
+        }
+        return character
+    }
+
+    private static func expectedUTF8SequenceLength(for firstByte: UInt8) -> Int {
+        switch firstByte {
+        case 0xC2...0xDF:
+            return 2
+        case 0xE0...0xEF:
+            return 3
+        case 0xF0...0xF4:
+            return 4
+        default:
+            return 0
+        }
+    }
+
+    private static func isUTF8ContinuationByte(_ byte: UInt8) -> Bool {
+        (byte & 0b1100_0000) == 0b1000_0000
     }
 
     private static func horizontalEvent(body: String, isRight: Bool) -> TerminalAgentREPLEvent {
@@ -418,12 +480,13 @@ struct OmuxAgentREPLRequest {
 }
 
 final class OmuxAgentREPLRunner: @unchecked Sendable {
-    private static let slashCommands = ["/help", "/clear", "/stats", "/tools", "/compact", "/handoff", "/exit"]
+    private static let slashCommands = ["/help", "/clear", "/stats", "/tools", "/skills", "/compact", "/handoff", "/exit"]
     private static let slashCommandDescriptions: [String: String] = [
         "/help": "show repl help",
         "/clear": "clear visible transcript",
         "/stats": "show context and tool stats",
         "/tools": "list available tools",
+        "/skills": "list available skills",
         "/compact": "summarize and rebuild session",
         "/handoff": "write a continuation brief",
         "/exit": "leave the repl"
@@ -905,7 +968,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         )
         switch command {
         case "/help":
-            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /compact /handoff /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Left/Right plus Option/Command modifiers to edit input, Up/Down to scroll.")
+            addEntry(kind: .note, text: "Commands: /help /clear /stats /tools /skills /compact /handoff /exit. Press Enter to send, Shift-Enter or Ctrl-J for a newline, Left/Right plus Option/Command modifiers to edit input, Up/Down to scroll.")
         case "/clear":
             transcript.removeAll()
             addEntry(kind: .note, text: "Cleared visible transcript. Session context is still active.")
@@ -914,6 +977,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         case "/tools":
             let tools = session?.toolNames.joined(separator: ", ") ?? "(unavailable)"
             addEntry(kind: .note, text: "Tools: \(tools)")
+        case "/skills":
+            addEntry(kind: .note, text: skillsText())
         case "/compact":
             compactSession()
         case "/handoff":
@@ -1274,6 +1339,22 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
 
     private func statsText() -> String {
         "Approx carried context ~\(estimateContextTokens()) / \(contextWindowSize()) model tokens, including system prompt, host context, visible chat state, and tool payloads. Last turn ~\(lastTurnApproxTokens) tokens. Tool calls \(toolStats.callCount). Tool output \(formatBytes(toolStats.totalOutputBytes)) total. Last tool: \(toolStats.lastEvent.isEmpty ? "none" : toolStats.lastEvent)."
+    }
+
+    private func skillsText() -> String {
+        guard request.agentConfiguration.skillsEnabled else {
+            return "Skills are disabled by [agent].skills_enabled = false."
+        }
+
+        let skills = OmuxAgentSkillCatalog.discover(workingDirectoryURL: workingDirectoryURL)
+        guard skills.isEmpty == false else {
+            return "Skills: none discovered."
+        }
+
+        let details = skills.map { skill in
+            "\(skill.name) (\(skill.scope.rawValue)): \(skill.description)"
+        }.joined(separator: "; ")
+        return "Skills: \(details)"
     }
 
     private func estimateContextTokens() -> Int {
