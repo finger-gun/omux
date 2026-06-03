@@ -975,8 +975,7 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         case "/stats":
             addEntry(kind: .note, text: statsText())
         case "/tools":
-            let tools = session?.toolNames.joined(separator: ", ") ?? "(unavailable)"
-            addEntry(kind: .note, text: "Tools: \(tools)")
+            addEntry(kind: .note, text: toolsText())
         case "/skills":
             addEntry(kind: .note, text: skillsText())
         case "/compact":
@@ -1341,6 +1340,17 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
         "Approx carried context ~\(estimateContextTokens()) / \(contextWindowSize()) model tokens, including system prompt, host context, visible chat state, and tool payloads. Last turn ~\(lastTurnApproxTokens) tokens. Tool calls \(toolStats.callCount). Tool output \(formatBytes(toolStats.totalOutputBytes)) total. Last tool: \(toolStats.lastEvent.isEmpty ? "none" : toolStats.lastEvent)."
     }
 
+    private func formatList(title: String, items: [String]) -> String {
+        "\(title):\n" + items.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    private func toolsText() -> String {
+        guard let toolNames = session?.toolNames, toolNames.isEmpty == false else {
+            return "Available tools:\n- (unavailable)"
+        }
+        return formatList(title: "Available tools", items: toolNames)
+    }
+
     private func skillsText() -> String {
         guard request.agentConfiguration.skillsEnabled else {
             return "Skills are disabled by [agent].skills_enabled = false."
@@ -1353,8 +1363,8 @@ final class OmuxAgentREPLRunner: @unchecked Sendable {
 
         let details = skills.map { skill in
             "\(skill.name) (\(skill.scope.rawValue)): \(skill.description)"
-        }.joined(separator: "; ")
-        return "Skills: \(details)"
+        }
+        return formatList(title: "Available skills", items: details)
     }
 
     private func estimateContextTokens() -> Int {

@@ -19,7 +19,7 @@ final class TerminalAgentREPLTests: XCTestCase {
 
         XCTAssertEqual(runner.run(), 0)
         XCTAssertEqual(session.sentPrompts, [])
-        XCTAssertTrue(driver.renderedText.contains("Tools:"))
+        XCTAssertTrue(driver.renderedText.contains("Available tools:"))
         XCTAssertTrue(driver.renderedText.contains("read_file"))
         XCTAssertTrue(driver.renderedText.contains("grep_files"))
     }
@@ -50,7 +50,7 @@ final class TerminalAgentREPLTests: XCTestCase {
         )
 
         XCTAssertEqual(runner.run(), 0)
-        XCTAssertTrue(driver.renderedText.contains("Skills:"))
+        XCTAssertTrue(driver.renderedText.contains("Available skills:"))
         XCTAssertTrue(driver.renderedText.contains("demo"))
     }
 
