@@ -706,7 +706,8 @@ final class WorkspaceShellViewController: NSViewController {
         paneID: PaneID,
         row1: String?,
         row2: String?,
-        row3: String?
+        row3: String?,
+        source: String? = nil
     ) -> Bool {
         guard controller.pane(paneID) != nil else {
             return false
@@ -723,11 +724,12 @@ final class WorkspaceShellViewController: NSViewController {
         if let currentWorkspace = controller.activeWorkspace() ?? currentWorkspace {
             update(workspace: currentWorkspace)
         }
+        controller.publishPaneMetadataChange(paneID: paneID, source: source)
         return true
     }
 
     @discardableResult
-    func clearPaneMetadataRows(paneID: PaneID) -> Bool {
+    func clearPaneMetadataRows(paneID: PaneID, source: String? = nil) -> Bool {
         guard controller.pane(paneID) != nil else {
             return false
         }
@@ -735,6 +737,7 @@ final class WorkspaceShellViewController: NSViewController {
         if let currentWorkspace = controller.activeWorkspace() ?? currentWorkspace {
             update(workspace: currentWorkspace)
         }
+        controller.publishPaneMetadataChange(paneID: paneID, source: source)
         return true
     }
 
@@ -1788,7 +1791,7 @@ final class WorkspaceShellViewController: NSViewController {
             }
         }
 
-        let compactRows = resolvedRows.compactMap { value -> String? in
+        let compactRows = resolvedRows.map { value -> String? in
             guard let value else {
                 return nil
             }
@@ -1797,9 +1800,9 @@ final class WorkspaceShellViewController: NSViewController {
         }
 
         return SidebarRowValues(
-            row1: compactRows.indices.contains(0) ? compactRows[0] : nil,
-            row2: compactRows.indices.contains(1) ? compactRows[1] : nil,
-            row3: compactRows.indices.contains(2) ? compactRows[2] : nil
+            row1: compactRows[0],
+            row2: compactRows[1],
+            row3: compactRows[2]
         )
     }
 

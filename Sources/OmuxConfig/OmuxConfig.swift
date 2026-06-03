@@ -386,6 +386,69 @@ public struct OmuxConfigRegistries: Equatable, Sendable {
     }
 }
 
+public struct OmuxConfigAgent: Equatable, Sendable {
+    public static let defaultExternalToolTimeoutSeconds = 120
+
+    public struct ExternalPlugin: Equatable, Sendable {
+        public let enabled: Bool?
+
+        public init(enabled: Bool? = nil) {
+            self.enabled = enabled
+        }
+    }
+
+    public struct Tools: Equatable, Sendable {
+        public let readTerminalHistory: Bool
+        public let listDirectory: Bool
+        public let runOmuxCLI: Bool
+        public let readFile: Bool
+        public let grepFiles: Bool
+        public let listSkills: Bool
+        public let readSkill: Bool
+
+        public init(
+            readTerminalHistory: Bool = true,
+            listDirectory: Bool = true,
+            runOmuxCLI: Bool = true,
+            readFile: Bool = true,
+            grepFiles: Bool = true,
+            listSkills: Bool = true,
+            readSkill: Bool = true
+        ) {
+            self.readTerminalHistory = readTerminalHistory
+            self.listDirectory = listDirectory
+            self.runOmuxCLI = runOmuxCLI
+            self.readFile = readFile
+            self.grepFiles = grepFiles
+            self.listSkills = listSkills
+            self.readSkill = readSkill
+        }
+    }
+
+    public let enabled: Bool
+    public let skillsEnabled: Bool
+    public let externalToolTimeoutSeconds: Int
+    public let tools: Tools
+    public let externalPlugins: [String: ExternalPlugin]
+    public let enabledTools: Set<String>?
+
+    public init(
+        enabled: Bool = true,
+        skillsEnabled: Bool = true,
+        externalToolTimeoutSeconds: Int = Self.defaultExternalToolTimeoutSeconds,
+        tools: Tools = Tools(),
+        externalPlugins: [String: ExternalPlugin] = [:],
+        enabledTools: Set<String>? = nil
+    ) {
+        self.enabled = enabled
+        self.skillsEnabled = skillsEnabled
+        self.externalToolTimeoutSeconds = max(externalToolTimeoutSeconds, 1)
+        self.tools = tools
+        self.externalPlugins = externalPlugins
+        self.enabledTools = enabledTools
+    }
+}
+
 public struct OmuxConfigAgentSessions: Equatable, Sendable {
     public struct Agent: Equatable, Sendable {
         public let enabled: Bool?
@@ -461,6 +524,7 @@ public struct OmuxConfig: Equatable, Sendable {
     public let terminal: OmuxConfigTerminal
     public let workspace: OmuxConfigWorkspace
     public let ui: OmuxConfigUI
+    public let agent: OmuxConfigAgent
     public let agentSessions: OmuxConfigAgentSessions
     public let plugins: OmuxConfigPlugins
     public let registries: OmuxConfigRegistries
@@ -475,6 +539,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal,
         workspace: OmuxConfigWorkspace = OmuxConfigWorkspace(),
         ui: OmuxConfigUI = OmuxConfigUI(),
+        agent: OmuxConfigAgent = OmuxConfigAgent(),
         agentSessions: OmuxConfigAgentSessions = OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins = OmuxConfigPlugins(),
         registries: OmuxConfigRegistries = OmuxConfigRegistries(),
@@ -488,6 +553,7 @@ public struct OmuxConfig: Equatable, Sendable {
         self.terminal = terminal
         self.workspace = workspace
         self.ui = ui
+        self.agent = agent
         self.agentSessions = agentSessions
         self.plugins = plugins
         self.registries = registries
@@ -503,6 +569,7 @@ public struct OmuxConfig: Equatable, Sendable {
         terminal: OmuxConfigTerminal(),
         workspace: OmuxConfigWorkspace(),
         ui: OmuxConfigUI(),
+        agent: OmuxConfigAgent(),
         agentSessions: OmuxConfigAgentSessions(),
         plugins: OmuxConfigPlugins(),
         registries: OmuxConfigRegistries(),
@@ -638,6 +705,23 @@ public enum OmuxConfigTemplate {
         # terminal_row_2 = "git-branch"
         # terminal_row_3 = "abbreviated-path"
 
+        [agent]
+        enabled = true
+        skills_enabled = true
+        external_tool_timeout_seconds = \(OmuxConfigAgent.defaultExternalToolTimeoutSeconds)
+        # Installed plugin agent tools are available by default.
+        # Disable one provider with:
+        # [agent.external.example-plugin]
+        # enabled = false
+
+        [agent.tools]
+        read_terminal_history = true
+        list_directory = true
+        run_omux_cli = true
+        read_file = true
+        grep_files = true
+        list_skills = true
+        read_skill = true
         [agent-sessions]
         enabled = true
         preview_enabled = true
@@ -1020,6 +1104,7 @@ public struct OmuxConfigLoader {
         }
 
         let agentSessionsTableNames = ["agent-sessions"]
+        let agentExternalTablePrefixes = ["agent.external."]
         let agentSessionsAgentTablePrefixes = agentSessionsTableNames.map { "\($0).agents." }
         let agentSessionsExternalTablePrefixes = agentSessionsTableNames.map { "\($0).external." }
         let allowedTables: Set<String> = [
@@ -1029,6 +1114,8 @@ public struct OmuxConfigLoader {
             "ui.panes",
             "ui.icons",
             "ui.sidebar",
+            "agent",
+            "agent.tools",
             "agent-sessions",
             "plugins.markdown-preview",
             "plugins.ai-status",
@@ -1038,6 +1125,7 @@ public struct OmuxConfigLoader {
         ]
         for tableName in document.tableNames
         where allowedTables.contains(tableName) == false
+            && agentExternalTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false
             && agentSessionsAgentTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false
             && agentSessionsExternalTablePrefixes.contains(where: { tableName.hasPrefix($0) }) == false {
             diagnostics.append(
@@ -1121,6 +1209,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agent: config.agent,
                 agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
@@ -1136,6 +1225,7 @@ public struct OmuxConfigLoader {
                 terminal: config.terminal,
                 workspace: config.workspace,
                 ui: config.ui,
+                agent: config.agent,
                 agentSessions: config.agentSessions,
                 plugins: config.plugins,
                 registries: config.registries,
@@ -1577,6 +1667,194 @@ public struct OmuxConfigLoader {
             }
         }
 
+        let agentAllowedKeys: Set<String> = ["enabled", "skills_enabled", "external_tool_timeout_seconds"]
+        var agentEnabled = config.agent.enabled
+        var agentSkillsEnabled = config.agent.skillsEnabled
+        var agentExternalToolTimeoutSeconds = config.agent.externalToolTimeoutSeconds
+        for entry in document.entries(in: "agent") {
+            guard agentAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [agent] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentEnabled = value
+            case "skills_enabled":
+                guard let value = entry.value.boolValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.skills_enabled must be a boolean.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentSkillsEnabled = value
+            case "external_tool_timeout_seconds":
+                guard let value = entry.value.intValue else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.external_tool_timeout_seconds must be an integer.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                guard value > 0 else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "agent.external_tool_timeout_seconds must be greater than 0.",
+                            filePath: sourceURL.path,
+                            line: entry.line
+                        )
+                    )
+                    continue
+                }
+                agentExternalToolTimeoutSeconds = value
+            default:
+                break
+            }
+        }
+
+        let agentToolsAllowedKeys: Set<String> = [
+            "read_terminal_history",
+            "list_directory",
+            "run_omux_cli",
+            "read_file",
+            "grep_files",
+            "list_skills",
+            "read_skill",
+        ]
+        var agentReadTerminalHistory = config.agent.tools.readTerminalHistory
+        var agentListDirectory = config.agent.tools.listDirectory
+        var agentRunOmuxCLI = config.agent.tools.runOmuxCLI
+        var agentReadFile = config.agent.tools.readFile
+        var agentGrepFiles = config.agent.tools.grepFiles
+        var agentListSkills = config.agent.tools.listSkills
+        var agentReadSkill = config.agent.tools.readSkill
+        for entry in document.entries(in: "agent.tools") {
+            guard agentToolsAllowedKeys.contains(entry.key) else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "Unknown [agent.tools] key '\(entry.key)'.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            guard let value = entry.value.boolValue else {
+                diagnostics.append(
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "agent.tools.\(entry.key) must be a boolean.",
+                        filePath: sourceURL.path,
+                        line: entry.line
+                    )
+                )
+                continue
+            }
+
+            switch entry.key {
+            case "read_terminal_history":
+                agentReadTerminalHistory = value
+            case "list_directory":
+                agentListDirectory = value
+            case "run_omux_cli":
+                agentRunOmuxCLI = value
+            case "read_file":
+                agentReadFile = value
+            case "grep_files":
+                agentGrepFiles = value
+            case "list_skills":
+                agentListSkills = value
+            case "read_skill":
+                agentReadSkill = value
+            default:
+                break
+            }
+        }
+        var agentExternalPlugins = config.agent.externalPlugins
+        let orderedAgentExternalTablePrefixes = ["agent.external."]
+        for tablePrefix in orderedAgentExternalTablePrefixes {
+            let tableNames = document.tableNames
+                .filter { $0.hasPrefix(tablePrefix) }
+                .sorted()
+            for tableName in tableNames {
+                let pluginName = String(tableName.dropFirst(tablePrefix.count))
+                let trimmedPluginName = pluginName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmedPluginName.isEmpty == false,
+                      trimmedPluginName.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ $0.isEmpty == false }) else {
+                    diagnostics.append(
+                        OmuxConfigDiagnostic(
+                            severity: .error,
+                            message: "Malformed agent external plugin table [\(tableName)].",
+                            filePath: sourceURL.path
+                        )
+                    )
+                    continue
+                }
+                let allowedExternalKeys: Set<String> = ["enabled"]
+                var enabled: Bool?
+                for entry in document.entries(in: tableName) {
+                    guard allowedExternalKeys.contains(entry.key) else {
+                        diagnostics.append(
+                            OmuxConfigDiagnostic(
+                                severity: .error,
+                                message: "Unknown [\(tableName)] key '\(entry.key)'.",
+                                filePath: sourceURL.path,
+                                line: entry.line
+                            )
+                        )
+                        continue
+                    }
+                    switch entry.key {
+                    case "enabled":
+                        guard let value = entry.value.boolValue else {
+                            diagnostics.append(
+                                OmuxConfigDiagnostic(
+                                    severity: .error,
+                                    message: "\(tableName).enabled must be a boolean.",
+                                    filePath: sourceURL.path,
+                                    line: entry.line
+                                )
+                            )
+                            continue
+                        }
+                        enabled = value
+                    default:
+                        break
+                    }
+                }
+                agentExternalPlugins[trimmedPluginName] = OmuxConfigAgent.ExternalPlugin(enabled: enabled)
+            }
+        }
         let markdownPreviewAllowedKeys: Set<String> = ["enabled", "renderer", "theme", "presentation"]
         var markdownPreviewEnabled = config.plugins.markdownPreview.enabled
         var markdownPreviewRenderer = config.plugins.markdownPreview.renderer
@@ -2075,6 +2353,22 @@ public struct OmuxConfigLoader {
                         row3: sidebarTerminalRow3
                     )
                 )
+            ),
+            agent: OmuxConfigAgent(
+                enabled: agentEnabled,
+                skillsEnabled: agentSkillsEnabled,
+                externalToolTimeoutSeconds: agentExternalToolTimeoutSeconds,
+                tools: OmuxConfigAgent.Tools(
+                    readTerminalHistory: agentReadTerminalHistory,
+                    listDirectory: agentListDirectory,
+                    runOmuxCLI: agentRunOmuxCLI,
+                    readFile: agentReadFile,
+                    grepFiles: agentGrepFiles,
+                    listSkills: agentListSkills,
+                    readSkill: agentReadSkill
+                ),
+                externalPlugins: agentExternalPlugins,
+                enabledTools: config.agent.enabledTools
             ),
             agentSessions: OmuxConfigAgentSessions(
                 enabled: agentSessionsEnabled,

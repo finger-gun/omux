@@ -245,13 +245,20 @@ final class WorkspaceWindowController: NSWindowController {
         paneID: PaneID,
         row1: String?,
         row2: String?,
-        row3: String?
+        row3: String?,
+        source: String? = nil
     ) -> Bool {
-        rootViewController.setPaneMetadataRows(paneID: paneID, row1: row1, row2: row2, row3: row3)
+        rootViewController.setPaneMetadataRows(
+            paneID: paneID,
+            row1: row1,
+            row2: row2,
+            row3: row3,
+            source: source
+        )
     }
 
-    func clearPaneMetadataRows(paneID: PaneID) -> Bool {
-        rootViewController.clearPaneMetadataRows(paneID: paneID)
+    func clearPaneMetadataRows(paneID: PaneID, source: String? = nil) -> Bool {
+        rootViewController.clearPaneMetadataRows(paneID: paneID, source: source)
     }
 
     func toggleSidebarVisibility() {

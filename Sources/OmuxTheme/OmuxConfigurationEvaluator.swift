@@ -3,9 +3,13 @@ import OmuxConfig
 
 public struct OmuxConfigurationEvaluation: Sendable {
     public let config: OmuxConfig
-    public let theme: OmuxTheme?
     public let compilerOutput: OmuxThemeCompilerOutput?
     public let diagnostics: [OmuxConfigDiagnostic]
+    private let fallbackTheme: OmuxTheme?
+
+    public var theme: OmuxTheme? {
+        compilerOutput?.theme ?? fallbackTheme
+    }
 
     public init(
         config: OmuxConfig,
@@ -14,9 +18,11 @@ public struct OmuxConfigurationEvaluation: Sendable {
         diagnostics: [OmuxConfigDiagnostic]
     ) {
         self.config = config
-        self.theme = theme
         self.compilerOutput = compilerOutput
         self.diagnostics = diagnostics
+        // fallbackTheme is only used when compilerOutput is nil because
+        // compiled themes take precedence over the provided theme parameter.
+        self.fallbackTheme = compilerOutput == nil ? theme : nil
     }
 
     public var hasErrors: Bool {

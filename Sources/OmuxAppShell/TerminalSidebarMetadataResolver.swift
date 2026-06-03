@@ -19,6 +19,7 @@ final class TerminalSidebarMetadataResolver {
     }
 
     private var gitInfoByPath: [String: GitInfo?] = [:]
+    private let gitInfoLock = NSLock()
 
     func metadata(for pane: Pane, icon: OmuxSemanticIcon = .terminal) -> TerminalSidebarMetadata {
         guard let session = pane.terminalSession else {
@@ -56,7 +57,10 @@ final class TerminalSidebarMetadataResolver {
 
     private func resolveGitInfo(for path: String) -> GitInfo? {
         let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        if let cached = gitInfoByPath[normalizedPath] {
+        gitInfoLock.lock()
+        let cached = gitInfoByPath[normalizedPath]
+        gitInfoLock.unlock()
+        if let cached {
             guard let cached else {
                 return nil
             }
@@ -67,7 +71,9 @@ final class TerminalSidebarMetadataResolver {
         }
 
         guard runGit(["-C", normalizedPath, "rev-parse", "--show-toplevel"]) != nil else {
+            gitInfoLock.lock()
             gitInfoByPath[normalizedPath] = .some(nil)
+            gitInfoLock.unlock()
             return nil
         }
 
@@ -75,7 +81,9 @@ final class TerminalSidebarMetadataResolver {
         let gitCommonDir = runGit(["-C", normalizedPath, "rev-parse", "--git-common-dir"])
         let isWorktree = Self.resolvedGitDirectoryPath(gitDir, relativeTo: normalizedPath)
             != Self.resolvedGitDirectoryPath(gitCommonDir, relativeTo: normalizedPath)
+        gitInfoLock.lock()
         gitInfoByPath[normalizedPath] = GitInfo(branchName: nil, isWorktree: isWorktree)
+        gitInfoLock.unlock()
         return GitInfo(
             branchName: currentBranchName(for: normalizedPath),
             isWorktree: isWorktree
@@ -99,6 +107,23 @@ final class TerminalSidebarMetadataResolver {
     }
 
     private func runGit(_ arguments: [String]) -> String? {
+        final class PipeBuffer: @unchecked Sendable {
+            private let lock = NSLock()
+            private var data = Data()
+
+            func append(_ chunk: Data) {
+                lock.lock()
+                data.append(chunk)
+                lock.unlock()
+            }
+
+            func snapshot() -> Data {
+                lock.lock()
+                defer { lock.unlock() }
+                return data
+            }
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
@@ -107,14 +132,40 @@ final class TerminalSidebarMetadataResolver {
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
+        let finished = DispatchSemaphore(value: 0)
+        let drainGroup = DispatchGroup()
+        let outputBuffer = PipeBuffer()
+        let errorBuffer = PipeBuffer()
 
         do {
-            let finished = DispatchSemaphore(value: 0)
+            drainGroup.enter()
+            outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    drainGroup.leave()
+                    return
+                }
+                outputBuffer.append(chunk)
+            }
+            drainGroup.enter()
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    drainGroup.leave()
+                    return
+                }
+                errorBuffer.append(chunk)
+            }
             process.terminationHandler = { _ in
                 finished.signal()
             }
             try process.run()
             finished.wait()
+            drainGroup.wait()
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
         } catch {
             return nil
         }
@@ -122,8 +173,7 @@ final class TerminalSidebarMetadataResolver {
             return nil
         }
 
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(decoding: data, as: UTF8.self)
+        let output = String(decoding: outputBuffer.snapshot(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return output.isEmpty ? nil : output
     }

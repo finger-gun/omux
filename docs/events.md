@@ -70,6 +70,17 @@ These are success-shaped events emitted for completed OpenMUX actions.
 | `extensionPane.updated` | Extension pane is updated successfully. | `{ "pluginID": string, "contentKind": string, "source": string \| null }` |
 | `extensionPane.closed` | Extension pane is closed successfully. | `{ "pluginID": string, "paneStackID": string \| null }` |
 
+## Agent events
+
+These are emitted by the local `omux agent` host for accepted prompts, successful final responses, host-handled slash commands, and handoff writes.
+
+| Event | Emitted when | Payload (summary) |
+| --- | --- | --- |
+| `agent.promptSubmitted` | `omux agent` accepts a prompt for model submission. | `{ "cwd": string, "prompt": string, "source": "repl" \| "one-shot" }` |
+| `agent.responseCompleted` | `omux agent` completes a final response successfully. | `{ "cwd": string, "response": string, "source": "repl" \| "one-shot", "approxTokens": integer \| null }` |
+| `agent.slashCommandInvoked` | The REPL host handles a slash command locally. | `{ "cwd": string, "command": string }` |
+| `agent.handoffWritten` | `/handoff` writes a markdown continuation brief successfully. | `{ "cwd": string, "path": string }` |
+
 ## Notes
 
 - Events are observational. They are not a command bus.

@@ -239,6 +239,28 @@ final class OmuxControlPlaneTests: XCTestCase {
         XCTAssertTrue(names.contains("pane.aliasSet"))
         XCTAssertTrue(names.contains("pane.aliasCleared"))
         XCTAssertTrue(names.contains("config.reloaded"))
+        XCTAssertTrue(names.contains("agent.promptSubmitted"))
+        XCTAssertTrue(names.contains("agent.responseCompleted"))
+        XCTAssertTrue(names.contains("agent.slashCommandInvoked"))
+        XCTAssertTrue(names.contains("agent.handoffWritten"))
+    }
+
+    func testAgentObservationRoundTripsThroughRPCValue() {
+        let observation = ControlPlaneAgentObservation(
+            eventName: ControlPlaneActionEventName.agentPromptSubmitted.rawValue,
+            hookCategory: "command",
+            hookName: "agent-prompt-submitted",
+            cwd: "/tmp/demo",
+            workspaceID: WorkspaceID(rawValue: "workspace-1"),
+            paneID: PaneID(rawValue: "pane-1"),
+            payload: .object([
+                "prompt": .string("hello"),
+                "source": .string("repl"),
+            ])
+        )
+
+        let decoded = ControlPlaneAgentObservation(rpcValue: observation.rpcValue)
+        XCTAssertEqual(decoded, observation)
     }
 
     func testTerminalEventUsesOpenMUXNativePayloads() {

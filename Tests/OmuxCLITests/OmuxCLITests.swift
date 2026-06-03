@@ -9,6 +9,111 @@ import XCTest
 @testable import OmuxTheme
 
 final class OmuxCLITests: XCTestCase {
+    private final class FakeAgentGenerator: OmuxAgentGenerating {
+        var result: Result<String, Error>
+        var streamedChunks: [String]
+        private(set) var requests: [(prompt: String, systemInstruction: String?, hostContext: String, agentConfiguration: OmuxConfigAgent, workingDirectoryURL: URL)] = []
+
+        init(
+            result: Result<String, Error> = .success("done"),
+            streamedChunks: [String] = []
+        ) {
+            self.result = result
+            self.streamedChunks = streamedChunks
+        }
+
+        func generate(
+            prompt: String,
+            systemInstruction: String?,
+            hostContext: String,
+            agentConfiguration: OmuxConfigAgent,
+            workingDirectoryURL: URL,
+            allowReadAnywhere: Bool,
+            onVerbose: (@Sendable (String) -> Void)?,
+            onPartial: @escaping (String) -> Void
+        ) async throws -> String {
+            requests.append((prompt: prompt, systemInstruction: systemInstruction, hostContext: hostContext, agentConfiguration: agentConfiguration, workingDirectoryURL: workingDirectoryURL))
+            for chunk in streamedChunks {
+                onPartial(chunk)
+            }
+            return try result.get()
+        }
+    }
+
+    private final class FakeAgentChatSession: OmuxAgentChatSessioning {
+        let toolNames: [String]
+        let contextWindowSize: Int? = 4096
+        var sentPrompts: [String] = []
+        var summaryRequests: [String] = []
+        var response = "done"
+        var streamedChunks: [String] = []
+        var summaryResponse = "compacted summary"
+        var handoffResponse = """
+        # Title
+        ## Current Goal
+        goal
+        ## Key Facts Learned
+        fact
+        ## Files, Paths, and Commands
+        file
+        ## Tool Activity Summary
+        tool
+        ## Open Issues or Questions
+        none
+        ## Suggested Next Prompt
+        next
+        """
+
+        init(toolNames: [String] = ["read_terminal_history", "list_directory"]) {
+            self.toolNames = toolNames
+        }
+
+        func send(prompt: String, onPartial: @escaping @Sendable (String) -> Void) async throws -> String {
+            sentPrompts.append(prompt)
+            for chunk in streamedChunks {
+                onPartial(chunk)
+            }
+            return response
+        }
+
+        func summarizeForCompaction(transcript: String) async throws -> String {
+            summaryRequests.append(transcript)
+            return summaryResponse
+        }
+
+        func summarizeForHandoff(transcript: String) async throws -> String {
+            summaryRequests.append(transcript)
+            return handoffResponse
+        }
+
+        func tokenCount(for text: String) -> Int? {
+            let utf8Count = text.utf8.count
+            guard utf8Count > 0 else { return 0 }
+            return max(1, utf8Count / 4)
+        }
+    }
+
+    private struct FakeAgentChatSessionFactory: OmuxAgentChatSessionFactorying {
+        var session: FakeAgentChatSession
+        var onMakeSession: ((String?, String, URL, Bool) -> Void)?
+
+        func makeSession(
+            systemInstruction: String?,
+            hostContext: String,
+            agentConfiguration: OmuxConfigAgent,
+            workingDirectoryURL: URL,
+            allowReadAnywhere: Bool,
+            onVerbose: (@Sendable (String) -> Void)?,
+            onToolEvent: (@Sendable (OmuxAgentToolEvent) -> Void)?
+        ) throws -> AnyOmuxAgentChatSession {
+            _ = onVerbose
+            _ = onToolEvent
+            _ = agentConfiguration
+            onMakeSession?(systemInstruction, hostContext, workingDirectoryURL, allowReadAnywhere)
+            return AnyOmuxAgentChatSession(session)
+        }
+    }
+
     private final class FakeRunningAppManager: OmuxRunningApplicationManaging {
         var apps: [OmuxRunningApplication]
         private(set) var terminateCalls = 0
@@ -92,6 +197,817 @@ final class OmuxCLITests: XCTestCase {
 
     func testDebugUpdateCommandIsHiddenFromUsage() {
         XCTAssertFalse(OmuxCLICommand.usage.contains("__debug-update"))
+    }
+
+    func testAgentCommandStreamsResponseAndUsesDefaultInstruction() {
+        var output = ""
+        let generator = FakeAgentGenerator(result: .success("hello world"), streamedChunks: ["hello ", "world"])
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { output.append($0) },
+            writeLine: { output.append($0 + "\n") },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "-p", "hello world"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.prompt, "hello world")
+        XCTAssertNil(generator.requests.first?.systemInstruction)
+        XCTAssertEqual(generator.requests.first?.workingDirectoryURL.path, FileManager.default.currentDirectoryPath)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("currentWorkingDirectory: \(FileManager.default.currentDirectoryPath)") == true)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("Treat this host context as metadata only.") == true)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("Do not invent filesystem paths from OpenMUX workspace, tab, pane, or session identifiers.") == true)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("agent.fileReadScope: cwd-only") == true)
+        XCTAssertEqual(output, "hello world\n")
+    }
+
+    func testAgentCommandPassesSystemInstructionOverride() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--system", "Be terse.", "-p", "Summarize this"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.systemInstruction, "Be terse.")
+        XCTAssertEqual(generator.requests.first?.prompt, "Summarize this")
+    }
+
+    func testAgentCommandAllowReadAnywhereUpdatesHostContext() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--allow-read-anywhere", "-p", "Read /tmp/file.txt"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertTrue(generator.requests.first?.hostContext.contains("agent.fileReadScope: any-readable-path") == true)
+    }
+
+    func testAgentCommandParsesEnabledToolsAllowList() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--enabledTools=agenttools.webpage,read_file", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.agentConfiguration.enabledTools, ["agenttools.webpage", "read_file"])
+    }
+
+    func testAgentCommandParsesEnabledToolsNone() {
+        let generator = FakeAgentGenerator()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--enabled-tools", "none", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        XCTAssertEqual(generator.requests.first?.agentConfiguration.enabledTools, [])
+    }
+
+    func testAgentCommandWithoutPromptRunsREPLWhenTTYAvailable() {
+        var replRequests: [OmuxAgentREPLRequest] = []
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: FakeAgentGenerator(),
+            agentChatSessionFactory: FakeAgentChatSessionFactory(session: FakeAgentChatSession()),
+            isAgentREPLAvailable: { true },
+            runAgentREPL: { request, _, _, _ in
+                replRequests.append(request)
+                return 0
+            }
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--verbose", "--allow-read-anywhere"])
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(replRequests.count, 1)
+        XCTAssertTrue(replRequests[0].verbose)
+        XCTAssertTrue(replRequests[0].allowReadAnywhere)
+    }
+
+    func testAgentCommandHonorsAgentEnabledConfig() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configURL = root.appendingPathComponent("config.toml")
+        try """
+        schema = 1
+
+        [theme]
+        name = "monokai-soda"
+
+        [agent]
+        enabled = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(configURL: configURL),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: FakeAgentGenerator()
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 1)
+        XCTAssertEqual(output, ["omux agent is disabled by [agent].enabled = false in ~/.omux/config.toml."])
+    }
+
+    func testAgentCommandRejectsPositionalPromptWithoutPromptFlag() {
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) }
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "hello"])
+
+        XCTAssertEqual(exitCode, 1)
+        XCTAssertEqual(output, ["usage: omux agent [--verbose] [--allow-read-anywhere] [--enabled-tools <names>|--enabledTools=<names>] [--system <text>] [-p|--prompt <text>]"])
+    }
+
+    func testAgentCommandInjectsFocusedOpenMUXContextFromEnvironmentAndHistory() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: "ac-\(UUID().uuidString.prefix(8)).sock")
+            .path(percentEncoded: false)
+
+        let generator = FakeAgentGenerator()
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            guard request.method == ControlMethod.terminalHistory.rawValue else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "unexpected"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object([
+                "items": .array([
+                    .object([
+                        "workspaceID": .string("workspace-1"),
+                        "workspaceName": .string("OMUX"),
+                        "tabID": .string("tab-1"),
+                        "tabTitle": .string("Main"),
+                        "paneStackID": .string("stack-1"),
+                        "paneID": .string("pane-1"),
+                        "paneTitle": .string("omux"),
+                        "sessionID": .string("session-1"),
+                        "workingDirectory": .string("/tmp/omux"),
+                        "text": .string(""),
+                        "lineCount": .integer(0),
+                        "byteCount": .integer(0),
+                        "truncated": .bool(false),
+                        "unavailable": .null,
+                    ]),
+                ]),
+            ]))
+        }
+        defer { server.stop() }
+
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            write: { _ in },
+            writeLine: { _ in },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator,
+            environment: {
+                [
+                    "OMUX_PANE_ID": "pane-1",
+                    "OMUX_SESSION_ID": "session-1",
+                    OpenMUXWorkspaceEnvironment.workspaceIDKey: "workspace-1",
+                    "PWD": "/tmp/omux",
+                ]
+            }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "agent", "-p", "Summarize context"]), 0)
+        XCTAssertEqual(generator.requests.count, 1)
+        let hostContext = try XCTUnwrap(generator.requests.first?.hostContext)
+        XCTAssertTrue(hostContext.contains("Treat this host context as metadata only."))
+        XCTAssertTrue(hostContext.contains("Do not invent filesystem paths from OpenMUX workspace, tab, pane, or session identifiers."))
+        XCTAssertTrue(hostContext.contains("openmux.focusedContext: available"))
+        XCTAssertTrue(hostContext.contains("openmux.focused.workspaceID: workspace-1"))
+        XCTAssertTrue(hostContext.contains("openmux.focused.tabID: tab-1"))
+        XCTAssertTrue(hostContext.contains("openmux.focused.paneID: pane-1"))
+        XCTAssertTrue(hostContext.contains("openmux.focused.sessionID: session-1"))
+    }
+
+    func testAgentWorkspaceReadFileRejectsEscapingPath() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "secret".write(to: outside, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let access = OmuxAgentWorkspaceAccess(rootURL: root)
+        let result = access.readFile(path: "../\(outside.lastPathComponent)", startLine: nil, endLine: nil)
+
+        XCTAssertEqual(result, "ERROR: path escapes the current working directory")
+    }
+
+    func testAgentWorkspaceReadFileAllowsEscapingPathWhenConfigured() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "secret".write(to: outside, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let access = OmuxAgentWorkspaceAccess(rootURL: root, allowReadAnywhere: true)
+        let result = access.readFile(path: outside.path, startLine: nil, endLine: nil)
+
+        XCTAssertTrue(result.contains("PATH: \(outside.path)"))
+        XCTAssertTrue(result.contains("CONTENT:\nsecret"))
+    }
+
+    func testAgentWorkspaceReadFileReturnsExcerptAndMetadata() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("notes.txt", isDirectory: false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "one\ntwo\nthree\nfour\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            limits: OmuxAgentWorkspaceLimits(maxReadLines: 2, maxReadBytes: 1024, maxGrepResults: 40, maxMatchLineBytes: 512)
+        )
+        let result = access.readFile(path: "notes.txt", startLine: 2, endLine: nil)
+
+        XCTAssertTrue(result.contains("PATH: notes.txt"))
+        XCTAssertTrue(result.contains("LINES: 2-3 of 5"))
+        XCTAssertTrue(result.contains("TRUNCATED: yes"))
+        XCTAssertTrue(result.contains("two\nthree"))
+    }
+
+    func testAgentWorkspaceReadFileTruncatesLargeFilesWithoutLoadingPastCap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("large.txt", isDirectory: false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try String(repeating: "abcdef", count: 2_000).write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            limits: OmuxAgentWorkspaceLimits(maxReadLines: 80, maxReadBytes: 128, maxGrepResults: 40, maxMatchLineBytes: 512)
+        )
+        let result = access.readFile(path: "large.txt", startLine: nil, endLine: nil)
+
+        XCTAssertTrue(result.contains("PATH: large.txt"))
+        XCTAssertTrue(result.contains("TRUNCATED: yes"))
+        XCTAssertLessThan(result.utf8.count, 512)
+    }
+
+    func testAgentWorkspaceGrepFormatsMatchesAndCapsResults() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            limits: OmuxAgentWorkspaceLimits(maxReadLines: 200, maxReadBytes: 16_384, maxGrepResults: 2, maxMatchLineBytes: 32),
+            rgRunner: { request, _, _ in
+                XCTAssertEqual(request.pattern, "pane status")
+                return OmuxAgentGrepResult(
+                    matches: [
+                        OmuxAgentGrepMatch(path: "Sources/A.swift", line: 10, text: "pane status updated"),
+                        OmuxAgentGrepMatch(path: "Sources/B.swift", line: 24, text: "pane status cleared"),
+                    ],
+                    truncated: true
+                )
+            }
+        )
+
+        let output = access.grep(
+            OmuxAgentGrepRequest(
+                pattern: "pane status",
+                globs: ["*.swift"],
+                caseMode: .smart,
+                includeHidden: false,
+                maxResults: nil
+            )
+        )
+
+        XCTAssertTrue(output.contains("MATCHES: 2"))
+        XCTAssertTrue(output.contains("TRUNCATED: yes"))
+        XCTAssertTrue(output.contains("Sources/A.swift:10: pane status updated"))
+        XCTAssertTrue(output.contains("Sources/B.swift:24: pane status cleared"))
+    }
+
+    func testAgentWorkspaceGrepReportsRunnerFailure() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            rgRunner: { _, _, _ in
+                throw NSError(domain: "rg", code: 1)
+            }
+        )
+
+        let output = access.grep(
+            OmuxAgentGrepRequest(
+                pattern: "todo",
+                globs: [],
+                caseMode: .smart,
+                includeHidden: false,
+                maxResults: nil
+            )
+        )
+
+        XCTAssertEqual(output, "ERROR: ripgrep (rg) is unavailable or search failed")
+    }
+
+    func testDefaultAgentPromptIsSmallerAndRetainsToolOrderGuidance() {
+        let analysis = OmuxSystemAgentGenerator.defaultPromptAnalysis { text in
+            max(1, text.utf8.count / 4)
+        }
+
+        XCTAssertLessThan(analysis.currentLength, analysis.previousLength)
+        XCTAssertLessThan(analysis.currentTokenCount ?? .max, analysis.previousTokenCount ?? .max)
+        let prompt = OmuxSystemAgentGenerator.defaultSystemInstruction
+        XCTAssertTrue(prompt.contains("Recent terminal or session questions -> read_terminal_history"))
+        XCTAssertTrue(prompt.contains("What exists here -> list_directory"))
+        XCTAssertTrue(prompt.contains("Where is this implemented -> grep_files"))
+        XCTAssertTrue(prompt.contains("Reusable workflow guidance -> skills tools"))
+    }
+
+    func testSkillsDiscoveryPrefersRepoSkillOverUserSkill() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let userHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: userHome.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: userHome)
+        }
+
+        try """
+        ---
+        name: demo
+        description: repo version
+        ---
+        repo body
+        """.write(to: root.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+        try """
+        ---
+        name: demo
+        description: user version
+        ---
+        user body
+        """.write(to: userHome.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+
+        setenv("HOME", userHome.path, 1)
+        defer { unsetenv("HOME") }
+
+        let skills = OmuxAgentSkillCatalog.discover(workingDirectoryURL: root)
+        let demoSkills = skills.filter { $0.name == "demo" }
+        XCTAssertEqual(demoSkills.count, 1)
+        XCTAssertEqual(demoSkills.first?.scope, .repo)
+        XCTAssertEqual(demoSkills.first?.description, "repo version")
+    }
+
+    func testReadSkillRejectsTraversalIncludePath() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".agents/skills/demo", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try """
+        ---
+        name: demo
+        description: desc
+        ---
+        body
+        """.write(to: root.appendingPathComponent(".agents/skills/demo/SKILL.md"), atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(
+            try OmuxAgentSkillCatalog.readSkill(
+                named: "demo",
+                includePaths: ["../secret.txt"],
+                workingDirectoryURL: root
+            )
+        )
+    }
+
+    func testExternalAgentToolDiscoveryFindsManifestToolsAndHonorsDisable() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("lookup", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try """
+        schema = 1
+        id = "lookup"
+        kind = "plugin"
+
+        [plugin]
+        command = "lookup"
+        entrypoint = "plugin"
+
+        [agent-tools.find-docs]
+        description = "Find docs"
+        callback = "__omux_agent_tool"
+        arguments = ["docs"]
+        input_hint = "Search query"
+        """.write(to: plugin.appendingPathComponent("omux-plugin.toml"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nprintf ''\n".write(to: plugin.appendingPathComponent("plugin"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plugin.appendingPathComponent("plugin").path)
+
+        let enabledTools = OmuxExternalAgentToolCatalog.discover(
+            configuration: OmuxConfigAgent(),
+            pluginsDirectoryURL: plugins
+        )
+        XCTAssertEqual(enabledTools.map(\.toolName), ["lookup.find-docs"])
+        XCTAssertEqual(enabledTools.first?.arguments, ["docs"])
+        XCTAssertEqual(enabledTools.first?.inputHint, "Search query")
+
+        let disabledTools = OmuxExternalAgentToolCatalog.discover(
+            configuration: OmuxConfigAgent(
+                externalPlugins: ["lookup": .init(enabled: false)]
+            ),
+            pluginsDirectoryURL: plugins
+        )
+        XCTAssertTrue(disabledTools.isEmpty)
+    }
+
+    func testAgentToolAllowListPredicateHonorsExactNamesAndPluginProviders() {
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent()
+            )
+        )
+        XCTAssertFalse(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent(enabledTools: [])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "read_file",
+                providerName: nil,
+                configuration: OmuxConfigAgent(enabledTools: ["read_file"])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["lookup"])
+            )
+        )
+        XCTAssertTrue(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["lookup.find-docs"])
+            )
+        )
+        XCTAssertFalse(
+            OmuxSystemAgentGenerator.isToolEnabledByInvocationAllowList(
+                toolName: "lookup.find-docs",
+                providerName: "lookup",
+                configuration: OmuxConfigAgent(enabledTools: ["read_file"])
+            )
+        )
+    }
+
+    func testExternalAgentToolExecutionPassesJSONPayloadAndReadsJSONResponse() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let plugins = root.appendingPathComponent("plugins", isDirectory: true)
+        let plugin = plugins.appendingPathComponent("lookup", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let outputURL = root.appendingPathComponent("request.json", isDirectory: false)
+        let pluginScript = plugin.appendingPathComponent("plugin")
+        try """
+        #!/bin/sh
+        cat > "\(outputURL.path)"
+        printf '{"ok":true,"output":"matched docs"}'
+        """.write(to: pluginScript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pluginScript.path)
+
+        let tool = OmuxExternalAgentTool(
+            pluginID: "lookup",
+            pluginCommand: "lookup",
+            toolID: "find-docs",
+            toolName: "lookup.find-docs",
+            description: "Find docs",
+            callback: "__omux_agent_tool",
+            arguments: ["docs"],
+            inputHint: nil,
+            executableURL: plugin.appendingPathComponent("plugin"),
+            pluginDirectoryURL: plugin
+        )
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            focusedPaneID: "pane-7",
+            externalToolTimeoutNanoseconds: 3_000_000_000
+        )
+
+        let result = try await access.callExternalTool(tool, input: "search for sessions")
+        XCTAssertEqual(result, "matched docs")
+
+        let payload = try Data(contentsOf: outputURL)
+        let request = try JSONDecoder().decode(OmuxExternalAgentToolRequest.self, from: payload)
+        XCTAssertEqual(request.tool.name, "lookup.find-docs")
+        XCTAssertEqual(request.tool.pluginCommand, "lookup")
+        XCTAssertEqual(request.tool.toolID, "find-docs")
+        XCTAssertEqual(request.input, "search for sessions")
+        XCTAssertEqual(request.cwd, root.path)
+        XCTAssertEqual(request.focusedPaneID, "pane-7")
+    }
+
+    func testMakeWorkspaceAccessUsesConfiguredExternalToolTimeout() {
+        let access = OmuxSystemAgentGenerator.makeWorkspaceAccess(
+            workingDirectoryURL: URL(fileURLWithPath: "/tmp/omux-test", isDirectory: true),
+            hostContext: """
+            Host context:
+            openmux.focused.paneID: pane-9
+            """,
+            configuration: OmuxConfigAgent(externalToolTimeoutSeconds: 75),
+            allowReadAnywhere: false,
+            omuxCommandRunner: nil,
+            historyFetcher: nil,
+            onVerbose: nil,
+            onToolEvent: nil
+        )
+
+        XCTAssertEqual(access.focusedPaneID, "pane-9")
+        XCTAssertEqual(access.externalToolTimeoutNanoseconds, 75_000_000_000)
+    }
+
+    func testAgentWorkspaceRunOmuxCLIFormatsOutput() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            omuxCommandRunner: { arguments in
+                XCTAssertEqual(arguments, ["list", "--full"])
+                return (0, "workspace-1")
+            }
+        )
+
+        let output = access.runOmuxCLI(command: "list", arguments: ["--full"])
+
+        XCTAssertTrue(output.contains("COMMAND: omux list --full"))
+        XCTAssertTrue(output.contains("EXIT_CODE: 0"))
+        XCTAssertTrue(output.contains("OUTPUT:\nworkspace-1"))
+    }
+
+    func testAgentWorkspaceRunOmuxCLIBlocksRecursiveAndStreamingCommands() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            omuxCommandRunner: { _ in
+                XCTFail("blocked commands should not be executed")
+                return (1, "")
+            }
+        )
+
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "agent", arguments: ["list"]),
+            "ERROR: omux agent is not allowed from the agent tool"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "events", arguments: []),
+            "ERROR: omux events is not allowed from the agent tool because it is a streaming command"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "theme", arguments: []),
+            "ERROR: omux theme without arguments is not allowed from the agent tool because it is interactive"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "config", arguments: ["open"]),
+            "ERROR: omux config open is not allowed from the agent tool because it launches an external editor"
+        )
+        XCTAssertEqual(
+            access.runOmuxCLI(command: "install-cli", arguments: []),
+            "ERROR: omux install-cli is not allowed from the agent tool because it installs, updates, or removes state"
+        )
+    }
+
+    func testAgentWorkspaceReadTerminalHistoryFormatsFocusedHistory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            focusedPaneID: "pane-1",
+            historyFetcher: { request in
+                XCTAssertEqual(request.scope, .pane(PaneID(rawValue: "pane-1")))
+                XCTAssertEqual(request.maxLines, 40)
+                XCTAssertEqual(request.maxBytes, 1024)
+                return .object([
+                    "items": .array([
+                        .object([
+                            "workspaceID": .string("workspace-1"),
+                            "workspaceName": .string("Main"),
+                            "tabID": .string("tab-1"),
+                            "tabTitle": .string("Dev"),
+                            "paneStackID": .string("stack-1"),
+                            "paneID": .string("pane-1"),
+                            "paneTitle": .string("shell"),
+                            "sessionID": .string("session-1"),
+                            "workingDirectory": .string("/tmp/omux"),
+                            "text": .string("git status\nswift test"),
+                            "lineCount": .integer(2),
+                            "byteCount": .integer(21),
+                            "truncated": .bool(false),
+                            "unavailable": .null,
+                        ]),
+                    ]),
+                ])
+            }
+        )
+
+        let output = access.readTerminalHistory(paneID: nil, maxLines: 50, maxBytes: 1024)
+
+        XCTAssertTrue(output.contains("TARGET: pane-1"))
+        XCTAssertTrue(output.contains("WORKSPACE: Main (workspace-1)"))
+        XCTAssertTrue(output.contains("PANE: shell (pane-1)"))
+        XCTAssertTrue(output.contains("SESSION: session-1"))
+        XCTAssertTrue(output.contains("CONTENT:\ngit status\nswift test"))
+    }
+
+    func testAgentWorkspaceReadTerminalHistoryClampsAndHandlesNoItems() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(
+            rootURL: root,
+            limits: OmuxAgentWorkspaceLimits(
+                maxReadLines: 200,
+                maxReadBytes: 16_384,
+                maxGrepResults: 40,
+                maxMatchLineBytes: 512,
+                maxHistoryLines: 10,
+                maxHistoryBytes: 256
+            ),
+            historyFetcher: { request in
+                XCTAssertEqual(request.scope, .pane(PaneID(rawValue: "pane-9")))
+                XCTAssertEqual(request.maxLines, 10)
+                XCTAssertEqual(request.maxBytes, 256)
+                return .object(["items": .array([])])
+            }
+        )
+
+        let output = access.readTerminalHistory(paneID: "pane-9", maxLines: 999, maxBytes: 9999)
+
+        XCTAssertEqual(output, "TARGET: pane-9\nNO_HISTORY: yes")
+    }
+
+    func testAgentWorkspaceListDirectoryFormatsEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("docs", isDirectory: true)
+        let file = root.appendingPathComponent("README.md", isDirectory: false)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "hello".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let access = OmuxAgentWorkspaceAccess(rootURL: root)
+        let output = access.listDirectory(path: nil)
+
+        XCTAssertTrue(output.contains("PATH: ."))
+        XCTAssertTrue(output.contains("CONTENTS:"))
+        XCTAssertTrue(output.contains("README.md"))
+        XCTAssertTrue(output.contains("docs/"))
+    }
+
+    func testAgentCommandPrintsHelpfulFoundationModelsGenerationError() {
+        struct GenerationFailure: LocalizedError {
+            var errorDescription: String? {
+                "The operation couldn’t be completed. (FoundationModels.LanguageModelSession.GenerationError error -1.)"
+            }
+        }
+
+        var output = [String]()
+        let generator = FakeAgentGenerator(result: .failure(GenerationFailure()))
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "agent", "-p", "what files are here"]), 1)
+        XCTAssertEqual(
+            output,
+            ["omux agent error: local model generation failed. This often means the prompt plus tool output exceeded the Foundation Models context budget. Try a narrower prompt, ask for fewer history lines or smaller files, or rerun with --verbose."]
+        )
+    }
+
+    func testAgentCommandPrintsUsageWithoutPrompt() {
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            writeLine: { output.append($0) }
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "--system", "Be terse."])
+
+        XCTAssertEqual(exitCode, 1)
+        XCTAssertEqual(output, ["omux agent error: interactive REPL requires a TTY on stdin/stdout. For one-shot mode in scripts or pipes, use `omux agent -p \"...\"`."])
+    }
+
+    func testAgentCommandPrintsGenerationError() {
+        enum SampleError: LocalizedError {
+            case failed
+
+            var errorDescription: String? { "sample failure" }
+        }
+
+        var output = [String]()
+        let generator = FakeAgentGenerator(result: .failure(SampleError.failed))
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(),
+            write: { _ in },
+            writeLine: { output.append($0) },
+            readInputLine: { nil },
+            configLoader: OmuxConfigLoader(),
+            themeRegistry: OmuxThemeRegistry(),
+            installer: OmuxCLIInstaller(),
+            agentGenerator: generator
+        )
+
+        let exitCode = command.run(arguments: ["omux", "agent", "-p", "hello"])
+
+        XCTAssertEqual(exitCode, 1)
+        XCTAssertEqual(output, ["omux agent error: sample failure"])
     }
 
     func testSelfUpdaterCancelsWhenUserDeclinesRunningAppClose() throws {

@@ -74,6 +74,15 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Toggle sidebar | | | | No external signal. No CLI verb. |
 | Toggle pane tab bar | | | | No external signal. No CLI verb. |
 
+### Local agent
+
+| Action | Hook | Event | CLI | Notes |
+| --- | --- | --- | --- | --- |
+| Submit local agent prompt | ✅ | ✅ | ✅ | `omux agent` one-shot and REPL prompts emit agent observability surfaces. |
+| Complete local agent response | ✅ | ✅ | ✅ | Success-shaped observability only; failures stay transcript-local. |
+| Invoke local agent slash command | ✅ | ✅ | n/a | Host-handled REPL slash commands, including `/handoff`. |
+| Write local agent handoff | ✅ | ✅ | ✅ | `/handoff` writes `.omux-handoffs/<timestamp>.md`. |
+
 ### Extension panes
 
 | Action | Hook | Event | CLI | Notes |

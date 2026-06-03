@@ -8,6 +8,10 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let themeName: String
         public let workspaceDefaultRootPath: String
         public let workspaceIsolateShellHistory: Bool
+        public let agentEnabled: Bool
+        public let agentSkillsEnabled: Bool
+        public let agentExternalToolTimeoutSeconds: Int
+        public let agentTools: AgentTools
         public let inactivePaneOpacity: Double
         public let idleStatusClear: String
         public let iconsEnabled: Bool
@@ -35,8 +39,31 @@ public struct OmuxConfigExport: Codable, Equatable, Sendable {
         public let terminal: Terminal
         public let workspace: Workspace
         public let ui: UI
+        public let agent: Agent
         public let plugins: Plugins
         public let registries: Registries
+    }
+
+    public struct AgentTools: Codable, Equatable, Sendable {
+        public let readTerminalHistory: Bool
+        public let listDirectory: Bool
+        public let runOmuxCLI: Bool
+        public let readFile: Bool
+        public let grepFiles: Bool
+        public let listSkills: Bool
+        public let readSkill: Bool
+    }
+
+    public struct Agent: Codable, Equatable, Sendable {
+        public let externalPlugins: [String: AgentExternalPlugin]
+        public let enabled: Bool
+        public let skillsEnabled: Bool
+        public let externalToolTimeoutSeconds: Int
+        public let tools: AgentTools
+    }
+
+    public struct AgentExternalPlugin: Codable, Equatable, Sendable {
+        public let enabled: Bool?
     }
 
     public struct Terminal: Codable, Equatable, Sendable {
@@ -129,6 +156,28 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
         public var isolateShellHistory: Bool?
     }
 
+    public struct Agent: Codable, Equatable, Sendable {
+        public var enabled: Bool?
+        public var skillsEnabled: Bool?
+        public var externalToolTimeoutSeconds: Int?
+        public var tools: AgentTools?
+        public var externalPlugins: [String: AgentExternalPlugin]?
+    }
+
+    public struct AgentTools: Codable, Equatable, Sendable {
+        public var readTerminalHistory: Bool?
+        public var listDirectory: Bool?
+        public var runOmuxCLI: Bool?
+        public var readFile: Bool?
+        public var grepFiles: Bool?
+        public var listSkills: Bool?
+        public var readSkill: Bool?
+    }
+
+    public struct AgentExternalPlugin: Codable, Equatable, Sendable {
+        public var enabled: Bool?
+    }
+
     public struct UI: Codable, Equatable, Sendable {
         public var panes: Panes?
         public var icons: Icons?
@@ -179,6 +228,7 @@ public struct OmuxConfigApplyPayload: Codable, Equatable, Sendable {
     public var terminal: Terminal?
     public var workspace: Workspace?
     public var ui: UI?
+    public var agent: Agent?
     public var plugins: Plugins?
     public var registries: Registries?
 }
@@ -259,6 +309,20 @@ public struct OmuxConfigEditor {
         }
 
         let current = currentResult.config
+        if let externalToolTimeout = payload.agent?.externalToolTimeoutSeconds, externalToolTimeout <= 0 {
+            return OmuxConfigApplyResult(
+                applied: false,
+                path: (current.sourceURL ?? OmuxConfigPaths.configFileURL).path,
+                backupPath: nil,
+                diagnostics: [
+                    OmuxConfigDiagnostic(
+                        severity: .error,
+                        message: "agent.external_tool_timeout_seconds must be greater than 0.",
+                        filePath: jsonFileURL.path
+                    ),
+                ]
+            )
+        }
         let configURL = current.sourceURL ?? OmuxConfigPaths.configFileURL
         let updated = updatedConfig(from: current, applying: payload, sourceURL: configURL)
         let rendered = OmuxConfigRenderer.render(config: updated)
@@ -324,6 +388,8 @@ public struct OmuxConfigEditor {
         let panesPayload = payload.ui?.panes
         let iconsPayload = payload.ui?.icons
         let sidebarPayload = payload.ui?.sidebar
+        let agentPayload = payload.agent
+        let agentToolsPayload = agentPayload?.tools
         let markdownPreviewPayload = payload.plugins?.markdownPreview
         let aiStatusPayload = payload.plugins?.aiStatus
         return OmuxConfig(
@@ -359,6 +425,27 @@ public struct OmuxConfigEditor {
                         row3: sidebarPayload?.terminalRow3.flatMap(OmuxConfigUI.Sidebar.TerminalRowSource.init(rawValue:)) ?? current.ui.sidebar.terminalRows.row3
                     )
                 )
+            ),
+            agent: OmuxConfigAgent(
+                enabled: agentPayload?.enabled ?? current.agent.enabled,
+                skillsEnabled: agentPayload?.skillsEnabled ?? current.agent.skillsEnabled,
+                externalToolTimeoutSeconds: agentPayload?.externalToolTimeoutSeconds ?? current.agent.externalToolTimeoutSeconds,
+                tools: OmuxConfigAgent.Tools(
+                    readTerminalHistory: agentToolsPayload?.readTerminalHistory ?? current.agent.tools.readTerminalHistory,
+                    listDirectory: agentToolsPayload?.listDirectory ?? current.agent.tools.listDirectory,
+                    runOmuxCLI: agentToolsPayload?.runOmuxCLI ?? current.agent.tools.runOmuxCLI,
+                    readFile: agentToolsPayload?.readFile ?? current.agent.tools.readFile,
+                    grepFiles: agentToolsPayload?.grepFiles ?? current.agent.tools.grepFiles,
+                    listSkills: agentToolsPayload?.listSkills ?? current.agent.tools.listSkills,
+                    readSkill: agentToolsPayload?.readSkill ?? current.agent.tools.readSkill
+                ),
+                externalPlugins: agentPayload?.externalPlugins.map { extPlugins in
+                    var merged = current.agent.externalPlugins
+                    for (key, value) in extPlugins {
+                        merged[key] = OmuxConfigAgent.ExternalPlugin(enabled: value.enabled ?? merged[key]?.enabled)
+                    }
+                    return merged
+                } ?? current.agent.externalPlugins
             ),
             plugins: OmuxConfigPlugins(
                 markdownPreview: OmuxConfigPlugins.MarkdownPreview(
@@ -459,6 +546,21 @@ public struct OmuxConfigEditor {
                     "terminalRow3": true,
                 ],
             ],
+            "agent": [
+                "enabled": true,
+                "skillsEnabled": true,
+                "externalToolTimeoutSeconds": true,
+                "tools": [
+                    "readTerminalHistory": true,
+                    "listDirectory": true,
+                    "runOmuxCLI": true,
+                    "readFile": true,
+                    "grepFiles": true,
+                    "listSkills": true,
+                    "readSkill": true,
+                ],
+                "externalPlugins": true,
+            ],
             "plugins": [
                 "markdownPreview": [
                     "enabled": true,
@@ -544,6 +646,29 @@ public enum OmuxConfigRenderer {
         lines.append("inactive_opacity = \(renderOpacity(config.ui.panes.inactiveOpacity))")
         lines.append("idle_status_clear = \(render(.string(config.ui.panes.idleStatusClear.rawValue)))")
         lines.append("")
+        lines.append("[agent]")
+        lines.append("enabled = \(config.agent.enabled ? "true" : "false")")
+        lines.append("skills_enabled = \(config.agent.skillsEnabled ? "true" : "false")")
+        lines.append("external_tool_timeout_seconds = \(config.agent.externalToolTimeoutSeconds)")
+        lines.append("")
+        lines.append("[agent.tools]")
+        lines.append("read_terminal_history = \(config.agent.tools.readTerminalHistory ? "true" : "false")")
+        lines.append("list_directory = \(config.agent.tools.listDirectory ? "true" : "false")")
+        lines.append("run_omux_cli = \(config.agent.tools.runOmuxCLI ? "true" : "false")")
+        lines.append("read_file = \(config.agent.tools.readFile ? "true" : "false")")
+        lines.append("grep_files = \(config.agent.tools.grepFiles ? "true" : "false")")
+        lines.append("list_skills = \(config.agent.tools.listSkills ? "true" : "false")")
+        lines.append("read_skill = \(config.agent.tools.readSkill ? "true" : "false")")
+        for pluginName in config.agent.externalPlugins.keys.sorted() {
+            guard let setting = config.agent.externalPlugins[pluginName],
+                  let enabled = setting.enabled else {
+                continue
+            }
+            lines.append("")
+            lines.append("[\(render(.string("agent.external.\(pluginName)")))]")
+            lines.append("enabled = \(enabled ? "true" : "false")")
+        }
+        lines.append("")
         lines.append("[plugins.markdown-preview]")
         let markdownPreview = config.plugins.markdownPreview
         lines.append("enabled = \(markdownPreview.enabled ? "true" : "false")")
@@ -615,6 +740,7 @@ private extension OmuxConfigExport.Values {
                 isolateShellHistory: config.workspace.isolateShellHistory
             ),
             ui: .init(config: config.ui),
+            agent: .init(config: config.agent),
             plugins: .init(config: config.plugins),
             registries: .init(hooks: config.registries.hooks, plugins: config.registries.plugins)
         )
@@ -629,6 +755,10 @@ private extension OmuxConfigExport.Defaults {
             themeName: config.theme.name,
             workspaceDefaultRootPath: config.workspace.defaultRootPath,
             workspaceIsolateShellHistory: config.workspace.isolateShellHistory,
+            agentEnabled: config.agent.enabled,
+            agentSkillsEnabled: config.agent.skillsEnabled,
+            agentExternalToolTimeoutSeconds: config.agent.externalToolTimeoutSeconds,
+            agentTools: .init(config: config.agent.tools),
             inactivePaneOpacity: config.ui.panes.inactiveOpacity,
             idleStatusClear: config.ui.panes.idleStatusClear.rawValue,
             iconsEnabled: config.ui.icons.enabled,
@@ -698,6 +828,32 @@ private extension OmuxConfigExport.UI {
                 terminalRow2: config.sidebar.terminalRows.row2.rawValue,
                 terminalRow3: config.sidebar.terminalRows.row3.rawValue
             )
+        )
+    }
+}
+
+private extension OmuxConfigExport.Agent {
+    init(config: OmuxConfigAgent) {
+        self.init(
+            externalPlugins: config.externalPlugins.mapValues { .init(enabled: $0.enabled) },
+            enabled: config.enabled,
+            skillsEnabled: config.skillsEnabled,
+            externalToolTimeoutSeconds: config.externalToolTimeoutSeconds,
+            tools: .init(config: config.tools)
+        )
+    }
+}
+
+private extension OmuxConfigExport.AgentTools {
+    init(config: OmuxConfigAgent.Tools) {
+        self.init(
+            readTerminalHistory: config.readTerminalHistory,
+            listDirectory: config.listDirectory,
+            runOmuxCLI: config.runOmuxCLI,
+            readFile: config.readFile,
+            grepFiles: config.grepFiles,
+            listSkills: config.listSkills,
+            readSkill: config.readSkill
         )
     }
 }

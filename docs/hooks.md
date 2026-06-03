@@ -273,6 +273,10 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | `command-started` | `omux run` sends a command to a live session. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "command": string, "cwd": string \| null, "outputContext": { "kind": "unavailable" } }` |
 | `terminal-command-finished` | The terminal runtime reports a command completion. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "command": string \| null, "cwd": string \| null, "exitCode": integer \| null, "durationNanoseconds": integer \| double, "outputContext": object }` |
 | `command-failed` | A command completion reports a nonzero exit code. | `workspaceID`, `tabID`, `paneID`, `sessionID` | Same as `terminal-command-finished`. |
+| `agent-prompt-submitted` | `omux agent` accepts a prompt for model submission. | OpenMUX IDs when the invoking host context has them | `{ "cwd": string, "prompt": string, "source": "repl" \| "one-shot" }` |
+| `agent-response-completed` | `omux agent` completes a final response successfully. | OpenMUX IDs when the invoking host context has them | `{ "cwd": string, "response": string, "source": "repl" \| "one-shot", "approxTokens": integer \| null }` |
+| `agent-slash-command-invoked` | The REPL host handles a slash command locally. | OpenMUX IDs when the invoking host context has them | `{ "cwd": string, "command": string }` |
+| `agent-handoff-written` | `/handoff` writes a markdown continuation brief successfully. | OpenMUX IDs when the invoking host context has them | `{ "cwd": string, "path": string }` |
 
 `outputContext` is bounded and explicit. Current values are:
 
