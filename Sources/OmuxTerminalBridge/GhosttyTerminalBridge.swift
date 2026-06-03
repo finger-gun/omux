@@ -516,6 +516,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.unlock()
 
         guard let surface else {
+            fputs("warning: teardown skipped for missing terminal surface paneID=\(paneID.rawValue)\n", stderr)
             return
         }
 

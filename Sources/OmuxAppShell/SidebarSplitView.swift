@@ -530,22 +530,30 @@ final class SidebarSplitView: NSView {
         let proximityThreshold: CGFloat = 34   // one collapsed header height
 
         if src + 2 <= panels.count {
+            var candidateSlot: Int?
             for slot in (src + 2) ... panels.count where validSlots.contains(slot) {
                 let previous = panels[slot - 1]
                 let previousHeight = previous.isCollapsed ? previous.collapsedHeight : previous.view.frame.height
                 let boundary = previous.view.frame.minY + previousHeight
                 if localY > boundary - proximityThreshold {
-                    return slot
+                    candidateSlot = slot
                 }
+            }
+            if let candidateSlot {
+                return candidateSlot
             }
         }
 
         if src > 0 {
+            var candidateSlot: Int?
             for slot in stride(from: src - 1, through: 0, by: -1) where validSlots.contains(slot) {
                 let boundary = panels[slot].view.frame.minY
                 if localY < boundary + proximityThreshold {
-                    return slot
+                    candidateSlot = slot
                 }
+            }
+            if let candidateSlot {
+                return candidateSlot
             }
         }
         return nil

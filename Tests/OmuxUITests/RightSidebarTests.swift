@@ -99,7 +99,7 @@ final class RightSidebarTests: OmuxUITestsBase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    func testRightSidebarShortcutDoesNotDependOnAgentSessionsPanelAction() {
+    func testRightSidebarShortcutOpensSidebar() {
         ensureSidebarClosed()
         toggleRightSidebar()
         XCTAssertTrue(

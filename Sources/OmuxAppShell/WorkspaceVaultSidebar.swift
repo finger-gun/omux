@@ -221,6 +221,12 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
         }
     }
 
+    private func restoreVisibleAgentSessionsPanel() {
+        guard !agentSessionsContainer.isHidden else { return }
+        guard splitView.currentPanels.contains(where: { $0.panelID == "agentSessions" }) == false else { return }
+        splitView.setPanels(splitView.currentPanels + [makeAgentSessionsPanel(sidebarNamespace: "omux.rightSidebar")])
+    }
+
     func makeWorktreesPanel(sidebarNamespace: String) -> SidebarSplitView.Panel {
         let defaultProportion: CGFloat = sidebarNamespace == "omux.rightSidebar" ? 0.25 : 1.0
         let proportion = CGFloat(
@@ -364,7 +370,11 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
         let wasAgentSessionsHidden = agentSessionsContainer.isHidden
         agentSessionsContainer.isHidden = !isAgentSessionsEnabled
         if agentSessionsContainer.isHidden != wasAgentSessionsHidden {
-            omitHiddenAgentSessionsPanel()
+            if agentSessionsContainer.isHidden {
+                omitHiddenAgentSessionsPanel()
+            } else {
+                restoreVisibleAgentSessionsPanel()
+            }
         }
 
         guard isAgentSessionsEnabled else { return }
