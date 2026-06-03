@@ -13,7 +13,7 @@ final class SettingsTests: OmuxUITestsBase {
 
         // Toggle sidebar off via View menu.
         menuBar.menuBarItems["View"].click()
-        menuBar.menuBarItems["View"].menuItems["Toggle Workspace Column"].click()
+        menuBar.menuBarItems["View"].menuItems["Left Sidebar"].click()
 
         let hiddenPredicate = NSPredicate(format: "exists == false")
         let hiddenExpectation = XCTNSPredicateExpectation(predicate: hiddenPredicate, object: workspaceList)
@@ -25,7 +25,7 @@ final class SettingsTests: OmuxUITestsBase {
 
         // Toggle sidebar back on.
         menuBar.menuBarItems["View"].click()
-        menuBar.menuBarItems["View"].menuItems["Toggle Workspace Column"].click()
+        menuBar.menuBarItems["View"].menuItems["Left Sidebar"].click()
 
         XCTAssertTrue(
             workspaceList.waitForExistence(timeout: 3),

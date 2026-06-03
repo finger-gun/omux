@@ -516,7 +516,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.unlock()
 
         guard let surface else {
-            throw TerminalBridgeError.missingSurface(paneID)
+            return
         }
 
         _ = sessionState

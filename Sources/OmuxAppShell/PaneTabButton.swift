@@ -41,7 +41,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
     private let renderedIcon: OmuxRenderedIcon?
     private let iconSymbolImage: NSImage?
     private let progress: PaneProgress?
-    private let fullDisplayTitle: String
+    private var fullDisplayTitle: String
     var isActivePaneTab: Bool { isActiveTab }
 
     init(
@@ -147,6 +147,15 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
         didSet {
             updateVisualState()
         }
+    }
+
+    private func applyDisplayTitle(_ title: String) {
+        fullDisplayTitle = title
+        titleLabel.stringValue = title
+        titleLabel.toolTip = title
+        setAccessibilityLabel(renderedIcon.map { "\($0.accessibilityLabel), \(title)" } ?? title)
+        toolTip = title
+        closeButton.setAccessibilityLabel("Close \(title)")
     }
 
     override var intrinsicContentSize: NSSize {
@@ -322,6 +331,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
         if newName.isEmpty {
             onClearAlias?()
         } else {
+            applyDisplayTitle(newName)
             onRename?(newName)
         }
     }
