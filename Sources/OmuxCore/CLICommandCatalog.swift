@@ -203,6 +203,16 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .sendToTerminal
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.agent",
+            usage: "omux agent [--verbose] [--allow-read-anywhere] [--system <text>] [-p|--prompt <text>]",
+            title: "omux: Agent",
+            summary: "Experimental local Apple agent REPL and one-shot prompt runner",
+            aliases: ["local ai", "foundation models", "apple intelligence"],
+            requiresArguments: false,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.theme",
             usage: "omux theme",
             title: "omux: Pick Theme",

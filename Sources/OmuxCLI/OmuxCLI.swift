@@ -4,13 +4,164 @@ import OmuxAIStatusPlugin
 import OmuxControlPlane
 import OmuxConfig
 import OmuxCore
+import OmuxHooks
 import OmuxVault
 import OmuxMarkdownPreviewPlugin
 import OmuxTheme
 
+func describeOmuxAgentError(_ error: Error) -> String {
+    let nsError = error as NSError
+    if nsError.domain.contains("FoundationModels.LanguageModelSession.GenerationError") || nsError.localizedDescription == "The operation couldn’t be completed. (FoundationModels.LanguageModelSession.GenerationError error -1.)" {
+        return "local model generation failed. This often means the prompt plus tool output exceeded the Foundation Models context budget. Try a narrower prompt, ask for fewer history lines or smaller files, or rerun with --verbose."
+    }
+    return error.localizedDescription
+}
+
+struct OmuxAgentObservationContext: Sendable {
+    let cwd: String
+    let workspaceID: WorkspaceID?
+    let tabID: TabID?
+    let paneID: PaneID?
+    let sessionID: SessionID?
+}
+
+struct OmuxAgentObservationClient {
+    let client: OmuxControlClient
+
+    func publish(
+        eventName: ControlPlaneActionEventName,
+        hookCategory: HookCategory,
+        hookName: String,
+        context: OmuxAgentObservationContext,
+        payload: OmuxValue
+    ) {
+        _ = try? client.request(
+            method: .agentObserve,
+            params: ControlPlaneAgentObservation(
+                eventName: eventName.rawValue,
+                hookCategory: hookCategory.rawValue,
+                hookName: hookName,
+                cwd: context.cwd,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                paneID: context.paneID,
+                sessionID: context.sessionID,
+                payload: payload
+            ).rpcValue
+        )
+    }
+}
+
+private final class OmuxAgentCommandRunner: @unchecked Sendable {
+    let generator: OmuxAgentGenerating
+    let write: (String) -> Void
+    let writeLine: (String) -> Void
+    let writeErrorLine: @Sendable (String) -> Void
+    let request: OmuxCLICommand.AgentCommandRequest
+    let hostContext: String
+    let agentConfiguration: OmuxConfigAgent
+    let observationClient: OmuxAgentObservationClient
+    let observationContext: OmuxAgentObservationContext
+    let workingDirectoryURL: URL
+    let semaphore = DispatchSemaphore(value: 0)
+    var exitCode: Int32 = 0
+
+    init(
+        generator: OmuxAgentGenerating,
+        write: @escaping (String) -> Void,
+        writeLine: @escaping (String) -> Void,
+        writeErrorLine: @escaping @Sendable (String) -> Void,
+        request: OmuxCLICommand.AgentCommandRequest,
+        hostContext: String,
+        agentConfiguration: OmuxConfigAgent,
+        observationClient: OmuxAgentObservationClient,
+        observationContext: OmuxAgentObservationContext,
+        workingDirectoryURL: URL
+    ) {
+        self.generator = generator
+        self.write = write
+        self.writeLine = writeLine
+        self.writeErrorLine = writeErrorLine
+        self.request = request
+        self.hostContext = hostContext
+        self.agentConfiguration = agentConfiguration
+        self.observationClient = observationClient
+        self.observationContext = observationContext
+        self.workingDirectoryURL = workingDirectoryURL
+    }
+
+    func start() {
+        Task {
+            await self.run()
+        }
+    }
+
+    private func run() async {
+        let verboseHandler: (@Sendable (String) -> Void)?
+        if request.verbose {
+            let writeErrorLine = self.writeErrorLine
+            verboseHandler = { message in
+                writeErrorLine("[omux agent] \(message)")
+            }
+        } else {
+            verboseHandler = nil
+        }
+        let partialHandler: (String) -> Void = { [write] chunk in
+            write(chunk)
+        }
+
+        do {
+            observationClient.publish(
+                eventName: .agentPromptSubmitted,
+                hookCategory: .command,
+                hookName: "agent-prompt-submitted",
+                context: observationContext,
+                payload: .object([
+                    "prompt": .string(request.prompt ?? ""),
+                    "source": .string("one-shot"),
+                ])
+            )
+            let final = try await generator.generate(
+                prompt: request.prompt ?? "",
+                systemInstruction: request.systemInstruction,
+                hostContext: hostContext,
+                agentConfiguration: agentConfiguration,
+                workingDirectoryURL: workingDirectoryURL,
+                allowReadAnywhere: request.allowReadAnywhere,
+                onVerbose: verboseHandler,
+                onPartial: partialHandler
+            )
+            if final.isEmpty == false, final.hasSuffix("\n") == false {
+                write("\n")
+            }
+            observationClient.publish(
+                eventName: .agentResponseCompleted,
+                hookCategory: .command,
+                hookName: "agent-response-completed",
+                context: observationContext,
+                payload: .object([
+                    "response": .string(final),
+                    "source": .string("one-shot"),
+                    "approxTokens": .integer(max(1, Int(ceil(Double(final.utf8.count + (request.prompt ?? "").utf8.count) / 4.0)))),
+                ])
+            )
+        } catch {
+            if request.verbose {
+                let nsError = error as NSError
+                writeErrorLine("[omux agent] generation failure domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription)")
+            }
+            writeLine("omux agent error: \(describeOmuxAgentError(error))")
+            exitCode = 1
+        }
+        semaphore.signal()
+    }
+}
+
 public struct OmuxCLICommand {
     private let client: OmuxControlClient
+    private let write: (String) -> Void
     private let writeLine: (String) -> Void
+    private let writeErrorLine: @Sendable (String) -> Void
     private let readInputLine: () -> String?
     private let isInteractiveThemePickerAvailable: () -> Bool
     private let selectThemeInteractively: ([OmuxTheme], String?) throws -> OmuxTheme?
@@ -24,24 +175,54 @@ public struct OmuxCLICommand {
     private let versionProvider: OpenMUXVersionProvider
     private let pluginRegistry: OmuxCLIPluginRegistry
     private let pluginRunner: OmuxCLIPluginRunner
+    private let agentGenerator: OmuxAgentGenerating
+    private let agentChatSessionFactory: OmuxAgentChatSessionFactorying
+    private let isAgentREPLAvailable: () -> Bool
     private let environment: () -> [String: String]
     private let gitRunner: (GitProcessCommand) throws -> GitProcessResult
+    private let runAgentREPL: (OmuxAgentREPLRequest, String, OmuxAgentHostContext, URL) -> Int32
 
     public init(
         client: OmuxControlClient = OmuxControlClient(),
+        write: @escaping (String) -> Void = {
+            FileHandle.standardOutput.write(Data($0.utf8))
+        },
         writeLine: @escaping (String) -> Void = { print($0) },
+        writeErrorLine: @escaping @Sendable (String) -> Void = {
+            FileHandle.standardError.write(Data(($0 + "\n").utf8))
+        },
         readInputLine: @escaping () -> String? = { Swift.readLine(strippingNewline: true) },
         configLoader: OmuxConfigLoader = OmuxConfigLoader(),
         themeRegistry: OmuxThemeRegistry = OmuxThemeRegistry()
     ) {
         self.init(
             client: client,
+            write: write,
             writeLine: writeLine,
+            writeErrorLine: writeErrorLine,
             readInputLine: readInputLine,
             configLoader: configLoader,
             themeRegistry: themeRegistry,
             installer: OmuxCLIInstaller(),
             versionProvider: OpenMUXVersionProvider(),
+            agentGenerator: OmuxSystemAgentGenerator(
+                omuxCommandRunner: Self.makeAgentCLICommandRunner(
+                    client: client,
+                    environment: { ProcessInfo.processInfo.environment }
+                ),
+                historyFetcher: Self.makeAgentHistoryFetcher(
+                    client: client
+                )
+            ),
+            agentChatSessionFactory: OmuxSystemAgentChatSessionFactory(
+                omuxCommandRunner: Self.makeAgentCLICommandRunner(
+                    client: client,
+                    environment: { ProcessInfo.processInfo.environment }
+                ),
+                historyFetcher: Self.makeAgentHistoryFetcher(
+                    client: client
+                )
+            ),
             environment: { ProcessInfo.processInfo.environment },
             gitRunner: Self.runGitProcess,
             isInteractiveThemePickerAvailable: TerminalThemePicker.isAvailable,
@@ -49,13 +230,39 @@ public struct OmuxCLICommand {
             isInteractivePluginPickerAvailable: TerminalPluginPicker.isAvailable,
             selectPluginInteractively: { try TerminalPluginPicker().selectPlugin(items: $0) },
             isInteractiveVaultResumeChoicePickerAvailable: TerminalVaultResumeChoicePicker.isAvailable,
-            selectVaultResumeChoiceInteractively: { try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1) }
+            selectVaultResumeChoiceInteractively: { try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1) },
+            isAgentREPLAvailable: TerminalAgentREPLDefaultDriver().isAvailable,
+            runAgentREPL: { request, hostContext, hostMetadata, workingDirectoryURL in
+                OmuxAgentREPLRunner(
+                    writeErrorLine: writeErrorLine,
+                    request: request,
+                    hostContext: hostContext,
+                    hostMetadata: hostMetadata,
+                    workingDirectoryURL: workingDirectoryURL,
+                    sessionFactory: OmuxSystemAgentChatSessionFactory(
+                        omuxCommandRunner: Self.makeAgentCLICommandRunner(
+                            client: client,
+                            environment: { ProcessInfo.processInfo.environment }
+                        ),
+                        historyFetcher: Self.makeAgentHistoryFetcher(
+                            client: client
+                        )
+                    ),
+                    observationClient: OmuxAgentObservationClient(client: client)
+                ).run()
+            }
         )
     }
 
     init(
         client: OmuxControlClient,
+        write: @escaping (String) -> Void = {
+            FileHandle.standardOutput.write(Data($0.utf8))
+        },
         writeLine: @escaping (String) -> Void,
+        writeErrorLine: @escaping @Sendable (String) -> Void = {
+            FileHandle.standardError.write(Data(($0 + "\n").utf8))
+        },
         readInputLine: @escaping () -> String?,
         configLoader: OmuxConfigLoader,
         themeRegistry: OmuxThemeRegistry,
@@ -63,6 +270,8 @@ public struct OmuxCLICommand {
         versionProvider: OpenMUXVersionProvider = OpenMUXVersionProvider(),
         pluginRegistry: OmuxCLIPluginRegistry = OmuxCLIPluginRegistry(),
         pluginRunner: OmuxCLIPluginRunner = OmuxCLIPluginRunner(),
+        agentGenerator: OmuxAgentGenerating = OmuxSystemAgentGenerator(),
+        agentChatSessionFactory: OmuxAgentChatSessionFactorying = OmuxSystemAgentChatSessionFactory(),
         environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
         gitRunner: @escaping (GitProcessCommand) throws -> GitProcessResult = OmuxCLICommand.runGitProcess,
         isInteractiveThemePickerAvailable: @escaping () -> Bool = TerminalThemePicker.isAvailable,
@@ -76,10 +285,26 @@ public struct OmuxCLICommand {
         isInteractiveVaultResumeChoicePickerAvailable: @escaping () -> Bool = TerminalVaultResumeChoicePicker.isAvailable,
         selectVaultResumeChoiceInteractively: @escaping ([VaultResumeChoiceItem], VaultResumeMismatchContext) throws -> VaultResumeChoiceItem? = {
             try TerminalVaultResumeChoicePicker().selectChoice(items: $0, context: $1)
+        },
+        isAgentREPLAvailable: @escaping () -> Bool = { TerminalAgentREPLDefaultDriver().isAvailable() },
+        runAgentREPL: @escaping (OmuxAgentREPLRequest, String, OmuxAgentHostContext, URL) -> Int32 = { request, hostContext, hostMetadata, workingDirectoryURL in
+            OmuxAgentREPLRunner(
+                writeErrorLine: {
+                    FileHandle.standardError.write(Data(($0 + "\n").utf8))
+                },
+                request: request,
+                hostContext: hostContext,
+                hostMetadata: hostMetadata,
+                workingDirectoryURL: workingDirectoryURL,
+                sessionFactory: OmuxSystemAgentChatSessionFactory(),
+                observationClient: OmuxAgentObservationClient(client: OmuxControlClient())
+            ).run()
         }
     ) {
         self.client = client
+        self.write = write
         self.writeLine = writeLine
+        self.writeErrorLine = writeErrorLine
         self.readInputLine = readInputLine
         self.isInteractiveThemePickerAvailable = isInteractiveThemePickerAvailable
         self.selectThemeInteractively = selectThemeInteractively
@@ -93,8 +318,12 @@ public struct OmuxCLICommand {
         self.versionProvider = versionProvider
         self.pluginRegistry = pluginRegistry
         self.pluginRunner = pluginRunner
+        self.agentGenerator = agentGenerator
+        self.agentChatSessionFactory = agentChatSessionFactory
         self.environment = environment
         self.gitRunner = gitRunner
+        self.isAgentREPLAvailable = isAgentREPLAvailable
+        self.runAgentREPL = runAgentREPL
     }
 
     @discardableResult
@@ -129,6 +358,8 @@ public struct OmuxCLICommand {
                 return runPluginCommand(arguments: Array(commandArguments.dropFirst()))
             case "agent-sessions", "agent-session", "agents", "as":
                 return try runVaultCommand(arguments: Array(commandArguments.dropFirst()), commandName: "agent-sessions")
+            case "agent":
+                return runAgentCommand(arguments: Array(commandArguments.dropFirst()))
             case "version", "--version":
                 writeLine(try versionProvider.currentVersion())
             case "update":
@@ -351,10 +582,252 @@ public struct OmuxCLICommand {
         return 0
     }
 
+    private static func makeAgentCLICommandRunner(
+        client: OmuxControlClient,
+        environment: @escaping () -> [String: String]
+    ) -> OmuxAgentCLIRunner {
+        { arguments in
+            final class OutputBuffer: @unchecked Sendable {
+                var value = ""
+            }
+
+            let output = OutputBuffer()
+            let command = OmuxCLICommand(
+                client: client,
+                write: { output.value.append($0) },
+                writeLine: { output.value.append($0 + "\n") },
+                writeErrorLine: { output.value.append($0 + "\n") },
+                readInputLine: { nil },
+                configLoader: OmuxConfigLoader(),
+                themeRegistry: OmuxThemeRegistry(),
+                installer: OmuxCLIInstaller(),
+                versionProvider: OpenMUXVersionProvider(),
+                pluginRegistry: OmuxCLIPluginRegistry(),
+                pluginRunner: OmuxCLIPluginRunner(),
+                agentGenerator: OmuxSystemAgentGenerator(),
+                environment: environment,
+                gitRunner: Self.runGitProcess,
+                isInteractiveThemePickerAvailable: { false },
+                selectThemeInteractively: { _, _ in nil },
+                isInteractivePluginPickerAvailable: { false },
+                selectPluginInteractively: { _ in nil },
+                isInteractiveVaultResumeChoicePickerAvailable: { false },
+                selectVaultResumeChoiceInteractively: { _, _ in nil }
+            )
+            let exitCode = command.run(arguments: ["omux"] + arguments)
+            return (exitCode, output.value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    private static func makeAgentHistoryFetcher(
+        client: OmuxControlClient
+    ) -> OmuxAgentHistoryFetcher {
+        { request in
+            let response = try client.request(method: .terminalHistory, params: request.rpcValue)
+            if let error = response.error {
+                throw NSError(
+                    domain: "OmuxAgentHistoryFetcher",
+                    code: Int(error.code),
+                    userInfo: [NSLocalizedDescriptionKey: error.message]
+                )
+            }
+            return response.result
+        }
+    }
+
     public static let usage = OpenMUXCLICommandCatalog.usage
+    private static let agentUsage = "usage: omux agent [--verbose] [--allow-read-anywhere] [--enabled-tools <names>|--enabledTools=<names>] [--system <text>] [-p|--prompt <text>]"
+
+    private func runAgentCommand(arguments: [String]) -> Int32 {
+        guard let request = parseAgentRequest(arguments) else {
+            writeLine(Self.agentUsage)
+            return 1
+        }
+
+        let configResult = configLoader.load()
+        if configResult.hasErrors {
+            writeLine("omux agent error: configuration is invalid. Run `omux config doctor` for details.")
+            return 1
+        }
+        let agentConfiguration = configResult.config.agent
+        let effectiveAgentConfiguration: OmuxConfigAgent
+        if let enabledTools = request.enabledTools {
+            effectiveAgentConfiguration = OmuxConfigAgent(
+                enabled: agentConfiguration.enabled,
+                skillsEnabled: agentConfiguration.skillsEnabled,
+                externalToolTimeoutSeconds: agentConfiguration.externalToolTimeoutSeconds,
+                tools: agentConfiguration.tools,
+                externalPlugins: agentConfiguration.externalPlugins,
+                enabledTools: enabledTools
+            )
+        } else {
+            effectiveAgentConfiguration = agentConfiguration
+        }
+        guard agentConfiguration.enabled else {
+            writeLine("omux agent is disabled by [agent].enabled = false in ~/.omux/config.toml.")
+            return 1
+        }
+
+        let workingDirectoryURL = currentWorkingDirectoryURL()
+        let hostContext = makeAgentHostContext(
+            workingDirectoryURL: workingDirectoryURL,
+            allowReadAnywhere: request.allowReadAnywhere
+        )
+        let observationContext = OmuxAgentObservationContext(
+            cwd: workingDirectoryURL.path,
+            workspaceID: hostContext.focusedWorkspaceID.map(WorkspaceID.init(rawValue:)),
+            tabID: hostContext.focusedTabID.map(TabID.init(rawValue:)),
+            paneID: hostContext.focusedPaneID.map(PaneID.init(rawValue:)),
+            sessionID: hostContext.focusedSessionID.map(SessionID.init(rawValue:))
+        )
+        let observationClient = OmuxAgentObservationClient(client: client)
+
+        if let prompt = request.prompt {
+            let runner = OmuxAgentCommandRunner(
+                generator: agentGenerator,
+                write: write,
+                writeLine: writeLine,
+                writeErrorLine: writeErrorLine,
+                request: AgentCommandRequest(
+                    systemInstruction: request.systemInstruction,
+                    verbose: request.verbose,
+                    allowReadAnywhere: request.allowReadAnywhere,
+                    prompt: prompt
+                ),
+                hostContext: hostContext.promptBlock,
+                agentConfiguration: effectiveAgentConfiguration,
+                observationClient: observationClient,
+                observationContext: observationContext,
+                workingDirectoryURL: workingDirectoryURL
+            )
+            runner.start()
+            runner.semaphore.wait()
+            return runner.exitCode
+        }
+
+        guard isAgentREPLAvailable() else {
+            writeLine("omux agent error: interactive REPL requires a TTY on stdin/stdout. For one-shot mode in scripts or pipes, use `omux agent -p \"...\"`.")
+            return 1
+        }
+
+        return runAgentREPL(
+            OmuxAgentREPLRequest(
+                systemInstruction: request.systemInstruction,
+                verbose: request.verbose,
+                allowReadAnywhere: request.allowReadAnywhere,
+                agentConfiguration: effectiveAgentConfiguration
+            ),
+            hostContext.promptBlock,
+            hostContext,
+            workingDirectoryURL
+        )
+    }
 
     private func resolveCLIPath(_ path: String) -> String {
         resolveCLIPath(path, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+    }
+
+    fileprivate struct AgentCommandRequest {
+        var systemInstruction: String?
+        var verbose: Bool
+        var allowReadAnywhere: Bool
+        var enabledTools: Set<String>?
+        var prompt: String?
+    }
+
+    private func parseAgentRequest(_ arguments: [String]) -> AgentCommandRequest? {
+        var remaining = ArraySlice(arguments)
+        var systemInstruction: String?
+        var verbose = false
+        var allowReadAnywhere = false
+        var enabledTools: Set<String>?
+        var prompt: String?
+
+        while let argument = remaining.first {
+            if let value = Self.agentOptionValue(argument, longName: "--enabled-tools") ?? Self.agentOptionValue(argument, longName: "--enabledTools") {
+                guard let parsed = Self.parseEnabledTools(value) else {
+                    return nil
+                }
+                enabledTools = parsed
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "--enabled-tools" || argument == "--enabledTools" {
+                remaining = remaining.dropFirst()
+                guard let value = remaining.first,
+                      let parsed = Self.parseEnabledTools(value) else {
+                    return nil
+                }
+                enabledTools = parsed
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "--verbose" {
+                verbose = true
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "--allow-read-anywhere" {
+                allowReadAnywhere = true
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "--system" {
+                remaining = remaining.dropFirst()
+                guard let value = remaining.first else {
+                    return nil
+                }
+                systemInstruction = value
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument == "-p" || argument == "--prompt" {
+                remaining = remaining.dropFirst()
+                guard let value = remaining.first else {
+                    return nil
+                }
+                prompt = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard prompt?.isEmpty == false else {
+                    return nil
+                }
+                remaining = remaining.dropFirst()
+                continue
+            }
+            if argument.hasPrefix("-") {
+                return nil
+            }
+            return nil
+        }
+
+        return AgentCommandRequest(
+            systemInstruction: systemInstruction,
+            verbose: verbose,
+            allowReadAnywhere: allowReadAnywhere,
+            enabledTools: enabledTools,
+            prompt: prompt
+        )
+    }
+
+    private static func agentOptionValue(_ argument: String, longName: String) -> String? {
+        let prefix = longName + "="
+        guard argument.hasPrefix(prefix) else {
+            return nil
+        }
+        return String(argument.dropFirst(prefix.count))
+    }
+
+    private static func parseEnabledTools(_ rawValue: String) -> Set<String>? {
+        let names = rawValue
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard names.isEmpty == false,
+              names.allSatisfy({ $0.isEmpty == false }) else {
+            return nil
+        }
+        if names.count == 1, names[0].lowercased() == "none" {
+            return []
+        }
+        return Set(names)
     }
 
     private func resolveCLIPath(_ path: String, relativeTo baseURL: URL) -> String {
@@ -544,6 +1017,50 @@ public struct OmuxCLICommand {
             fileURLWithPath: path?.isEmpty == false ? path! : FileManager.default.currentDirectoryPath,
             isDirectory: true
         ).standardizedFileURL
+    }
+
+    private func makeAgentHostContext(
+        workingDirectoryURL: URL,
+        allowReadAnywhere: Bool
+    ) -> OmuxAgentHostContext {
+        let currentEnvironment = environment()
+        let envWorkspaceID = currentEnvironment[OpenMUXWorkspaceEnvironment.workspaceIDKey]?.nilIfEmpty
+        let envPaneID = currentEnvironment["OMUX_PANE_ID"]?.nilIfEmpty
+        let envSessionID = currentEnvironment["OMUX_SESSION_ID"]?.nilIfEmpty
+
+        var context = OmuxAgentHostContext(
+            currentWorkingDirectory: workingDirectoryURL.path,
+            fileReadScope: allowReadAnywhere ? "any-readable-path" : "cwd-only",
+            focusedWorkspaceID: envWorkspaceID,
+            focusedTabID: nil,
+            focusedPaneID: envPaneID,
+            focusedSessionID: envSessionID,
+            openMUXContextAvailable: envWorkspaceID != nil || envPaneID != nil || envSessionID != nil
+        )
+
+        guard let paneID = envPaneID else {
+            return context
+        }
+
+        let request = ControlPlaneHistoryRequest(
+            scope: .pane(PaneID(rawValue: paneID)),
+            maxBytes: 0,
+            maxLines: 0
+        )
+
+        guard let response = try? client.request(method: .terminalHistory, params: request.rpcValue),
+              response.error == nil,
+              let item = response.result?.objectValue?["items"]?.arrayValue?.first?.objectValue
+        else {
+            return context
+        }
+
+        context.focusedWorkspaceID = item["workspaceID"]?.stringValue ?? context.focusedWorkspaceID
+        context.focusedTabID = item["tabID"]?.stringValue ?? context.focusedTabID
+        context.focusedPaneID = item["paneID"]?.stringValue ?? context.focusedPaneID
+        context.focusedSessionID = item["sessionID"]?.stringValue ?? context.focusedSessionID
+        context.openMUXContextAvailable = true
+        return context
     }
 
     private func successfulGitOutput(_ arguments: [String], workingDirectory: URL) throws -> String? {

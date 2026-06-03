@@ -800,6 +800,12 @@ struct OmuxConfigTests {
         #expect(contents.contains("[ui.icons]"))
         #expect(contents.contains("# provider = \"nerd-font\""))
         #expect(contents.contains("# colors_enabled = true"))
+        #expect(contents.contains("[agent]"))
+        #expect(contents.contains("skills_enabled = true"))
+        #expect(contents.contains("external_tool_timeout_seconds = \(OmuxConfigAgent.defaultExternalToolTimeoutSeconds)"))
+        #expect(contents.contains("# [agent.external.example-plugin]"))
+        #expect(contents.contains("[agent.tools]"))
+        #expect(contents.contains("read_skill = true"))
         #expect(contents.contains("[agent-sessions]"))
         #expect(contents.contains("collapsed_toggle_visible = true"))
         #expect(contents.contains("[plugins.markdown-preview]"))
@@ -859,6 +865,130 @@ struct OmuxConfigTests {
         #expect(result.config.agentSessions.agents["copilot"]?.enabled == true)
         #expect(result.config.agentSessions.agents["copilot"]?.home == "~/.copilot-test")
         #expect(result.config.agentSessions.agents["copilot"]?.resumeCommand == "copilot --resume {session_id}")
+    }
+
+    @Test
+    func agentConfigParsesBooleansAndToolToggles() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent]
+            enabled = false
+            skills_enabled = false
+            external_tool_timeout_seconds = 90
+
+            [agent.tools]
+            read_terminal_history = false
+            list_directory = true
+            run_omux_cli = false
+            read_file = true
+            grep_files = false
+            list_skills = true
+            read_skill = false
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agent.enabled == false)
+        #expect(result.config.agent.skillsEnabled == false)
+        #expect(result.config.agent.externalToolTimeoutSeconds == 90)
+        #expect(result.config.agent.tools.readTerminalHistory == false)
+        #expect(result.config.agent.tools.listDirectory == true)
+        #expect(result.config.agent.tools.runOmuxCLI == false)
+        #expect(result.config.agent.tools.readFile == true)
+        #expect(result.config.agent.tools.grepFiles == false)
+        #expect(result.config.agent.tools.listSkills == true)
+        #expect(result.config.agent.tools.readSkill == false)
+    }
+
+    @Test
+    func unknownAgentKeysProduceDiagnostics() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent]
+            prompt = "nope"
+
+            [agent.tools]
+            unknown = true
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent] key 'prompt'") })
+        #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent.tools] key 'unknown'") })
+    }
+
+    @Test
+    func invalidAgentExternalToolTimeoutProducesDiagnostics() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent]
+            external_tool_timeout_seconds = 0
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains { $0.message.contains("agent.external_tool_timeout_seconds must be greater than 0.") })
+    }
+
+    @Test
+    func agentExternalPluginConfigParsesEnablement() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent.external.lookup-tools]
+            enabled = false
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors == false)
+        #expect(result.config.agent.externalPlugins["lookup-tools"]?.enabled == false)
+    }
+
+    @Test
+    func unknownAgentExternalPluginKeysProduceDiagnostics() throws {
+        let home = try temporaryHome()
+        defer { cleanup(home) }
+        let configURL = home.appendingPathComponent("config.toml")
+        try write(
+            """
+            schema = 1
+
+            [agent.external.lookup-tools]
+            callback = "__bad"
+            """,
+            to: configURL
+        )
+
+        let result = OmuxConfigLoader(configURL: configURL).load()
+        #expect(result.hasErrors)
+        #expect(result.diagnostics.contains { $0.message.contains("Unknown [agent.external.lookup-tools] key 'callback'") })
     }
 
     @Test

@@ -81,6 +81,13 @@ swift run omux plugins discover
 swift run omux plugins install <plugin-id>
 swift run omux plugin list
 swift run omux plugin path
+swift run omux agent
+swift run omux agent -p "Draft a concise release summary"
+swift run omux agent -p "Summarize the last few terminal steps into a short next-action list"
+swift run omux agent -p "Find pane status handling and summarize the relevant files"
+swift run omux agent -p "Split the focused pane to the right and then list workspaces"
+swift run omux agent --verbose -p "Find files that mention cli"
+swift run omux agent --allow-read-anywhere -p "Summarize ~/notes/today.txt"
 swift run omux agent-sessions open
 swift run omux agent-sessions list
 swift run omux agent-sessions search "release notes"

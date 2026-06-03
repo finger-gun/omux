@@ -353,6 +353,31 @@ struct OmuxExtensionCatalogClient {
         if let entrypoint = plugin?.entrypoint, files.contains(where: { $0.target == entrypoint }) == false {
             throw OmuxExtensionRegistryError.invalidManifest("plugin entrypoint must be installed by a file entry")
         }
+        if kind == .plugin {
+            for tableName in document.tableNames.filter({ $0.hasPrefix("agent-tools.") }).sorted() {
+                let rawToolID = String(tableName.dropFirst("agent-tools.".count))
+                let toolID = rawToolID.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                guard OmuxExtensionPackageValidator.validatePackageID(toolID) else {
+                    throw OmuxExtensionRegistryError.invalidManifest("invalid agent tool id '\(toolID)'")
+                }
+                guard let description = document.value(in: tableName, for: "description")?.stringValue,
+                      description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                    throw OmuxExtensionRegistryError.invalidManifest("\(tableName).description must be a non-empty string")
+                }
+                guard let callback = document.value(in: tableName, for: "callback")?.stringValue,
+                      callback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                    throw OmuxExtensionRegistryError.invalidManifest("\(tableName).callback must be a non-empty string")
+                }
+                if let arguments = stringArray(document.value(in: tableName, for: "arguments")),
+                   arguments.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    throw OmuxExtensionRegistryError.invalidManifest("\(tableName).arguments must contain only non-empty strings")
+                }
+                if let inputHint = document.value(in: tableName, for: "input_hint")?.stringValue,
+                   inputHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw OmuxExtensionRegistryError.invalidManifest("\(tableName).input_hint must be a non-empty string")
+                }
+            }
+        }
 
         return OmuxExtensionPackageManifest(
             schema: 1,
