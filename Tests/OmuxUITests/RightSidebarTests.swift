@@ -15,14 +15,9 @@ final class RightSidebarTests: OmuxUITestsBase {
         vaultSidebar.exists && vaultSidebar.isHittable
     }
 
-    /// Toggles the **whole** right sidebar via the new Alt+Cmd+B shortcut
+    /// Toggles the **whole** right sidebar via Cmd+Shift+B
     /// ("Toggle Right Sidebar" in the View menu).
     private func toggleRightSidebar() {
-        app.typeKey("b", modifierFlags: [.command, .option])
-    }
-
-    /// Toggles the agent sessions widget via the existing ⇧⌘B shortcut.
-    private func toggleAgentSessions() {
         app.typeKey("b", modifierFlags: [.command, .shift])
     }
 
@@ -58,14 +53,14 @@ final class RightSidebarTests: OmuxUITestsBase {
         XCTAssertTrue(waitForSidebarOpen(timeout: 5), "Sidebar should have opened")
     }
 
-    // MARK: - Toggle Right Sidebar (Alt+Cmd+B)
+    // MARK: - Toggle Right Sidebar (Cmd+Shift+B)
 
     func testToggleRightSidebarOpensWhenClosed() {
         ensureSidebarClosed()
         toggleRightSidebar()
         XCTAssertTrue(
             waitForSidebarOpen(),
-            "Right sidebar should open after Alt+Cmd+B when it was closed"
+            "Right sidebar should open after Cmd+Shift+B when it was closed"
         )
     }
 
@@ -74,7 +69,7 @@ final class RightSidebarTests: OmuxUITestsBase {
         toggleRightSidebar()
         XCTAssertTrue(
             waitForSidebarClosed(),
-            "Right sidebar should close after Alt+Cmd+B when it was open"
+            "Right sidebar should close after Cmd+Shift+B when it was open"
         )
     }
 
@@ -104,13 +99,9 @@ final class RightSidebarTests: OmuxUITestsBase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    // MARK: - Agent sessions panel toggle (⇧⌘B) still works
-
-    func testAgentSessionsToggleStillOpensSidebarWhenClosed() {
-        // ⇧⌘B should open the sidebar (and ensure agent sessions widget is expanded)
-        // even when the whole sidebar is closed.
+    func testRightSidebarShortcutDoesNotDependOnAgentSessionsPanelAction() {
         ensureSidebarClosed()
-        toggleAgentSessions()
+        toggleRightSidebar()
         XCTAssertTrue(
             waitForSidebarOpen(),
             "⇧⌘B should open the right sidebar when it is closed"

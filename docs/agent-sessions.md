@@ -6,7 +6,7 @@ Agent Sessions is local-first. OpenMUX reads session metadata from agent-owned f
 
 ## What you can do
 
-- Open the sidebar from **View -> Toggle Agent Sessions**, **Agents -> Show Agent Sessions**, or the command palette.
+- Open the sidebar from **View -> Right Sidebar**, the right-sidebar titlebar icon, or the command palette.
 - Filter by workspace and agent.
 - Search indexed session titles, agent names, paths, and IDs.
 - Resume a session in the focused terminal pane.

@@ -219,11 +219,11 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
-        XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
+        XCTAssertFalse(agentSessionsMenu?.items.containsShortcut(
             title: "Toggle Agent Sessions",
             key: "b",
             modifiers: [.command, .shift]
-        ) ?? false)
+        ) ?? true)
         XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
             title: "Search Agent Sessions…",
             key: "a",
@@ -233,7 +233,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(viewMenu?.items.containsShortcut(
             title: "Right Sidebar",
             key: "b",
-            modifiers: [.command, .option]
+            modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertNotNil(viewMenu?.items.first { $0.title == "Git Worktrees" })
     }

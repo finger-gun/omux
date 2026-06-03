@@ -60,18 +60,18 @@ final class AgentSessionsTests: OmuxUITestsBase {
     func testToggleButtonExistsInTitleBar() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should be visible in the title bar"
+            "Right sidebar toggle button should be visible in the title bar"
         )
     }
 
     func testToggleButtonHasTooltip() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should exist"
+            "Right sidebar toggle button should exist"
         )
         XCTAssertEqual(
             toggleButton.label,
-            "Toggle Agent Sessions",
+            "Toggle Right Sidebar",
             "Toggle button should have the correct accessibility label"
         )
     }
@@ -79,54 +79,54 @@ final class AgentSessionsTests: OmuxUITestsBase {
     func testToggleButtonOpensAgentSessionsSidebar() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should exist"
+            "Right sidebar toggle button should exist"
         )
         closeSidebarIfOpen()
         clickToggle()
         XCTAssertTrue(
             waitForSidebarOpen(),
-            "Agent Sessions sidebar should appear after clicking the toggle button"
+            "Right sidebar should appear after clicking the toggle button"
         )
     }
 
     func testToggleButtonClosesAgentSessionsSidebar() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should exist"
+            "Right sidebar toggle button should exist"
         )
         closeSidebarIfOpen()
 
         // Open.
         clickToggle()
-        XCTAssertTrue(waitForSidebarOpen(), "Agent Sessions sidebar should open after first click")
+        XCTAssertTrue(waitForSidebarOpen(), "Right sidebar should open after first click")
 
         // Close.
         clickToggle()
         XCTAssertTrue(
             waitForSidebarClosed(),
-            "Agent Sessions sidebar should close after clicking the toggle button again"
+            "Right sidebar should close after clicking the toggle button again"
         )
     }
 
     func testToggleButtonRemainsVisibleWhenSidebarIsOpen() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should exist"
+            "Right sidebar toggle button should exist"
         )
         closeSidebarIfOpen()
 
         clickToggle()
-        XCTAssertTrue(waitForSidebarOpen(), "Agent Sessions sidebar should open")
+        XCTAssertTrue(waitForSidebarOpen(), "Right sidebar should open")
         XCTAssertTrue(
             toggleButton.exists,
-            "Agent Sessions toggle button should remain visible in the title bar when the sidebar is open"
+            "Right sidebar toggle button should remain visible in the title bar when the sidebar is open"
         )
     }
 
     func testToggleViaKeyboardShortcut() {
         XCTAssertTrue(
             toggleButton.waitForExistence(timeout: 5),
-            "Agent Sessions toggle button should exist"
+            "Right sidebar toggle button should exist"
         )
         closeSidebarIfOpen()
 
@@ -134,14 +134,14 @@ final class AgentSessionsTests: OmuxUITestsBase {
         app.typeKey("b", modifierFlags: [.command, .shift])
         XCTAssertTrue(
             waitForSidebarOpen(),
-            "Agent Sessions sidebar should open via keyboard shortcut ⇧⌘B"
+            "Right sidebar should open via keyboard shortcut ⇧⌘B"
         )
 
         // Close via keyboard shortcut ⇧⌘B.
         app.typeKey("b", modifierFlags: [.command, .shift])
         XCTAssertTrue(
             waitForSidebarClosed(),
-            "Agent Sessions sidebar should close via keyboard shortcut ⇧⌘B"
+            "Right sidebar should close via keyboard shortcut ⇧⌘B"
         )
     }
 }

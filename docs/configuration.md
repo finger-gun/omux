@@ -612,6 +612,9 @@ Supported action identifiers:
 | `workspace.move-down`                       | Move the active workspace down.                                     |
 | `workspace.focus-1` ... `workspace.focus-9` | Focus a workspace by visible order.                                 |
 | `sidebar.toggle`                            | Toggle the workspace column.                                        |
+| `right-sidebar.toggle`                      | Toggle the right sidebar.                                           |
+| `agent-sessions.toggle`                     | Toggle the Agent Sessions panel inside the right sidebar.           |
+| `agent-sessions.search`                     | Open Agent Sessions search.                                         |
 | `pane.split-right`                          | Split the focused pane to the right.                                |
 | `pane.split-down`                           | Split the focused pane downward.                                    |
 | `pane.remove`                               | Remove the active pane.                                             |

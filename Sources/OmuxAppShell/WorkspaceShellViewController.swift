@@ -179,10 +179,10 @@ final class WorkspaceShellViewController: NSViewController {
         sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = false
 
         vaultToggleButton.isBordered = false
-        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.squares.right", accessibilityDescription: "Toggle Agent Sessions")
+        vaultToggleButton.image = NSImage(systemSymbolName: "sidebar.squares.right", accessibilityDescription: "Toggle Right Sidebar")
         vaultToggleButton.identifier = NSUserInterfaceItemIdentifier(A11yID.vaultSidebarToggle.rawValue)
         vaultToggleButton.setAccessibilityIdentifier(A11yID.vaultSidebarToggle)
-        vaultToggleButton.toolTip = "Toggle Agent Sessions (⇧⌘B)"
+        vaultToggleButton.toolTip = "Toggle Right Sidebar (⇧⌘B)"
         vaultToggleButton.target = self
         vaultToggleButton.action = #selector(toggleVaultSidebarPressed)
         vaultToggleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1224,11 +1224,11 @@ final class WorkspaceShellViewController: NSViewController {
         if isVaultSidebarVisible == false, vaultSessions.isEmpty, vaultIsLoading == false {
             reloadVaultSessions(reset: true)
         }
-        toggleSidebarPanel(panelID: "agentSessions", isCollapsed: &isAgentSessionsSectionCollapsed)
+        toggleSidebarPanel(panelID: "agentSessions", isCollapsed: isAgentSessionsSectionCollapsed)
     }
 
     func toggleWorktreesPanel() {
-        toggleSidebarPanel(panelID: "worktrees", isCollapsed: &isWorktreesSectionCollapsed)
+        toggleSidebarPanel(panelID: "worktrees", isCollapsed: isWorktreesSectionCollapsed)
     }
 
     /// Opens the sidebar that owns `panelID` (if closed) and toggles the panel's collapsed state.
@@ -1236,29 +1236,19 @@ final class WorkspaceShellViewController: NSViewController {
     /// - If the sidebar is closed: opens it and expands the panel if it was collapsed.
     /// - If the sidebar is open and the panel is collapsed: expands it.
     /// - If the sidebar is open and the panel is expanded: collapses it.
-    private func toggleSidebarPanel(panelID: String, isCollapsed: inout Bool) {
+    private func toggleSidebarPanel(panelID: String, isCollapsed: Bool) {
         let side = sidebarSide(owning: panelID) ?? "right"
-        let collapsedKey = "omux.\(side)Sidebar.\(panelID)Collapsed"
         let sidebarOpen = (side == "left") ? isSidebarVisible : isVaultSidebarVisible
 
         if !sidebarOpen {
             ensureSidebarVisible(owning: panelID)
             if isCollapsed {
-                isCollapsed = false
-                UserDefaults.standard.set(false, forKey: collapsedKey)
-                splitView(owning: panelID)?.setCollapsed(false, panelID: panelID)
-                if let workspace = currentWorkspace { update(workspace: workspace) }
+                setPanelCollapsed(panelID: panelID, isCollapsed: false)
             }
         } else if isCollapsed {
-            isCollapsed = false
-            UserDefaults.standard.set(false, forKey: collapsedKey)
-            splitView(owning: panelID)?.setCollapsed(false, panelID: panelID)
-            if let workspace = currentWorkspace { update(workspace: workspace) }
+            setPanelCollapsed(panelID: panelID, isCollapsed: false)
         } else {
-            isCollapsed = true
-            UserDefaults.standard.set(true, forKey: collapsedKey)
-            splitView(owning: panelID)?.setCollapsed(true, panelID: panelID)
-            if let workspace = currentWorkspace { update(workspace: workspace) }
+            setPanelCollapsed(panelID: panelID, isCollapsed: true)
         }
     }
 
@@ -1443,20 +1433,29 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func toggleWorktreesCollapsed() {
-        togglePanelCollapsed(panelID: "worktrees", isCollapsed: &isWorktreesSectionCollapsed)
+        setPanelCollapsed(panelID: "worktrees", isCollapsed: !isWorktreesSectionCollapsed)
     }
 
     private func toggleAgentSessionsCollapsed() {
-        togglePanelCollapsed(panelID: "agentSessions", isCollapsed: &isAgentSessionsSectionCollapsed)
+        setPanelCollapsed(panelID: "agentSessions", isCollapsed: !isAgentSessionsSectionCollapsed)
     }
 
     private func toggleWorkspacesCollapsed() {
-        togglePanelCollapsed(panelID: "workspaces", isCollapsed: &isWorkspacesSectionCollapsed)
+        setPanelCollapsed(panelID: "workspaces", isCollapsed: !isWorkspacesSectionCollapsed)
     }
 
-    /// Toggles the collapsed state of a sidebar panel and persists the new value.
-    private func togglePanelCollapsed(panelID: String, isCollapsed: inout Bool) {
-        isCollapsed.toggle()
+    /// Sets the collapsed state of a sidebar panel and persists the new value.
+    private func setPanelCollapsed(panelID: String, isCollapsed: Bool) {
+        switch panelID {
+        case "worktrees":
+            isWorktreesSectionCollapsed = isCollapsed
+        case "agentSessions":
+            isAgentSessionsSectionCollapsed = isCollapsed
+        case "workspaces":
+            isWorkspacesSectionCollapsed = isCollapsed
+        default:
+            return
+        }
         let side = sidebarSide(owning: panelID) ?? "right"
         UserDefaults.standard.set(isCollapsed, forKey: "omux.\(side)Sidebar.\(panelID)Collapsed")
         splitView(owning: panelID)?.setCollapsed(isCollapsed, panelID: panelID)
@@ -1990,6 +1989,10 @@ final class WorkspaceShellViewController: NSViewController {
             guard let self else { return .failed("Window is unavailable") }
             if result.invocationTarget == .action(.sidebarToggle) {
                 toggleSidebarVisibility()
+                return .invoked
+            }
+            if result.invocationTarget == .action(.rightSidebarToggle) {
+                toggleVaultSidebar()
                 return .invoked
             }
             if result.invocationTarget == .action(.agentSessionsToggle) {
