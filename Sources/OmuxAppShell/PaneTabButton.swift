@@ -617,6 +617,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
     private var showsDisclosure = false
     private var isActive = false
     private var isRenaming = false
+    private weak var previousFirstResponder: NSResponder?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -980,6 +981,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
 
     func beginInlineRename() {
         guard !isRenaming else { return }
+        previousFirstResponder = window?.firstResponder
         isRenaming = true
 
         titleField.isEditable = true
@@ -1011,7 +1013,8 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
         titleField.isEditable = false
         titleField.isSelectable = false
         titleField.delegate = nil
-        window?.makeFirstResponder(nil)
+        window?.makeFirstResponder(previousFirstResponder)
+        previousFirstResponder = nil
     }
 
     func setDropTarget(_ isDropTarget: Bool, theme: WorkspaceShellTheme?) {

@@ -41,6 +41,13 @@ final class SidebarSplitView: NSView {
             self.panelID = panelID
             self.headerView = headerView
         }
+
+        var collapsedDefaultsKey: String {
+            guard let dotRange = defaultsKey.range(of: ".", options: .backwards) else {
+                return "\(panelID).collapsed"
+            }
+            return "\(defaultsKey[..<dotRange.lowerBound]).\(panelID)Collapsed"
+        }
     }
 
     private var panels: [Panel] = []
@@ -152,11 +159,13 @@ final class SidebarSplitView: NSView {
     func setCollapsed(_ collapsed: Bool, panelID: String) {
         guard let i = panels.firstIndex(where: { $0.panelID == panelID }) else { return }
         panels[i].isCollapsed = collapsed
+        UserDefaults.standard.set(collapsed, forKey: panels[i].collapsedDefaultsKey)
         rebalanceProportions()
         needsLayout = true
     }
 
     var panelIDs: [String] { panels.map(\.panelID) }
+    var currentPanels: [Panel] { panels }
 
     // MARK: Layout
 
@@ -369,6 +378,7 @@ final class SidebarSplitView: NSView {
         var panel = state.panel
         // Re-key proportion and collapsed defaults into the target sidebar namespace.
         panel.defaultsKey = "\(sidebarNamespace).\(panel.panelID)Proportion"
+        UserDefaults.standard.set(panel.isCollapsed, forKey: panel.collapsedDefaultsKey)
         let insertionIdx = state.targetInsertionIndex ?? panels.count
         panels.insert(panel, at: min(insertionIdx, panels.count))
         rebuildSeparators()
@@ -394,6 +404,7 @@ final class SidebarSplitView: NSView {
         let insertionIdx = externalDragState?.targetInsertionIndex ?? panels.count
         var newPanel = panel
         newPanel.defaultsKey = "\(sidebarNamespace).\(panel.panelID)Proportion"
+        UserDefaults.standard.set(newPanel.isCollapsed, forKey: newPanel.collapsedDefaultsKey)
         newPanel.view.translatesAutoresizingMaskIntoConstraints = true
         newPanel.view.autoresizingMask = []
         addSubview(newPanel.view)
@@ -516,21 +527,25 @@ final class SidebarSplitView: NSView {
         // Activate the slot when the cursor gets within one header-height of the
         // panel boundary, so the drop zone appears as the dragged widget approaches
         // the other panel — not immediately on drag start.
-        let srcMinY = widgetDragState?.sourcePanelMinY ?? panels[src].view.frame.minY
         let proximityThreshold: CGFloat = 34   // one collapsed header height
 
-        for slot in 0 ... panels.count {
-            guard validSlots.contains(slot) else { continue }
-            if slot > src + 1 {
-                // Boundary is the bottom edge of the source panel.
-                let srcHeight = panels[src].isCollapsed ? panels[src].collapsedHeight : panels[src].view.frame.height
-                let boundary = srcMinY + srcHeight
-                if localY > boundary - proximityThreshold { return slot }
+        if src + 2 <= panels.count {
+            for slot in (src + 2) ... panels.count where validSlots.contains(slot) {
+                let previous = panels[slot - 1]
+                let previousHeight = previous.isCollapsed ? previous.collapsedHeight : previous.view.frame.height
+                let boundary = previous.view.frame.minY + previousHeight
+                if localY > boundary - proximityThreshold {
+                    return slot
+                }
             }
-            if slot < src {
-                // Boundary is the top edge of the source panel.
-                let boundary = srcMinY
-                if localY < boundary + proximityThreshold { return slot }
+        }
+
+        if src > 0 {
+            for slot in stride(from: src - 1, through: 0, by: -1) where validSlots.contains(slot) {
+                let boundary = panels[slot].view.frame.minY
+                if localY < boundary + proximityThreshold {
+                    return slot
+                }
             }
         }
         return nil
@@ -569,6 +584,7 @@ final class SidebarSplitView: NSView {
     private func persistProportions() {
         for panel in panels {
             UserDefaults.standard.set(Double(panel.proportion), forKey: panel.defaultsKey)
+            UserDefaults.standard.set(panel.isCollapsed, forKey: panel.collapsedDefaultsKey)
         }
     }
 }
@@ -751,6 +767,7 @@ final class SidebarDragCoordinator {
 
         let targetNamespace = (targetSplit === leftSplit) ? "omux.leftSidebar" : "omux.rightSidebar"
         panel.defaultsKey = "\(targetNamespace).\(panel.panelID)Proportion"
+        UserDefaults.standard.set(panel.isCollapsed, forKey: panel.collapsedDefaultsKey)
 
         targetSplit.finishExternalDropWithPanel(panel, sidebarNamespace: targetNamespace)
         onPanelOrderChanged?()

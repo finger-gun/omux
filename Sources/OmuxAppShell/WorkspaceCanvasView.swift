@@ -34,6 +34,11 @@ final class WorkspaceCanvasView: NSView {
 
     func render(layoutView: NSView?, theme: WorkspaceShellTheme) {
         apply(theme: theme)
+
+        if layoutView === currentContentView {
+            return
+        }
+
         currentContentView?.removeFromSuperview()
         currentContentView = nil
 

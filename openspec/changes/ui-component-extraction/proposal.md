@@ -8,7 +8,7 @@ All UI components in the workspace shell — sidebars, widget headers, badges, a
 - Introduce a shared `SidebarView` base class or protocol so `WorkspaceSidebarView` and `WorkspaceVaultSidebarView` share layout, theming, and toggle infrastructure rather than duplicating it
 - Move extracted components into their own files within the `OmuxAppShell` module (or a dedicated `OmuxUI` sub-module if appropriate)
 - Raise visibility to `internal` (or higher where needed) so components can be consumed by tests and future plugin UI surfaces
-- No behavioral changes to existing sidebar, header, or badge behavior
+- Adds visible sidebar behavior for drag reordering, panel collapse, cross-sidebar ordering, and persisted panel state, so users can customize sidebar layout and keep that layout after relaunch. Header and badge extraction remains structural and does not otherwise change their behavior.
 
 ## Capabilities
 
@@ -23,8 +23,8 @@ All UI components in the workspace shell — sidebars, widget headers, badges, a
 
 - **Primary file**: `Sources/OmuxAppShell/WorkspaceWindowController.swift` (currently ~10,048 lines)
 - **New files**: One or more new Swift files under `Sources/OmuxAppShell/` for extracted components
-- **No API surface changes**: No CLI, IPC, JSON-RPC, hook, or control-plane events are affected — this is a pure internal structural refactor
-- **No keyboard/input impact**: No input handling, keybinding, or IME code is touched
+- **No external API surface changes**: No CLI, IPC, JSON-RPC, hook, or control-plane events are affected; sidebar customization is local UI state persisted in user defaults
+- **Keyboard/input impact**: No terminal input, keybinding, or IME code is touched; header accessibility/keyboard activation may be updated for the extracted collapsible header control
 - **No libghostty bridge impact**: The terminal bridge boundary is not affected
 - **Test surface**: Extracted components become independently unit-testable for the first time
 - **Plugin readiness**: Raised visibility unlocks future plugin UI contribution points without requiring further refactors

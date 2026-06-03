@@ -21,6 +21,8 @@ final class CollapsibleSectionHeaderView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityElement(true)
+        setAccessibilityRole(.disclosureTriangle)
 
         chevronView.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
         chevronView.translatesAutoresizingMaskIntoConstraints = false
@@ -51,6 +53,21 @@ final class CollapsibleSectionHeaderView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override var mouseDownCanMoveWindow: Bool { false }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func accessibilityPerformPress() -> Bool {
+        onToggle?()
+        return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == " " || event.keyCode == 36 {
+            onToggle?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -104,6 +121,8 @@ final class CollapsibleSectionHeaderView: NSView {
 
         titleLabel.stringValue = title
         titleLabel.textColor = theme.shell.textMuted
+        setAccessibilityLabel(title)
+        setAccessibilityValue(isCollapsed ? "collapsed" : "expanded")
 
         let symbol = isCollapsed ? "chevron.right" : "chevron.down"
         chevronView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)

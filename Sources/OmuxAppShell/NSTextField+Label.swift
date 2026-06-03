@@ -9,6 +9,8 @@ extension NSTextField {
     ///   - fontSize: Point size for the system font. Defaults to `12`.
     ///   - weight: Font weight. Defaults to `.regular`.
     ///   - maxLines: Maximum number of lines (`0` = unlimited). Defaults to `1`.
+    ///     Multi-line labels require a width constraint or `preferredMaxLayoutWidth`
+    ///     so AppKit can compute wrapping.
     static func label(
         _ text: String = "",
         fontSize: CGFloat = 12,
@@ -20,6 +22,7 @@ extension NSTextField {
         field.font = .systemFont(ofSize: fontSize, weight: weight)
         if maxLines != 1 {
             field.maximumNumberOfLines = maxLines
+            field.lineBreakMode = .byWordWrapping
         }
         return field
     }

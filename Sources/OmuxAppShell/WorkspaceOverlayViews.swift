@@ -95,6 +95,7 @@ final class ShellOverlayHostView: NSView {
         currentTheme = theme
         floatingModalOverlayView.apply(theme: theme)
         bannerStackView.arrangedSubviews.compactMap { $0 as? WorkspaceRestoreBannerView }.forEach { $0.apply(theme: theme) }
+        paletteHostView.subviews.compactMap { $0 as? CommandPaletteView }.forEach { $0.apply(theme: theme) }
         modalHostView.subviews.compactMap { $0 as? AgentSessionPathMismatchModalView }.forEach { $0.apply(theme: theme) }
     }
 

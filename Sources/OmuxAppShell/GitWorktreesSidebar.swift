@@ -90,8 +90,11 @@ final class WorktreeRowButton: NSView {
 
     func apply(theme: WorkspaceShellTheme) {
         currentTheme = theme
+        branchLabel.textColor = theme.shell.textPrimary
+        pathLabel.textColor = theme.shell.textMuted
         deleteButton.contentTintColor = theme.shell.textMuted
         updateBackground()
+        needsDisplay = true
     }
 
     private func updateBackground() {
@@ -265,7 +268,10 @@ final class GitWorktreesSidebarWidget: NSView {
             return
         }
 
-        if worktrees == renderedWorktrees { return }
+        if worktrees == renderedWorktrees {
+            apply(theme: theme)
+            return
+        }
         renderedWorktrees = worktrees
         clearRows()
 

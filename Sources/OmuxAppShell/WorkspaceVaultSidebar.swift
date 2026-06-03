@@ -174,11 +174,21 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
             splitView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
-        // Load persisted proportions (default 0.25 for worktrees, 0.75 for agent sessions).
+        configureDefaultSplitPanels()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollBoundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    private func configureDefaultSplitPanels() {
         let worktreesProportion = CGFloat(UserDefaults.standard.double(forKey: "omux.rightSidebar.worktreesProportion").nonZero ?? 0.25)
         let agentProportion = CGFloat(UserDefaults.standard.double(forKey: "omux.rightSidebar.agentProportion").nonZero ?? 0.75)
         let total = worktreesProportion + agentProportion
-        splitView.setPanels([
+        var panels = [
             SidebarSplitView.Panel(
                 view: worktreesWidget,
                 collapsedHeight: 34,
@@ -187,24 +197,28 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
                 defaultsKey: "omux.rightSidebar.worktreesProportion",
                 panelID: "worktrees",
                 headerView: worktreesWidget.header
-            ),
-            SidebarSplitView.Panel(
+            )
+        ]
+        if !agentSessionsContainer.isHidden {
+            panels.append(SidebarSplitView.Panel(
                 view: agentSessionsContainer,
                 collapsedHeight: 34,
                 isCollapsed: UserDefaults.standard.bool(forKey: "omux.rightSidebar.agentSessionsCollapsed"),
                 proportion: agentProportion / total,
-                defaultsKey: "omux.rightSidebar.agentProportion",
+                defaultsKey: "omux.rightSidebar.agentSessionsProportion",
                 panelID: "agentSessions",
                 headerView: sectionHeader
-            ),
-        ])
+            ))
+        }
+        splitView.setPanels(panels)
+    }
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(scrollBoundsChanged(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView
-        )
+    private func omitHiddenAgentSessionsPanel() {
+        guard agentSessionsContainer.isHidden else { return }
+        let visiblePanels = splitView.currentPanels.filter { $0.panelID != "agentSessions" }
+        if visiblePanels.count != splitView.currentPanels.count {
+            splitView.setPanels(visiblePanels)
+        }
     }
 
     func makeWorktreesPanel(sidebarNamespace: String) -> SidebarSplitView.Panel {
@@ -347,7 +361,11 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
 
         // Hide the whole agent sessions section when vault is disabled.
         // NSStackView will remove its layout contribution automatically.
+        let wasAgentSessionsHidden = agentSessionsContainer.isHidden
         agentSessionsContainer.isHidden = !isAgentSessionsEnabled
+        if agentSessionsContainer.isHidden != wasAgentSessionsHidden {
+            omitHiddenAgentSessionsPanel()
+        }
 
         guard isAgentSessionsEnabled else { return }
 
