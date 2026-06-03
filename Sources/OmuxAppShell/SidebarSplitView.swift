@@ -63,6 +63,7 @@ final class SidebarSplitView: NSView {
     var onCoordinatorDragBegan: ((_ splitView: SidebarSplitView, _ panelIndex: Int, _ ghost: NSView, _ ghostHeight: CGFloat, _ dragOffset: NSPoint) -> Void)?
     var onCoordinatorDragMoved: ((_ splitView: SidebarSplitView, _ windowY: CGFloat, _ windowX: CGFloat) -> Void)?
     var onCoordinatorDragEnded: ((_ splitView: SidebarSplitView) -> Void)?
+    var onPanelOrderChanged: (() -> Void)?
 
     override var isFlipped: Bool { true }
 
@@ -329,6 +330,7 @@ final class SidebarSplitView: NSView {
         rewireHeaderDragCallbacks()
         equalizeProportions()
         needsLayout = true
+        onPanelOrderChanged?()
     }
 
     // MARK: Cross-sidebar drag API

@@ -292,6 +292,8 @@ final class WorkspaceShellViewController: NSViewController {
         ]
         NSLayoutConstraint.activate(constraints)
 
+        configureSidebarPanelsFromDefaults()
+
         // Wire cross-sidebar drag coordinator.
         sidebarDragCoordinator = SidebarDragCoordinator(
             leftSplit: sidebarView.splitView,
@@ -299,6 +301,12 @@ final class WorkspaceShellViewController: NSViewController {
             leftSidebarView: sidebarView,
             rightSidebarView: vaultSidebarView
         )
+        sidebarView.splitView.onPanelOrderChanged = { [weak self] in
+            self?.persistSidebarPanelOrder()
+        }
+        vaultSidebarView.splitView.onPanelOrderChanged = { [weak self] in
+            self?.persistSidebarPanelOrder()
+        }
         sidebarDragCoordinator?.onPanelOrderChanged = { [weak self] in
             self?.persistSidebarPanelOrder()
         }
@@ -1467,6 +1475,97 @@ final class WorkspaceShellViewController: NSViewController {
         let rightOrder = vaultSidebarView.splitView.panelIDs
         UserDefaults.standard.set(leftOrder, forKey: "omux.leftSidebar.panelOrder")
         UserDefaults.standard.set(rightOrder, forKey: "omux.rightSidebar.panelOrder")
+        for panelID in leftOrder {
+            persistPanelCollapsedState(panelID: panelID, sidebarNamespace: "omux.leftSidebar")
+        }
+        for panelID in rightOrder {
+            persistPanelCollapsedState(panelID: panelID, sidebarNamespace: "omux.rightSidebar")
+        }
+    }
+
+    private func configureSidebarPanelsFromDefaults() {
+        let orders = restoredSidebarPanelOrders()
+        sidebarView.splitView.setPanels([])
+        vaultSidebarView.splitView.setPanels([])
+
+        isWorkspacesSectionCollapsed = panelCollapsedState(
+            panelID: "workspaces",
+            sidebarNamespace: orders.left.contains("workspaces") ? "omux.leftSidebar" : "omux.rightSidebar"
+        )
+        isWorktreesSectionCollapsed = panelCollapsedState(
+            panelID: "worktrees",
+            sidebarNamespace: orders.left.contains("worktrees") ? "omux.leftSidebar" : "omux.rightSidebar"
+        )
+        isAgentSessionsSectionCollapsed = panelCollapsedState(
+            panelID: "agentSessions",
+            sidebarNamespace: orders.left.contains("agentSessions") ? "omux.leftSidebar" : "omux.rightSidebar"
+        )
+
+        sidebarView.splitView.setPanels(orders.left.compactMap { panel(for: $0, sidebarNamespace: "omux.leftSidebar") })
+        vaultSidebarView.splitView.setPanels(orders.right.compactMap { panel(for: $0, sidebarNamespace: "omux.rightSidebar") })
+    }
+
+    private func restoredSidebarPanelOrders() -> (left: [String], right: [String]) {
+        let defaultLeft = ["workspaces"]
+        let defaultRight = ["worktrees", "agentSessions"]
+        let knownPanels = Set(defaultLeft + defaultRight)
+        let hasSavedLeft = UserDefaults.standard.object(forKey: "omux.leftSidebar.panelOrder") != nil
+        let hasSavedRight = UserDefaults.standard.object(forKey: "omux.rightSidebar.panelOrder") != nil
+        guard hasSavedLeft || hasSavedRight else {
+            return (defaultLeft, defaultRight)
+        }
+
+        var seen = Set<String>()
+        func sanitized(_ raw: [String]) -> [String] {
+            raw.compactMap { panelID in
+                guard knownPanels.contains(panelID), seen.insert(panelID).inserted else {
+                    return nil
+                }
+                return panelID
+            }
+        }
+
+        var left = sanitized(UserDefaults.standard.stringArray(forKey: "omux.leftSidebar.panelOrder") ?? defaultLeft)
+        var right = sanitized(UserDefaults.standard.stringArray(forKey: "omux.rightSidebar.panelOrder") ?? defaultRight)
+        for panelID in defaultLeft where seen.insert(panelID).inserted {
+            left.append(panelID)
+        }
+        for panelID in defaultRight where seen.insert(panelID).inserted {
+            right.append(panelID)
+        }
+        return (left, right)
+    }
+
+    private func panel(for panelID: String, sidebarNamespace: String) -> SidebarSplitView.Panel? {
+        switch panelID {
+        case "workspaces":
+            return sidebarView.makeWorkspacesPanel(sidebarNamespace: sidebarNamespace)
+        case "worktrees":
+            return vaultSidebarView.makeWorktreesPanel(sidebarNamespace: sidebarNamespace)
+        case "agentSessions":
+            return vaultSidebarView.makeAgentSessionsPanel(sidebarNamespace: sidebarNamespace)
+        default:
+            return nil
+        }
+    }
+
+    private func panelCollapsedState(panelID: String, sidebarNamespace: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "\(sidebarNamespace).\(panelID)Collapsed")
+    }
+
+    private func persistPanelCollapsedState(panelID: String, sidebarNamespace: String) {
+        let collapsed: Bool
+        switch panelID {
+        case "workspaces":
+            collapsed = isWorkspacesSectionCollapsed
+        case "worktrees":
+            collapsed = isWorktreesSectionCollapsed
+        case "agentSessions":
+            collapsed = isAgentSessionsSectionCollapsed
+        default:
+            return
+        }
+        UserDefaults.standard.set(collapsed, forKey: "\(sidebarNamespace).\(panelID)Collapsed")
     }
 
     private func applyVaultSidebarVisibility() {

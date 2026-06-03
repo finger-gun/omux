@@ -188,6 +188,21 @@ final class WorkspaceSidebarView: SidebarContainerView {
         ])
     }
 
+    func makeWorkspacesPanel(sidebarNamespace: String) -> SidebarSplitView.Panel {
+        let proportion = CGFloat(
+            UserDefaults.standard.double(forKey: "\(sidebarNamespace).workspacesProportion").nonZero ?? 1.0
+        )
+        return SidebarSplitView.Panel(
+            view: workspacesWidget,
+            collapsedHeight: WorkspacesSidebarWidget.collapsedHeight,
+            isCollapsed: UserDefaults.standard.bool(forKey: "\(sidebarNamespace).workspacesCollapsed"),
+            proportion: proportion,
+            defaultsKey: "\(sidebarNamespace).workspacesProportion",
+            panelID: "workspaces",
+            headerView: workspacesWidget.header
+        )
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil

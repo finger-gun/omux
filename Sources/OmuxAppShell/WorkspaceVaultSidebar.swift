@@ -207,6 +207,38 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
         )
     }
 
+    func makeWorktreesPanel(sidebarNamespace: String) -> SidebarSplitView.Panel {
+        let defaultProportion: CGFloat = sidebarNamespace == "omux.rightSidebar" ? 0.25 : 1.0
+        let proportion = CGFloat(
+            UserDefaults.standard.double(forKey: "\(sidebarNamespace).worktreesProportion").nonZero ?? Double(defaultProportion)
+        )
+        return SidebarSplitView.Panel(
+            view: worktreesWidget,
+            collapsedHeight: 34,
+            isCollapsed: UserDefaults.standard.bool(forKey: "\(sidebarNamespace).worktreesCollapsed"),
+            proportion: proportion,
+            defaultsKey: "\(sidebarNamespace).worktreesProportion",
+            panelID: "worktrees",
+            headerView: worktreesWidget.header
+        )
+    }
+
+    func makeAgentSessionsPanel(sidebarNamespace: String) -> SidebarSplitView.Panel {
+        let defaultProportion: CGFloat = sidebarNamespace == "omux.rightSidebar" ? 0.75 : 1.0
+        let storedProportion = UserDefaults.standard.double(forKey: "\(sidebarNamespace).agentSessionsProportion").nonZero
+            ?? UserDefaults.standard.double(forKey: "\(sidebarNamespace).agentProportion").nonZero
+        let proportion = CGFloat(storedProportion ?? Double(defaultProportion))
+        return SidebarSplitView.Panel(
+            view: agentSessionsContainer,
+            collapsedHeight: 34,
+            isCollapsed: UserDefaults.standard.bool(forKey: "\(sidebarNamespace).agentSessionsCollapsed"),
+            proportion: proportion,
+            defaultsKey: "\(sidebarNamespace).agentSessionsProportion",
+            panelID: "agentSessions",
+            headerView: sectionHeader
+        )
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
