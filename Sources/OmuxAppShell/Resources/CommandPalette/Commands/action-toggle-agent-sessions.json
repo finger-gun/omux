@@ -1,9 +1,9 @@
 {
   "id": "action:agent-sessions.toggle",
   "title": "Toggle Agent Sessions",
-  "subtitle": "Show or hide the Agent Sessions sidebar",
+  "subtitle": "Expand or collapse the Agent Sessions panel",
   "category": "action",
-  "matchText": "Toggle Agent Sessions Show or hide the Agent Sessions sidebar history codex copilot claude gemini",
+  "matchText": "Toggle Agent Sessions Expand or collapse the Agent Sessions panel history codex copilot claude gemini",
   "aliases": ["agent sessions", "sessions sidebar"],
   "requiresArguments": false,
   "hasSafeDefaultTarget": true,

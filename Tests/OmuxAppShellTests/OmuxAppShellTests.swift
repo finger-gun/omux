@@ -219,11 +219,11 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
-        XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
+        XCTAssertFalse(agentSessionsMenu?.items.containsShortcut(
             title: "Toggle Agent Sessions",
             key: "b",
             modifiers: [.command, .shift]
-        ) ?? false)
+        ) ?? true)
         XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
             title: "Search Agent Sessions…",
             key: "a",
@@ -233,7 +233,7 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(viewMenu?.items.containsShortcut(
             title: "Right Sidebar",
             key: "b",
-            modifiers: [.command, .option]
+            modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertNotNil(viewMenu?.items.first { $0.title == "Git Worktrees" })
     }
@@ -1299,6 +1299,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1308,7 +1309,8 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
 
         XCTAssertEqual(sidebar.updateNoticeTextForTesting, "New version 0.5.0 run: omux update")
@@ -1347,6 +1349,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: items,
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1356,7 +1359,8 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
 
@@ -1401,6 +1405,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: items,
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1410,12 +1415,13 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
 
         let scrollView = try XCTUnwrap(findView(ofType: NSScrollView.self, in: sidebar))
-        let titleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 1", in: sidebar))
+        let titleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let scrollFrame = scrollView.convert(scrollView.bounds, to: sidebar)
         let titleFrame = titleLabel.convert(titleLabel.bounds, to: sidebar)
 
@@ -1432,6 +1438,7 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1441,12 +1448,11 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
-        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
-
-        // Vault sidebar — via WorkspaceWindowController with vault enabled
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -1479,6 +1485,7 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1488,10 +1495,11 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
-        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let workspaceTitleFrame = workspaceTitleLabel.convert(workspaceTitleLabel.bounds, to: sidebar)
 
         // Right sidebar: the topmost widget is Git Worktrees; its header should
@@ -4155,7 +4163,7 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
-        XCTAssertTrue(findLabel(withString: "WORKSPACES · 2", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "WORKSPACES", in: sidebar))
         XCTAssertGreaterThanOrEqual(findViews(ofType: SidebarItemButton.self, in: sidebar).count, 2)
     }
 

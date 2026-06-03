@@ -105,10 +105,10 @@ workspace.move-up        workspace.move-down
 pane.split-right         pane.split-down
 pane.remove              pane.find        pane.next        pane.previous
 pane.resize-up           pane.resize-down pane.resize-left pane.resize-right
-pane.resize-equalize     sidebar.toggle
+pane.resize-equalize     sidebar.toggle  right-sidebar.toggle
 pane-tab.create          pane-tab.create-worktree          pane-tab.close
 pane-tab.next            pane-tab.previous
-agent-sessions.toggle
+agent-sessions.toggle    agent-sessions.search
 ```
 
 **`"builtin"`** — either the app-owned `theme.switch` target, or a generated `omux` CLI command from `OpenMUXCLICommandCatalog`. Add CLI commands there instead of creating a JSON descriptor or local allow-list.

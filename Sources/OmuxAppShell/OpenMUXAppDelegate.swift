@@ -1202,9 +1202,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let toggleVaultSidebarMenuItem = NSMenuItem(
             title: "Right Sidebar",
             action: #selector(toggleVaultSidebarFromMenu(_:)),
-            keyEquivalent: "b"
+            keyEquivalent: ""
         )
-        toggleVaultSidebarMenuItem.keyEquivalentModifierMask = [.command, .option]
         toggleVaultSidebarMenuItem.target = self
         viewMenu.addItem(toggleVaultSidebarMenuItem)
 
@@ -1336,6 +1335,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: restoreWorkspaceMenuItem, action: .workspaceRestoreLastClosed)
         setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
+        setShortcut(for: toggleVaultSidebarMenuItem, action: .rightSidebarToggle)
         setShortcut(for: toggleAgentSessionsMenuItem, action: .agentSessionsToggle)
         setShortcut(for: searchAgentSessionsMenuItem, action: .agentSessionSearch)
         setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)

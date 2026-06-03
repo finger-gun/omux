@@ -1,0 +1,12 @@
+{
+  "id": "action:right-sidebar.toggle",
+  "title": "Toggle Right Sidebar",
+  "subtitle": "Show or hide the right sidebar",
+  "category": "action",
+  "matchText": "Toggle Right Sidebar Show or hide the right sidebar agent sessions git worktrees",
+  "aliases": ["right sidebar", "agent sessions sidebar", "git worktrees sidebar"],
+  "requiresArguments": false,
+  "hasSafeDefaultTarget": true,
+  "disabledReason": "No active workspace",
+  "command": { "kind": "action", "target": "right-sidebar.toggle" }
+}
