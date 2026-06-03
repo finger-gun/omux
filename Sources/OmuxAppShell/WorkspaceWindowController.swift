@@ -1,6 +1,7 @@
 import AppKit
 import OmuxAIStatusPlugin
 import OmuxConfig
+import OmuxControlPlane
 import OmuxCore
 import OmuxTerminalBridge
 import OmuxVault
@@ -267,12 +268,20 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.toggleSidebarVisibility()
     }
 
+    func toggleVaultSidebarVisibility() {
+        rootViewController.toggleVaultSidebar()
+    }
+
     func setAgentSessionsVisibility(_ isVisible: Bool) {
         rootViewController.setVaultSidebarVisibility(isVisible)
     }
 
     func toggleAgentSessionsVisibility() {
-        rootViewController.toggleVaultSidebar()
+        rootViewController.toggleAgentSessionsPanel()
+    }
+
+    func toggleWorktreesVisibility() {
+        rootViewController.toggleWorktreesPanel()
     }
 
     func presentAgentSessionsPalette(keyBindings: OpenMUXKeyBindingRegistry) {
@@ -398,6 +407,10 @@ final class WorkspaceShellViewController: NSViewController {
     private var vaultSourceEventWatcher: VaultSourceEventWatcher?
     private var findSearchObserverToken: UUID?
     private var collapsedWorkspaceIDs = Set<WorkspaceID>()
+    private var worktrees: [GitWorktree] = []
+    private var worktreeBranches: [String] = []
+    private var isWorktreesSectionCollapsed: Bool = UserDefaults.standard.bool(forKey: "omux.rightSidebar.worktreesCollapsed")
+    private var isAgentSessionsSectionCollapsed: Bool = UserDefaults.standard.bool(forKey: "omux.rightSidebar.agentSessionsCollapsed")
     private var paneMetadataRowsOverridesByPaneID: [PaneID: PaneMetadataRowsOverride] = [:]
     private let onClosePaneTab: @MainActor (PaneID) -> Void
     private let onExtensionPaneAction: @MainActor (ExtensionPaneActionRequest) -> Void
@@ -433,6 +446,7 @@ final class WorkspaceShellViewController: NSViewController {
         self.onExtensionPaneAction = onExtensionPaneAction
         super.init(nibName: nil, bundle: nil)
         configureVaultSourceIndexing()
+        subscribeToCommandFinished()
     }
 
     deinit {
@@ -491,31 +505,22 @@ final class WorkspaceShellViewController: NSViewController {
         view.addSubview(sidebarView)
         view.addSubview(mainColumn)
         view.addSubview(sidebarToggleButton)
-        if vaultConfiguration.enabled {
-            view.addSubview(vaultSidebarView)
-            if vaultConfiguration.collapsedToggleVisible {
-                view.addSubview(vaultToggleButton)
-            }
+        view.addSubview(vaultSidebarView)
+        if vaultConfiguration.collapsedToggleVisible {
+            view.addSubview(vaultToggleButton)
         }
         view.addSubview(shellOverlayHostView)
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.sidebarWidth)
-        let vaultSidebarWidthConstraint = vaultConfiguration.enabled
-            ? vaultSidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultSidebarWidth)
-            : nil
+        let vaultSidebarWidthConstraint = vaultSidebarView.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultSidebarWidth)
         let mainColumnLeadingConstraint = mainColumn.leadingAnchor.constraint(
             equalTo: sidebarView.trailingAnchor,
             constant: ShellLayoutMetrics.interRegionSpacing
         )
-        let mainColumnTrailingConstraint = vaultConfiguration.enabled
-            ? mainColumn.trailingAnchor.constraint(
-                equalTo: vaultSidebarView.leadingAnchor,
-                constant: -ShellLayoutMetrics.interRegionSpacing
-            )
-            : mainColumn.trailingAnchor.constraint(
-                equalTo: view.trailingAnchor,
-                constant: -ShellLayoutMetrics.outerPadding - reservedWidthForCollapsedVaultToggle
-            )
+        let mainColumnTrailingConstraint = mainColumn.trailingAnchor.constraint(
+            equalTo: vaultSidebarView.leadingAnchor,
+            constant: -ShellLayoutMetrics.interRegionSpacing
+        )
         self.sidebarWidthConstraint = sidebarWidthConstraint
         self.vaultSidebarWidthConstraint = vaultSidebarWidthConstraint
         self.mainColumnLeadingConstraint = mainColumnLeadingConstraint
@@ -555,26 +560,25 @@ final class WorkspaceShellViewController: NSViewController {
             topBarBorderView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ]
 
-        if vaultConfiguration.enabled, let vaultSidebarWidthConstraint {
+        if vaultConfiguration.collapsedToggleVisible {
             constraints += [
-                vaultSidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-                vaultSidebarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                vaultSidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                vaultSidebarWidthConstraint,
+                vaultToggleButton.centerYAnchor.constraint(equalTo: titleBarGuide.centerYAnchor),
+                vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+                vaultToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
+                vaultToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
             ]
-            if vaultConfiguration.collapsedToggleVisible {
-                constraints += [
-                    vaultToggleButton.centerYAnchor.constraint(equalTo: titleBarGuide.centerYAnchor),
-                    vaultToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-                    vaultToggleButton.widthAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
-                    vaultToggleButton.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.vaultToggleSize),
-                ]
-            }
         }
 
+        constraints += [
+            vaultSidebarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            vaultSidebarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            vaultSidebarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            vaultSidebarWidthConstraint,
+        ]
+
         // Sidebar toggle button: always present, positioned to the left of the
-        // vault toggle (or at the trailing edge when vault is disabled).
-        let sidebarButtonTrailing = vaultConfiguration.enabled && vaultConfiguration.collapsedToggleVisible
+        // vault toggle (or at the trailing edge when vault toggle is hidden).
+        let sidebarButtonTrailing = vaultConfiguration.collapsedToggleVisible
             ? vaultToggleButton.leadingAnchor
             : view.trailingAnchor
         constraints += [
@@ -738,6 +742,7 @@ final class WorkspaceShellViewController: NSViewController {
         let previousWorkspace = currentWorkspace
         let previousWorkspaceID = currentWorkspace?.id
         let previousFocusedPaneID = currentWorkspace?.focusedPane?.id
+        let previousFocusedPaneWorkingDirectory = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory
         let shouldRestoreFocus = shouldRestoreFocus(
             previousWorkspaceID: previousWorkspaceID,
             previousFocusedPaneID: previousFocusedPaneID,
@@ -757,6 +762,13 @@ final class WorkspaceShellViewController: NSViewController {
         currentWorkspace = workspace
         dismissIrrelevantRestoreBanners(for: workspace)
         let focusedPaneID = workspace.focusedPane?.id
+        let focusedPaneWorkingDirectory = workspace.focusedPane?.terminalSession?.workingDirectory
+        // Reload worktrees when focused pane or its working directory changes.
+        if previousFocusedPaneID != focusedPaneID
+            || previousWorkspaceID != workspace.id
+            || previousFocusedPaneWorkingDirectory != focusedPaneWorkingDirectory {
+            reloadWorktrees()
+        }
         apply(theme: currentTheme)
         let terminalTextCache = TerminalTextRenderCache()
         let terminalTextProvider: @MainActor (Pane) -> String? = { [weak self] pane in
@@ -819,6 +831,8 @@ final class WorkspaceShellViewController: NSViewController {
             hasMore: vaultHasMore,
             sessionActivityByID: [:],
             theme: currentTheme,
+            isCollapsed: isAgentSessionsSectionCollapsed,
+            isAgentSessionsEnabled: vaultConfiguration.enabled,
             onToggle: { [weak self] in
                 self?.toggleVaultSidebar()
             },
@@ -842,6 +856,29 @@ final class WorkspaceShellViewController: NSViewController {
             },
             onDelete: { [weak self] sessionID in
                 self?.deleteVaultSessionPrompt(sessionID: sessionID)
+            },
+            onToggleCollapse: { [weak self] in
+                self?.toggleAgentSessionsCollapsed()
+            }
+        )
+        vaultSidebarView.worktreesWidget.render(
+            worktrees: worktrees,
+            isCollapsed: isWorktreesSectionCollapsed,
+            theme: currentTheme,
+            onNavigate: { [weak self] worktree in
+                self?.navigateToWorktree(worktree)
+            },
+            onDelete: { [weak self] worktree in
+                self?.deleteWorktreePrompt(worktree)
+            },
+            onCreate: { [weak self] in
+                self?.showCreateWorktreeSheet()
+            },
+            onRefresh: { [weak self] in
+                self?.reloadWorktrees()
+            },
+            onToggleCollapse: { [weak self] in
+                self?.toggleWorktreesCollapsed()
             }
         )
         let plan = WorkspaceRenderReconciliationPlanner.classify(
@@ -1483,6 +1520,61 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    func toggleAgentSessionsPanel() {
+        if !isVaultSidebarVisible {
+            // Sidebar closed: open it and ensure agent sessions is expanded.
+            isVaultSidebarVisible = true
+            applyVaultSidebarVisibility()
+            if vaultSessions.isEmpty, vaultIsLoading == false {
+                reloadVaultSessions(reset: true)
+            }
+            if isAgentSessionsSectionCollapsed {
+                isAgentSessionsSectionCollapsed = false
+                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+                vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+                if let workspace = currentWorkspace { update(workspace: workspace) }
+            }
+        } else if isAgentSessionsSectionCollapsed {
+            // Sidebar open, widget collapsed: expand it.
+            isAgentSessionsSectionCollapsed = false
+            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+            vaultSidebarView.splitView.setCollapsed(false, panelID: "agentSessions")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        } else {
+            // Sidebar open, widget expanded: collapse it.
+            isAgentSessionsSectionCollapsed = true
+            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+            vaultSidebarView.splitView.setCollapsed(true, panelID: "agentSessions")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        }
+    }
+
+    func toggleWorktreesPanel() {
+        if !isVaultSidebarVisible {
+            // Sidebar closed: open it and ensure worktrees widget is expanded.
+            isVaultSidebarVisible = true
+            applyVaultSidebarVisibility()
+            if isWorktreesSectionCollapsed {
+                isWorktreesSectionCollapsed = false
+                UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
+                vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+                if let workspace = currentWorkspace { update(workspace: workspace) }
+            }
+        } else if isWorktreesSectionCollapsed {
+            // Sidebar open, widget collapsed: expand it.
+            isWorktreesSectionCollapsed = false
+            UserDefaults.standard.set(false, forKey: "omux.rightSidebar.worktreesCollapsed")
+            vaultSidebarView.splitView.setCollapsed(false, panelID: "worktrees")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        } else {
+            // Sidebar open, widget expanded: collapse it.
+            isWorktreesSectionCollapsed = true
+            UserDefaults.standard.set(true, forKey: "omux.rightSidebar.worktreesCollapsed")
+            vaultSidebarView.splitView.setCollapsed(true, panelID: "worktrees")
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+        }
+    }
+
     func setVaultSidebarVisibility(_ isVisible: Bool) {
         guard isVaultSidebarVisible != isVisible else {
             return
@@ -1494,10 +1586,180 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
+    // MARK: - Worktrees
+
+    /// Subscribes to `commandFinished` terminal events on the `WorkspaceController`
+    /// so that manual `git worktree` CLI commands refresh the widget immediately.
+    private func subscribeToCommandFinished() {
+        let previous = controller.onTerminalEvent
+        controller.onTerminalEvent = { [weak self] event in
+            previous?(event)
+            guard event.name == ControlPlaneTerminalEventName.commandFinished.rawValue else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let focusedPaneID = self.currentWorkspace?.focusedPane?.id,
+                      event.paneID == focusedPaneID else { return }
+                self.reloadWorktrees()
+            }
+        }
+    }
+
+    private func reloadWorktrees() {
+        guard let cwd = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory else {
+            worktrees = []
+            if let workspace = currentWorkspace { update(workspace: workspace) }
+            return
+        }
+        let directory = cwd
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let list = GitWorktreeResolver.listWorktrees(in: directory)
+            let branches = GitWorktreeResolver.listBranches(in: directory)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.worktrees = list
+                self.worktreeBranches = branches
+                if let workspace = self.currentWorkspace {
+                    self.update(workspace: workspace)
+                }
+            }
+        }
+    }
+
+    private func navigateToWorktree(_ worktree: GitWorktree) {
+        let path = worktree.path
+        let escaped = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        try? controller.runCommand(target: .focused, command: "cd \(escaped)")
+        controller.setPaneWorkingDirectory(target: .focused, path: path)
+    }
+
+    private func deleteWorktreePrompt(_ worktree: GitWorktree) {
+        let alert = NSAlert()
+        alert.messageText = "Remove Worktree"
+        alert.informativeText = "This will remove the worktree at \(worktree.path). The branch will not be deleted."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+
+        let performDelete = { [weak self] in
+            self?.deleteWorktree(worktree)
+        }
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn { performDelete() }
+            }
+            return
+        }
+        if alert.runModal() == .alertFirstButtonReturn { performDelete() }
+    }
+
+    private func deleteWorktree(_ worktree: GitWorktree) {
+        guard let cwd = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory else { return }
+        let directory = cwd
+        let path = worktree.path
+        Task.detached(priority: .userInitiated) { [weak self] in
+            _ = GitWorktreeResolver.removeWorktree(at: path, in: directory)
+            await MainActor.run { [weak self] in
+                self?.reloadWorktrees()
+            }
+        }
+    }
+
+    private func showCreateWorktreeSheet() {
+        guard let cwd = currentWorkspace?.focusedPane?.terminalSession?.workingDirectory else { return }
+        showCreateWorktreeSheet(repoDirectory: cwd, branches: worktreeBranches) { [weak self] branch, fromRef in
+            self?.createWorktree(branch: branch, fromRef: fromRef, repoDirectory: cwd)
+        }
+    }
+
+    private func showCreateWorktreeSheet(
+        repoDirectory: String,
+        branches: [String],
+        onConfirm: @escaping (String, String?) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "Create Worktree"
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+
+        let defaultBranch = "worktree/\(UUID().uuidString.prefix(8).lowercased())"
+
+        let branchLabel = NSTextField(labelWithString: "New branch name:")
+        branchLabel.font = .systemFont(ofSize: 12)
+        branchLabel.frame = NSRect(x: 0, y: 96, width: 300, height: 16)
+
+        let branchField = NSTextField()
+        branchField.stringValue = defaultBranch
+        branchField.font = .systemFont(ofSize: 13)
+        branchField.frame = NSRect(x: 0, y: 64, width: 300, height: 24)
+
+        let fromLabel = NSTextField(labelWithString: "Base branch:")
+        fromLabel.font = .systemFont(ofSize: 12)
+        fromLabel.frame = NSRect(x: 0, y: 36, width: 300, height: 16)
+
+        let fromPopup = NSPopUpButton()
+        fromPopup.addItem(withTitle: "(current HEAD)")
+        for b in branches { fromPopup.addItem(withTitle: b) }
+        fromPopup.frame = NSRect(x: 0, y: 0, width: 300, height: 26)
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 130))
+        accessory.addSubview(branchLabel)
+        accessory.addSubview(branchField)
+        accessory.addSubview(fromLabel)
+        accessory.addSubview(fromPopup)
+        alert.accessoryView = accessory
+
+        let performCreate: () -> Void = {
+            let branch = branchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard branch.isEmpty == false else { return }
+            let fromRef: String? = fromPopup.indexOfSelectedItem == 0 ? nil : fromPopup.titleOfSelectedItem
+            onConfirm(branch, fromRef)
+        }
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn { performCreate() }
+            }
+            return
+        }
+        if alert.runModal() == .alertFirstButtonReturn { performCreate() }
+    }
+
+    private func createWorktree(branch: String, fromRef: String?, repoDirectory: String) {
+        let path = GitWorktreeResolver.defaultWorktreePath(branch: branch, in: repoDirectory)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = GitWorktreeResolver.addWorktree(branch: branch, fromRef: fromRef, at: path, in: repoDirectory)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    let worktree = GitWorktree(path: path, branch: branch, isMainWorktree: false, isCurrentRepo: false)
+                    self.navigateToWorktree(worktree)
+                    self.reloadWorktrees()
+                case .failure(let error):
+                    fputs("Create worktree failed: \(error)\n", stderr)
+                }
+            }
+        }
+    }
+
+    private func toggleWorktreesCollapsed() {
+        isWorktreesSectionCollapsed.toggle()
+        UserDefaults.standard.set(isWorktreesSectionCollapsed, forKey: "omux.rightSidebar.worktreesCollapsed")
+        vaultSidebarView.splitView.setCollapsed(isWorktreesSectionCollapsed, panelID: "worktrees")
+        if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
+    private func toggleAgentSessionsCollapsed() {
+        isAgentSessionsSectionCollapsed.toggle()
+        UserDefaults.standard.set(isAgentSessionsSectionCollapsed, forKey: "omux.rightSidebar.agentSessionsCollapsed")
+        vaultSidebarView.splitView.setCollapsed(isAgentSessionsSectionCollapsed, panelID: "agentSessions")
+        if let workspace = currentWorkspace { update(workspace: workspace) }
+    }
+
     private func applyVaultSidebarVisibility() {
-        let isVisible = vaultConfiguration.enabled && isVaultSidebarVisible
+        let isVisible = isVaultSidebarVisible
         vaultSidebarView.isHidden = !isVisible
-        vaultToggleButton.isHidden = !vaultConfiguration.enabled || !vaultConfiguration.collapsedToggleVisible
+        vaultToggleButton.isHidden = !vaultConfiguration.collapsedToggleVisible
         vaultToggleButton.contentTintColor = currentTheme.shell.textMuted
         vaultSidebarWidthConstraint?.constant = isVisible ? ShellLayoutMetrics.vaultSidebarWidth : 0
         mainColumnTrailingConstraint?.constant = isVisible
@@ -2028,7 +2290,7 @@ final class WorkspaceShellViewController: NSViewController {
                 return .invoked
             }
             if result.invocationTarget == .action(.agentSessionsToggle) {
-                toggleVaultSidebar()
+                toggleAgentSessionsPanel()
                 return .invoked
             }
             if result.invocationTarget == .action(.paneFind) {
@@ -4110,6 +4372,463 @@ private extension NSColor {
     }
 }
 
+// MARK: - SidebarSplitView
+
+/// A VSCode-style vertical split container for sidebar panels.
+/// Panels are separated by draggable 4pt handles. The first panel is pinned to
+/// the top, the last to the bottom. Collapsed panels shrink to `collapsedHeight`.
+/// Expanded panels share remaining space proportionally; proportions are persisted.
+/// Panels can be reordered by dragging their header row.
+@MainActor
+private final class SidebarSplitView: NSView {
+
+    static let separatorThickness: CGFloat = 4
+
+    struct Panel {
+        let view: NSView
+        let collapsedHeight: CGFloat
+        var isCollapsed: Bool
+        var proportion: CGFloat
+        let defaultsKey: String
+        let panelID: String
+        let headerView: CollapsibleSectionHeaderView?
+
+        init(
+            view: NSView,
+            collapsedHeight: CGFloat,
+            isCollapsed: Bool,
+            proportion: CGFloat,
+            defaultsKey: String,
+            panelID: String,
+            headerView: CollapsibleSectionHeaderView? = nil
+        ) {
+            self.view = view
+            self.collapsedHeight = collapsedHeight
+            self.isCollapsed = isCollapsed
+            self.proportion = proportion
+            self.defaultsKey = defaultsKey
+            self.panelID = panelID
+            self.headerView = headerView
+        }
+    }
+
+    private var panels: [Panel] = []
+    private var separators: [SidebarSeparatorView] = []
+    private var theme: WorkspaceShellTheme = .defaultTheme
+
+    // MARK: Widget reorder drag state
+    private struct WidgetDragState {
+        let sourcePanelIndex: Int
+        let sourcePanelMinY: CGFloat   // stable Y captured at drag start, before any drop zone shifts
+        var targetInsertionIndex: Int?
+        weak var ghostView: NSView?
+        let ghostHeight: CGFloat
+    }
+    private var widgetDragState: WidgetDragState?
+    private let dropZoneView = WidgetDropZoneView()
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        dropZoneView.isHidden = true
+        addSubview(dropZoneView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    // MARK: Setup
+
+    func setPanels(_ newPanels: [Panel]) {
+        for sep in separators { sep.removeFromSuperview() }
+        for p in panels { p.view.removeFromSuperview() }
+        separators = []
+        panels = newPanels
+
+        for panel in panels {
+            panel.view.translatesAutoresizingMaskIntoConstraints = true
+            panel.view.autoresizingMask = []
+            addSubview(panel.view)
+        }
+
+        // Bring drop zone to front so it renders above panel views.
+        dropZoneView.removeFromSuperview()
+        addSubview(dropZoneView)
+
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        rebalanceProportions()
+        needsLayout = true
+    }
+
+    private func rewireHeaderDragCallbacks() {
+        for (i, panel) in panels.enumerated() {
+            guard let header = panel.headerView else { continue }
+            let idx = i
+            header.onDragBegan = { [weak self] in
+                self?.beginWidgetDrag(panelIndex: idx)
+            }
+            header.onDragMoved = { [weak self] windowY in
+                self?.updateWidgetDrag(windowY: windowY)
+            }
+            header.onDragEnded = { [weak self] in
+                self?.endWidgetDrag()
+            }
+        }
+    }
+
+    private func rebuildSeparators() {
+        for sep in separators { sep.removeFromSuperview() }
+        separators = []
+        for i in 0 ..< (panels.count - 1) {
+            let sep = SidebarSeparatorView()
+            let idx = i
+            sep.onDrag = { [weak self] delta in
+                self?.handleDrag(separatorIndex: idx, delta: delta)
+            }
+            sep.apply(theme: theme)
+            addSubview(sep)
+            separators.append(sep)
+        }
+        // Keep drop zone on top.
+        dropZoneView.removeFromSuperview()
+        addSubview(dropZoneView)
+    }
+
+    func applyTheme(_ t: WorkspaceShellTheme) {
+        theme = t
+        for sep in separators { sep.apply(theme: t) }
+        dropZoneView.apply(theme: t)
+    }
+
+    // MARK: Collapse
+
+    func setCollapsed(_ collapsed: Bool, panelID: String) {
+        guard let i = panels.firstIndex(where: { $0.panelID == panelID }) else { return }
+        panels[i].isCollapsed = collapsed
+        rebalanceProportions()
+        needsLayout = true
+    }
+
+    // MARK: Layout
+
+    override func layout() {
+        super.layout()
+        applyFrames()
+    }
+
+    private func applyFrames() {
+        let total = bounds.height
+        let width = bounds.width
+        let separatorSpace = CGFloat(separators.count) * Self.separatorThickness
+        let collapsedSpace = panels.filter(\.isCollapsed).reduce(0) { $0 + $1.collapsedHeight }
+
+        guard let dragState = widgetDragState, let insertionIdx = dragState.targetInsertionIndex else {
+            // No active drag — normal layout, drop zone hidden.
+            dropZoneView.isHidden = true
+            let flexibleSpace = max(0, total - separatorSpace - collapsedSpace)
+            var y: CGFloat = 0
+            for (i, panel) in panels.enumerated() {
+                let h: CGFloat = panel.isCollapsed ? panel.collapsedHeight : (flexibleSpace * panel.proportion).rounded()
+                panel.view.frame = NSRect(x: 0, y: y, width: width, height: h)
+                y += h
+                if i < separators.count {
+                    separators[i].frame = NSRect(x: 0, y: y, width: width, height: Self.separatorThickness)
+                    y += Self.separatorThickness
+                }
+            }
+            return
+        }
+
+        // Active drag: insert the drop zone into the flow at insertionIdx,
+        // pushing real panels aside so the highlight occupies real space.
+        let dropZoneHeight = dragState.ghostHeight
+        let flexibleSpace = max(0, total - separatorSpace - collapsedSpace - dropZoneHeight)
+
+        var y: CGFloat = 0
+        for (i, panel) in panels.enumerated() {
+            if i == insertionIdx {
+                dropZoneView.frame = NSRect(x: 0, y: y, width: width, height: dropZoneHeight)
+                dropZoneView.isHidden = false
+                y += dropZoneHeight
+            }
+            let h: CGFloat = panel.isCollapsed ? panel.collapsedHeight : (flexibleSpace * panel.proportion).rounded()
+            panel.view.frame = NSRect(x: 0, y: y, width: width, height: h)
+            y += h
+            if i < separators.count {
+                separators[i].frame = NSRect(x: 0, y: y, width: width, height: Self.separatorThickness)
+                y += Self.separatorThickness
+            }
+        }
+        // Insertion after last panel.
+        if insertionIdx >= panels.count {
+            dropZoneView.frame = NSRect(x: 0, y: y, width: width, height: dropZoneHeight)
+            dropZoneView.isHidden = false
+        }
+    }
+
+    // MARK: Resize drag
+
+    private func handleDrag(separatorIndex: Int, delta: CGFloat) {
+        let aboveIdx = separatorIndex
+        let belowIdx = separatorIndex + 1
+        guard aboveIdx < panels.count, belowIdx < panels.count else { return }
+        var above = panels[aboveIdx]
+        var below = panels[belowIdx]
+        guard !above.isCollapsed, !below.isCollapsed else { return }
+
+        let separatorSpace = CGFloat(separators.count) * Self.separatorThickness
+        let collapsedSpace = panels.filter(\.isCollapsed).reduce(0) { $0 + $1.collapsedHeight }
+        let flexibleSpace = max(1, bounds.height - separatorSpace - collapsedSpace)
+
+        let proportionDelta = delta / flexibleSpace
+        let minProportion = 28 / flexibleSpace
+        let newAbove = (above.proportion + proportionDelta).clamped(to: minProportion ... (above.proportion + below.proportion - minProportion))
+        let newBelow = above.proportion + below.proportion - newAbove
+
+        above.proportion = newAbove
+        below.proportion = newBelow
+        panels[aboveIdx] = above
+        panels[belowIdx] = below
+
+        persistProportions()
+        needsLayout = true
+    }
+
+    // MARK: Widget reorder drag
+
+    private func beginWidgetDrag(panelIndex: Int) {
+        let sourceView = panels[panelIndex].headerView ?? panels[panelIndex].view
+        let ghost = makeWidgetDragGhost(for: sourceView)
+        widgetDragState = WidgetDragState(
+            sourcePanelIndex: panelIndex,
+            sourcePanelMinY: panels[panelIndex].view.frame.minY,
+            targetInsertionIndex: nil,
+            ghostView: ghost,
+            ghostHeight: sourceView.bounds.height
+        )
+        updateDropZone()
+    }
+
+    private func updateWidgetDrag(windowY: CGFloat) {
+        guard var dragState = widgetDragState else { return }
+        let localY = convert(NSPoint(x: 0, y: windowY), from: nil).y
+        dragState.targetInsertionIndex = insertionIndex(for: localY, excluding: dragState.sourcePanelIndex)
+        widgetDragState = dragState
+        updateWidgetDragGhost(dragState.ghostView, windowY: windowY)
+        updateDropZone()
+    }
+
+    private func endWidgetDrag() {
+        defer {
+            widgetDragState?.ghostView?.removeFromSuperview()
+            widgetDragState = nil
+            needsLayout = true
+        }
+        guard let dragState = widgetDragState, var dst = dragState.targetInsertionIndex else { return }
+        let src = dragState.sourcePanelIndex
+        var reordered = panels
+        let moved = reordered.remove(at: src)
+        if dst > src { dst -= 1 }
+        reordered.insert(moved, at: dst)
+        panels = reordered
+        rebuildSeparators()
+        rewireHeaderDragCallbacks()
+        equalizeProportions()
+        needsLayout = true
+    }
+
+    private func makeWidgetDragGhost(for panelView: NSView) -> NSView? {
+        guard let contentView = window?.contentView else { return nil }
+        let size = panelView.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let snapshot = NSImage(size: size, flipped: false) { [weak panelView] _ in
+            guard let layer = panelView?.layer else { return false }
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            layer.render(in: ctx)
+            return true
+        }
+
+        let ghost = NSImageView(image: snapshot)
+        ghost.wantsLayer = true
+        ghost.layer?.opacity = 0.82
+        ghost.layer?.cornerRadius = 3
+        ghost.layer?.shadowOpacity = 0.28
+        ghost.layer?.shadowRadius = 10
+        ghost.layer?.shadowColor = NSColor.black.cgColor
+        ghost.layer?.shadowOffset = CGSize(width: 0, height: -3)
+
+        ghost.frame = panelView.convert(panelView.bounds, to: nil)
+        contentView.addSubview(ghost, positioned: .above, relativeTo: nil)
+        return ghost
+    }
+
+    private func updateWidgetDragGhost(_ ghost: NSView?, windowY: CGFloat) {
+        guard let ghost else { return }
+        ghost.frame.origin.y = windowY - ghost.frame.height / 2
+    }
+
+    /// Returns the insertion index (0 = before panel 0, n = after last panel)
+    /// only when the cursor is within the activation zone of a valid slot.
+    /// Each slot activates when the cursor is in the outer quarter of an adjacent panel.
+    /// Returns nil when the cursor is in the middle of a panel (no active drop zone).
+    private func insertionIndex(for localY: CGFloat, excluding src: Int) -> Int? {
+        let validSlots = Set((0 ... panels.count).filter { $0 != src && $0 != src + 1 })
+        guard !validSlots.isEmpty else { return nil }
+
+        // Activate the slot when the cursor gets within one header-height of the
+        // panel boundary, so the drop zone appears as the dragged widget approaches
+        // the other panel — not immediately on drag start.
+        let srcMinY = widgetDragState?.sourcePanelMinY ?? panels[src].view.frame.minY
+        let proximityThreshold: CGFloat = 34   // one collapsed header height
+
+        for slot in 0 ... panels.count {
+            guard validSlots.contains(slot) else { continue }
+            if slot > src + 1 {
+                // Boundary is the bottom edge of the source panel.
+                let srcHeight = panels[src].isCollapsed ? panels[src].collapsedHeight : panels[src].view.frame.height
+                let boundary = srcMinY + srcHeight
+                if localY > boundary - proximityThreshold { return slot }
+            }
+            if slot < src {
+                // Boundary is the top edge of the source panel.
+                let boundary = srcMinY
+                if localY < boundary + proximityThreshold { return slot }
+            }
+        }
+        return nil
+    }
+
+    private func updateDropZone() {
+        needsLayout = true
+    }
+
+    // MARK: Proportion management
+
+    /// Normalizes proportions so expanded panels fill exactly 1.0 total, preserving relative ratios.
+    private func rebalanceProportions() {
+        let expandedIndices = panels.indices.filter { !panels[$0].isCollapsed }
+        guard !expandedIndices.isEmpty else { return }
+        let currentSum = expandedIndices.reduce(0.0) { $0 + panels[$1].proportion }
+        if currentSum < 0.001 {
+            let share = 1.0 / CGFloat(expandedIndices.count)
+            for i in expandedIndices { panels[i].proportion = share }
+        } else {
+            for i in expandedIndices { panels[i].proportion /= currentSum }
+        }
+        persistProportions()
+    }
+
+    /// Gives each expanded panel an equal proportion. Used after a reorder so that
+    /// swapped proportions don't cause unexpected size changes.
+    private func equalizeProportions() {
+        let expandedIndices = panels.indices.filter { !panels[$0].isCollapsed }
+        guard !expandedIndices.isEmpty else { return }
+        let share = 1.0 / CGFloat(expandedIndices.count)
+        for i in expandedIndices { panels[i].proportion = share }
+        persistProportions()
+    }
+
+    private func persistProportions() {
+        for panel in panels {
+            UserDefaults.standard.set(Double(panel.proportion), forKey: panel.defaultsKey)
+        }
+    }
+}
+
+
+// MARK: - SidebarSeparatorView
+
+@MainActor
+private final class SidebarSeparatorView: NSView {
+    var onDrag: ((CGFloat) -> Void)?
+    private let line = NSView()
+    private var dragOrigin: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = true
+        autoresizingMask = []
+        wantsLayer = true
+
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.wantsLayer = true
+        addSubview(line)
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor),
+            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func apply(theme: WorkspaceShellTheme) {
+        line.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragOrigin = event.locationInWindow.y
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // locationInWindow.y increases upward in screen space.
+        // Dragging down → y decreases → delta negative → above panel shrinks.
+        // We want drag-down to grow the above panel, so negate.
+        let delta = -(event.locationInWindow.y - dragOrigin)
+        dragOrigin = event.locationInWindow.y
+        onDrag?(delta)
+    }
+}
+
+// MARK: - WidgetDropZoneView
+
+/// A horizontal highlight band rendered in `SidebarSplitView` during a widget
+/// reorder drag. It sits between panels to show where the dragged widget will land.
+@MainActor
+private final class WidgetDropZoneView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 2
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func apply(theme: WorkspaceShellTheme) {
+        layer?.backgroundColor = theme.shell.selection.withAlphaComponent(0.35).cgColor
+        layer?.borderColor = theme.shell.selection.withAlphaComponent(0.8).cgColor
+        layer?.borderWidth = 1.5
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private extension Double {
+    /// Returns nil if the value is zero (for UserDefaults default-value detection).
+    var nonZero: Double? { self == 0 ? nil : self }
+}
+
 @MainActor
 private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     struct WorkspaceFilterItem {
@@ -4127,8 +4846,11 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         let activity: SessionActivity?
     }
 
-    private let titleLabel = NSTextField(labelWithString: "AGENT SESSIONS")
+    let sectionHeader = CollapsibleSectionHeaderView()
     private let refreshButton = NSButton()
+    let worktreesWidget = GitWorktreesSidebarWidget()
+    private let agentSessionsContainer = NSView()
+    let splitView = SidebarSplitView()
     private let searchContainer = NSView()
     private let searchIcon = NSImageView()
     private let searchField = AgentSessionsSearchField()
@@ -4138,7 +4860,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private let scrollView = NSScrollView()
     private let stack = FlippedStackView()
     private let statusLabel = NSTextField(labelWithString: "")
-    private var onToggle: (() -> Void)?
+     private var onToggle: (() -> Void)?
     private var onRefresh: (() -> Void)?
     private var onSearchChanged: ((String) -> Void)?
     private var onAgentFilterChanged: ((VaultAgentKind?) -> Void)?
@@ -4146,6 +4868,7 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
     private var onNeedsMore: (() -> Void)?
     private var onResume: ((String) -> Void)?
     private var onDelete: ((String) -> Void)?
+    private var onToggleCollapse: (() -> Void)?
     private var currentTheme = WorkspaceShellTheme.defaultTheme
     private var renderedRows: [SessionRowState] = []
     private var renderedEmptyMessage: String?
@@ -4157,16 +4880,6 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         wantsLayer = true
         setAccessibilityRole(.group)
         setAccessibilityElement(true)
-
-        let header = NSStackView()
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.distribution = .fill
-        header.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
         refreshButton.isBordered = false
         refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Agent Sessions")
@@ -4230,36 +4943,32 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         statusLabel.maximumNumberOfLines = 1
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        header.addArrangedSubview(titleLabel)
-        header.addArrangedSubview(NSView())
-        header.addArrangedSubview(refreshButton)
-        searchContainer.addSubview(searchIcon)
-        searchContainer.addSubview(searchField)
         filterRow.addArrangedSubview(workspacePopup)
         filterRow.addArrangedSubview(agentPopup)
-        addSubview(header)
-        addSubview(searchContainer)
-        addSubview(filterRow)
-        addSubview(scrollView)
-        addSubview(statusLabel)
+        searchContainer.addSubview(searchIcon)
+        searchContainer.addSubview(searchField)
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(scrollBoundsChanged(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView
-        )
+        // Agent sessions container groups the header + controls into one hideable view.
+        agentSessionsContainer.translatesAutoresizingMaskIntoConstraints = false
+        agentSessionsContainer.addSubview(sectionHeader)
+        agentSessionsContainer.addSubview(searchContainer)
+        agentSessionsContainer.addSubview(filterRow)
+        agentSessionsContainer.addSubview(scrollView)
+        agentSessionsContainer.addSubview(statusLabel)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            refreshButton.widthAnchor.constraint(equalToConstant: 22),
-            refreshButton.heightAnchor.constraint(equalToConstant: 22),
+            sectionHeader.topAnchor.constraint(equalTo: agentSessionsContainer.topAnchor, constant: 6),
+            sectionHeader.leadingAnchor.constraint(equalTo: agentSessionsContainer.leadingAnchor, constant: 12),
+            sectionHeader.trailingAnchor.constraint(equalTo: agentSessionsContainer.trailingAnchor, constant: -12),
+            {
+                let c = sectionHeader.heightAnchor.constraint(equalToConstant: 22)
+                c.priority = .required
+                return c
+            }(),
             searchContainer.heightAnchor.constraint(equalToConstant: 28),
-            searchContainer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            searchContainer.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            searchContainer.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            searchContainer.topAnchor.constraint(equalTo: sectionHeader.bottomAnchor, constant: 8),
+            searchContainer.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor),
+            searchContainer.trailingAnchor.constraint(equalTo: sectionHeader.trailingAnchor),
             searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 10),
             searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
             searchIcon.widthAnchor.constraint(equalToConstant: 14),
@@ -4270,20 +4979,67 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
             searchField.heightAnchor.constraint(equalTo: searchContainer.heightAnchor),
             filterRow.heightAnchor.constraint(equalToConstant: 24),
             filterRow.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 6),
-            filterRow.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            filterRow.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            filterRow.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor),
+            filterRow.trailingAnchor.constraint(equalTo: sectionHeader.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 10),
-            scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+             scrollView.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: sectionHeader.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -6),
-            statusLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            statusLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            statusLabel.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: sectionHeader.trailingAnchor),
+            {
+                // Low priority so this breaks gracefully when the container is
+                // frame-collapsed to its header-only height by SidebarSplitView.
+                let c = statusLabel.bottomAnchor.constraint(equalTo: agentSessionsContainer.bottomAnchor, constant: -12)
+                c.priority = .defaultLow
+                return c
+            }(),
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
         ])
+
+        // Layout: SidebarSplitView fills this view; it manages worktrees + agent sessions.
+        addSubview(splitView)
+        NSLayoutConstraint.activate([
+            splitView.topAnchor.constraint(equalTo: topAnchor),
+            splitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            splitView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // Load persisted proportions (default 0.25 for worktrees, 0.75 for agent sessions).
+        let worktreesProportion = CGFloat(UserDefaults.standard.double(forKey: "omux.rightSidebar.worktreesProportion").nonZero ?? 0.25)
+        let agentProportion = CGFloat(UserDefaults.standard.double(forKey: "omux.rightSidebar.agentProportion").nonZero ?? 0.75)
+        let total = worktreesProportion + agentProportion
+        splitView.setPanels([
+            SidebarSplitView.Panel(
+                view: worktreesWidget,
+                collapsedHeight: 34,
+                isCollapsed: UserDefaults.standard.bool(forKey: "omux.rightSidebar.worktreesCollapsed"),
+                proportion: worktreesProportion / total,
+                defaultsKey: "omux.rightSidebar.worktreesProportion",
+                panelID: "worktrees",
+                headerView: worktreesWidget.header
+            ),
+            SidebarSplitView.Panel(
+                view: agentSessionsContainer,
+                collapsedHeight: 34,
+                isCollapsed: UserDefaults.standard.bool(forKey: "omux.rightSidebar.agentSessionsCollapsed"),
+                proportion: agentProportion / total,
+                defaultsKey: "omux.rightSidebar.agentProportion",
+                panelID: "agentSessions",
+                headerView: sectionHeader
+            ),
+        ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollBoundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
     }
 
     @available(*, unavailable)
@@ -4315,7 +5071,9 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         leftBorder.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         leftBorder.frame = CGRect(x: 0, y: 0, width: 1, height: bounds.height)
         leftBorder.autoresizingMask = [.layerMaxXMargin, .layerHeightSizable]
-        titleLabel.textColor = theme.shell.textMuted
+        worktreesWidget.apply(theme: theme)
+        splitView.applyTheme(theme)
+        sectionHeader.applyTheme(theme)
         refreshButton.contentTintColor = theme.shell.textMuted
         workspacePopup.contentTintColor = theme.shell.textMuted
         agentPopup.contentTintColor = theme.shell.textMuted
@@ -4377,6 +5135,8 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         hasMore: Bool,
         sessionActivityByID: [String: SessionActivity],
         theme: WorkspaceShellTheme,
+        isCollapsed: Bool,
+        isAgentSessionsEnabled: Bool,
         onToggle: @escaping () -> Void,
         onRefresh: @escaping () -> Void,
         onSearchChanged: @escaping (String) -> Void,
@@ -4384,7 +5144,8 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         onWorkspaceFilterChanged: @escaping (WorkspaceShellViewController.VaultWorkspaceFilter) -> Void,
         onNeedsMore: @escaping () -> Void,
         onResume: @escaping (String) -> Void,
-        onDelete: @escaping (String) -> Void
+        onDelete: @escaping (String) -> Void,
+        onToggleCollapse: @escaping () -> Void
     ) {
         self.onToggle = onToggle
         self.onRefresh = onRefresh
@@ -4394,6 +5155,29 @@ private final class WorkspaceVaultSidebarView: NSView, NSSearchFieldDelegate {
         self.onNeedsMore = onNeedsMore
         self.onResume = onResume
         self.onDelete = onDelete
+        self.onToggleCollapse = onToggleCollapse
+
+        // Hide the whole agent sessions section when vault is disabled.
+        // NSStackView will remove its layout contribution automatically.
+        agentSessionsContainer.isHidden = !isAgentSessionsEnabled
+
+        guard isAgentSessionsEnabled else { return }
+
+        sectionHeader.render(
+            title: "AGENT SESSIONS",
+            isCollapsed: isCollapsed,
+            actionButtons: [refreshButton],
+            theme: theme,
+            onToggle: onToggleCollapse
+        )
+
+        // When collapsed, hide search/filter/scroll (header stays visible).
+        searchContainer.isHidden = isCollapsed
+        filterRow.isHidden = isCollapsed
+        scrollView.isHidden = isCollapsed
+        statusLabel.isHidden = isCollapsed
+
+        if isCollapsed { return }
         if searchField.stringValue != searchQuery {
             searchField.stringValue = searchQuery
         }
@@ -8131,5 +8915,529 @@ private extension NSMenuItem {
         action = #selector(MenuActionTrampoline.performAction(_:))
         representedObject = trampoline
         return self
+    }
+}
+
+// MARK: - CountBadgeView
+
+/// A small circular badge that shows a number on a filled background.
+/// Background color matches the header text color; number color matches the sidebar background.
+@MainActor
+private final class CountBadgeView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+
+        label.font = .systemFont(ofSize: 9, weight: .bold)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
+            widthAnchor.constraint(greaterThanOrEqualTo: label.widthAnchor, constant: 6),
+            heightAnchor.constraint(equalToConstant: 16),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func render(count: Int, badgeColor: NSColor, numberColor: NSColor) {
+        label.stringValue = "\(count)"
+        layer?.backgroundColor = badgeColor.cgColor
+        label.textColor = numberColor
+    }
+}
+
+// MARK: - CollapsibleSectionHeaderView
+
+/// A reusable collapsible header row used by right-sidebar widget sections.
+/// Layout: [chevron] [TITLE]  [spacer]  [action buttons...]
+/// Clicking anywhere on the header fires `onToggle`.
+@MainActor
+private final class CollapsibleSectionHeaderView: NSView {
+    private let chevronView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let badgeView = CountBadgeView()
+    private var actionButtons: [NSButton] = []
+    private var onToggle: (() -> Void)?
+    var onDragBegan: (() -> Void)?
+    var onDragMoved: ((CGFloat) -> Void)?    // delta in window coords (y, increases upward)
+    var onDragEnded: (() -> Void)?
+
+    private var mouseDownPoint: NSPoint = .zero
+    private var isDragging = false
+    private static let dragThreshold: CGFloat = 4
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        chevronView.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
+        chevronView.setContentHuggingPriority(.required, for: .horizontal)
+
+        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        addSubview(chevronView)
+        addSubview(titleLabel)
+        addSubview(badgeView)
+
+        NSLayoutConstraint.activate([
+            chevronView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            chevronView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevronView.widthAnchor.constraint(equalToConstant: 14),
+            chevronView.heightAnchor.constraint(equalToConstant: 14),
+            titleLabel.leadingAnchor.constraint(equalTo: chevronView.trailingAnchor, constant: 4),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            badgeView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 5),
+            badgeView.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        // Let button clicks pass through immediately.
+        if actionButtons.contains(where: { $0.frame.contains(point) }) {
+            super.mouseDown(with: event)
+            return
+        }
+        mouseDownPoint = event.locationInWindow
+        isDragging = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if actionButtons.contains(where: { $0.frame.contains(point) }) { return }
+
+        let dy = event.locationInWindow.y - mouseDownPoint.y
+        let dx = event.locationInWindow.x - mouseDownPoint.x
+        let dist = sqrt(dx * dx + dy * dy)
+
+        if !isDragging {
+            guard dist >= Self.dragThreshold else { return }
+            isDragging = true
+            onDragBegan?()
+        }
+        onDragMoved?(event.locationInWindow.y)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isDragging {
+            isDragging = false
+            onDragEnded?()
+        } else {
+            // No drag — treat as a tap to toggle collapse.
+            let point = convert(event.locationInWindow, from: nil)
+            if !actionButtons.contains(where: { $0.frame.contains(point) }) {
+                onToggle?()
+            }
+        }
+    }
+
+    func render(
+        title: String,
+        count: Int? = nil,
+        isCollapsed: Bool,
+        actionButtons: [NSButton],
+        theme: WorkspaceShellTheme,
+        onToggle: @escaping () -> Void
+    ) {
+        self.onToggle = onToggle
+
+        titleLabel.stringValue = title
+        titleLabel.textColor = theme.shell.textMuted
+
+        let symbol = isCollapsed ? "chevron.right" : "chevron.down"
+        chevronView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        chevronView.contentTintColor = theme.shell.textMuted
+
+        if let count {
+            badgeView.isHidden = false
+            badgeView.render(
+                count: count,
+                badgeColor: theme.shell.textMuted,
+                numberColor: theme.shell.sidebarBackground
+            )
+        } else {
+            badgeView.isHidden = true
+        }
+
+        // Remove old action buttons.
+        for btn in self.actionButtons {
+            btn.removeFromSuperview()
+        }
+        self.actionButtons = actionButtons
+
+        // Add new action buttons from trailing edge inward.
+        var previousAnchor = trailingAnchor
+        for btn in actionButtons.reversed() {
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            btn.isHidden = isCollapsed
+            addSubview(btn)
+            NSLayoutConstraint.activate([
+                btn.trailingAnchor.constraint(equalTo: previousAnchor),
+                btn.centerYAnchor.constraint(equalTo: centerYAnchor),
+                btn.widthAnchor.constraint(equalToConstant: 22),
+                btn.heightAnchor.constraint(equalToConstant: 22),
+            ])
+            previousAnchor = btn.leadingAnchor
+        }
+    }
+
+    func applyTheme(_ theme: WorkspaceShellTheme) {
+        chevronView.contentTintColor = theme.shell.textMuted
+        titleLabel.textColor = theme.shell.textMuted
+        for btn in actionButtons {
+            btn.contentTintColor = theme.shell.textMuted
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
+        // Let button clicks pass through — don't intercept them as a toggle.
+        let point = convert(event.locationInWindow, from: nil)
+        return hitTest(point) is NSButton == false
+    }
+}
+
+// MARK: - WorktreeRowButton
+
+/// A single row in the Git Worktrees list: branch + path + hover delete button.
+@MainActor
+private final class WorktreeRowButton: NSView {
+    private let branchLabel = NSTextField(labelWithString: "")
+    private let pathLabel = NSTextField(labelWithString: "")
+    private let deleteButton = NSButton()
+    private var onNavigate: (() -> Void)?
+    private var onDelete: (() -> Void)?
+    private var trackingArea: NSTrackingArea?
+    private var isCurrentRepo = false
+    private var isHovered = false
+    private var currentTheme: WorkspaceShellTheme?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
+
+        branchLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        branchLabel.maximumNumberOfLines = 1
+        branchLabel.lineBreakMode = .byTruncatingTail
+        branchLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        pathLabel.font = .systemFont(ofSize: 10)
+        pathLabel.maximumNumberOfLines = 1
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        deleteButton.isBordered = false
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Remove Worktree")
+        deleteButton.imagePosition = .imageOnly
+        deleteButton.isBordered = false
+        deleteButton.controlSize = .small
+        deleteButton.setButtonType(.momentaryChange)
+        deleteButton.target = self
+        deleteButton.action = #selector(deletePressed)
+        deleteButton.translatesAutoresizingMaskIntoConstraints = false
+        deleteButton.isHidden = true
+
+        addSubview(branchLabel)
+        addSubview(pathLabel)
+        addSubview(deleteButton)
+
+        NSLayoutConstraint.activate([
+            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            deleteButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            deleteButton.widthAnchor.constraint(equalToConstant: 22),
+            deleteButton.heightAnchor.constraint(equalToConstant: 22),
+
+            branchLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            branchLabel.trailingAnchor.constraint(lessThanOrEqualTo: deleteButton.leadingAnchor, constant: -8),
+            branchLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+
+            pathLabel.leadingAnchor.constraint(equalTo: branchLabel.leadingAnchor),
+            pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: deleteButton.leadingAnchor, constant: -8),
+            pathLabel.topAnchor.constraint(equalTo: branchLabel.bottomAnchor, constant: 2),
+            pathLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+        ])
+
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func configure(
+        worktree: GitWorktree,
+        theme: WorkspaceShellTheme,
+        onNavigate: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.onNavigate = onNavigate
+        self.onDelete = onDelete
+        self.isCurrentRepo = worktree.isCurrentRepo
+        self.currentTheme = theme
+
+        branchLabel.stringValue = worktree.branch ?? "detached HEAD"
+        pathLabel.stringValue = shortenPath(worktree.path)
+
+        branchLabel.textColor = theme.shell.textPrimary
+        pathLabel.textColor = theme.shell.textMuted
+        deleteButton.contentTintColor = theme.shell.textMuted
+        updateBackground()
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        currentTheme = theme
+        deleteButton.contentTintColor = theme.shell.textMuted
+        updateBackground()
+    }
+
+    private func updateBackground() {
+        guard let theme = currentTheme else { return }
+        if isHovered {
+            layer?.backgroundColor = theme.shell.selection.withAlphaComponent(0.15).cgColor
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+        }
+    }
+
+    // MARK: Tracking area for hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea { removeTrackingArea(ta) }
+        let ta = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(ta)
+        trackingArea = ta
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        deleteButton.isHidden = false
+        updateBackground()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        deleteButton.isHidden = true
+        updateBackground()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // hitTest routes button-area clicks to the button itself, so mouseDown
+        // on the row only fires when the user clicks outside the delete button.
+        onNavigate?()
+    }
+    @objc private func deletePressed() {
+        onDelete?()
+    }
+
+    private func shortenPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+}
+
+// MARK: - GitWorktreesSidebarWidget
+
+/// A self-contained widget section for the right sidebar that lists git worktrees.
+@MainActor
+private final class GitWorktreesSidebarWidget: NSView {
+    static let collapsedHeight: CGFloat = 34   // 6 top padding + 22 header + 6 bottom padding
+
+    override var isFlipped: Bool { true }
+
+    let header = CollapsibleSectionHeaderView()
+    private let refreshButton = NSButton()
+    private let addButton = NSButton()
+    private let scrollView = NSScrollView()
+    private let stack = FlippedStackView()
+    private let emptyLabel = NSTextField(labelWithString: "")
+    private var renderedWorktrees: [GitWorktree] = []
+    private var onNavigate: ((GitWorktree) -> Void)?
+    private var onDelete: ((GitWorktree) -> Void)?
+    private var onCreate: (() -> Void)?
+    private var onRefresh: (() -> Void)?
+    private var onToggleCollapse: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+
+        refreshButton.isBordered = false
+        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Worktrees")
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshPressed)
+
+        addButton.isBordered = false
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Create Worktree")
+        addButton.target = self
+        addButton.action = #selector(addPressed)
+
+        emptyLabel.font = .systemFont(ofSize: 11)
+        emptyLabel.maximumNumberOfLines = 2
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.distribution = .fill
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.documentView = stack
+
+        addSubview(header)
+        addSubview(emptyLabel)
+        addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            header.heightAnchor.constraint(equalToConstant: 22),
+
+            emptyLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            emptyLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            emptyLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            scrollView.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            {
+                let c = scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+                c.priority = .defaultLow
+                return c
+            }(),
+
+            stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func render(
+        worktrees: [GitWorktree],
+        isCollapsed: Bool,
+        theme: WorkspaceShellTheme,
+        onNavigate: @escaping (GitWorktree) -> Void,
+        onDelete: @escaping (GitWorktree) -> Void,
+        onCreate: @escaping () -> Void,
+        onRefresh: @escaping () -> Void,
+        onToggleCollapse: @escaping () -> Void
+    ) {
+        self.onNavigate = onNavigate
+        self.onDelete = onDelete
+        self.onCreate = onCreate
+        self.onRefresh = onRefresh
+        self.onToggleCollapse = onToggleCollapse
+
+        let count = worktrees.isEmpty ? nil : worktrees.count
+        header.render(
+            title: "GIT WORKTREES",
+            count: count,
+            isCollapsed: isCollapsed,
+            actionButtons: [refreshButton, addButton],
+            theme: theme,
+            onToggle: onToggleCollapse
+        )
+
+        // The SidebarSplitView controls this widget's frame when collapsed/expanded.
+        // We just show/hide the scroll content accordingly.
+        scrollView.isHidden = isCollapsed
+        emptyLabel.isHidden = true
+
+        if isCollapsed {
+            return
+        }
+
+        if worktrees.isEmpty {
+            emptyLabel.stringValue = "No git repository"
+            emptyLabel.isHidden = false
+            scrollView.isHidden = true
+            clearRows()
+            return
+        }
+
+        if worktrees == renderedWorktrees { return }
+        renderedWorktrees = worktrees
+        clearRows()
+
+        for worktree in worktrees {
+            let row = WorktreeRowButton()
+            row.configure(
+                worktree: worktree,
+                theme: theme,
+                onNavigate: { [weak self] in self?.onNavigate?(worktree) },
+                onDelete: { [weak self] in self?.onDelete?(worktree) }
+            )
+            stack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+
+        apply(theme: theme)
+    }
+
+    func apply(theme: WorkspaceShellTheme) {
+        header.applyTheme(theme)
+        emptyLabel.textColor = theme.shell.textMuted
+        refreshButton.contentTintColor = theme.shell.textMuted
+        addButton.contentTintColor = theme.shell.textMuted
+        for case let row as WorktreeRowButton in stack.arrangedSubviews {
+            row.apply(theme: theme)
+        }
+    }
+
+    private func clearRows() {
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        renderedWorktrees = []
+    }
+
+    @objc private func refreshPressed() {
+        onRefresh?()
+    }
+
+    @objc private func addPressed() {
+        onCreate?()
     }
 }

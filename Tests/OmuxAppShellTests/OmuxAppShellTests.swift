@@ -122,7 +122,7 @@ final class OmuxAppShellTests: XCTestCase {
             modifiers: [.command]
         ) ?? true)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
-            title: "Toggle Workspace Column",
+            title: "Left Sidebar",
             key: "b",
             modifiers: [.command]
         ) ?? false)
@@ -215,6 +215,12 @@ final class OmuxAppShellTests: XCTestCase {
             modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertNil(viewMenu?.items.first { $0.title == "Toggle Agent Sessions" })
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Right Sidebar",
+            key: "b",
+            modifiers: [.command, .option]
+        ) ?? false)
+        XCTAssertNotNil(viewMenu?.items.first { $0.title == "Git Worktrees" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
@@ -1453,7 +1459,7 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testAgentSessionsSidebarTitleTopPaddingMatchesWorkspaceSidebar() throws {
+    func testRightSidebarTopWidgetTitlePaddingMatchesWorkspaceSidebar() throws {
         // Workspace sidebar header top inset
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         sidebar.render(
@@ -1473,7 +1479,8 @@ final class OmuxAppShellTests: XCTestCase {
         let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
         let workspaceTitleFrame = workspaceTitleLabel.convert(workspaceTitleLabel.bounds, to: sidebar)
 
-        // Vault sidebar header top inset
+        // Right sidebar: the topmost widget is Git Worktrees; its header should
+        // have similar top inset to the workspace sidebar title.
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -1490,14 +1497,14 @@ final class OmuxAppShellTests: XCTestCase {
             findViews(ofType: NSView.self, in: rootView)
                 .first { $0.accessibilityIdentifier() == A11yID.vaultSidebar.rawValue }
         )
-        let agentTitleLabel = try XCTUnwrap(findLabelView(withString: "AGENT SESSIONS", in: vaultSidebarView))
-        let agentTitleFrame = agentTitleLabel.convert(agentTitleLabel.bounds, to: vaultSidebarView)
+        let worktreesTitleLabel = try XCTUnwrap(findLabelView(withString: "GIT WORKTREES", in: vaultSidebarView))
+        let worktreesTitleFrame = worktreesTitleLabel.convert(worktreesTitleLabel.bounds, to: vaultSidebarView)
 
         XCTAssertEqual(
             workspaceTitleFrame.minY.rounded(),
-            agentTitleFrame.minY.rounded(),
+            worktreesTitleFrame.minY.rounded(),
             accuracy: 4,
-            "Workspace and agent sessions sidebar titles should have similar top padding"
+            "Workspace sidebar and right sidebar top widget titles should have similar top padding"
         )
     }
 
@@ -5631,7 +5638,9 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
-        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter { $0.menu != nil }
+        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter {
+            ($0.accessibilityIdentifier() ?? "").hasPrefix(A11yID.paneTabPrefix) && $0.menu != nil
+        }
         XCTAssertEqual(tabButtons.count, 2)
         let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
 
