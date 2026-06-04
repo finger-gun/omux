@@ -41,6 +41,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var searchAgentSessionsMenuItem: NSMenuItem?
     private weak var reindexAgentSessionsMenuItem: NSMenuItem?
     private weak var toggleSidebarMenuItem: NSMenuItem?
+    private weak var toggleVaultSidebarMenuItem: NSMenuItem?
+    private weak var toggleWorktreesMenuItem: NSMenuItem?
     private weak var commandPaletteWorkspaceMenuItem: NSMenuItem?
     private weak var commandPaletteCommandMenuItem: NSMenuItem?
     private weak var findInPaneMenuItem: NSMenuItem?
@@ -59,11 +61,22 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private let cliInstallStatusResolver = OmuxCLIInstallStatusResolver()
     private let pluginMenuContributionProvider: () -> [PluginMenuContribution]
 
-    public override init() {
-        self.pluginMenuContributionProvider = {
+    public override convenience init() {
+        self.init(
+            preparedConfiguration: OpenMUXConfigurationCoordinator.prepareInitialState(),
+            pluginMenuContributionProvider: {
+                PluginMenuContributionRegistry().contributions()
+            }
+        )
+    }
+
+    init(
+        preparedConfiguration: OpenMUXPreparedConfiguration,
+        pluginMenuContributionProvider: @escaping () -> [PluginMenuContribution] = {
             PluginMenuContributionRegistry().contributions()
         }
-        let preparedConfiguration = OpenMUXConfigurationCoordinator.prepareInitialState()
+    ) {
+        self.pluginMenuContributionProvider = pluginMenuContributionProvider
         preparedConfiguration.diagnostics.forEach { diagnostic in
             let prefix = diagnostic.severity == .warning ? "warning" : "error"
             fputs("\(prefix): \(diagnostic.message)\n", stderr)
@@ -182,7 +195,13 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 }
                 switch action {
                 case .set(let paneID, let row1, let row2, let row3, let source):
-                    guard windowController.setPaneMetadataRows(paneID: paneID, row1: row1, row2: row2, row3: row3) else {
+                    guard windowController.setPaneMetadataRows(
+                        paneID: paneID,
+                        row1: row1,
+                        row2: row2,
+                        row3: row3,
+                        source: source
+                    ) else {
                         return .object(["ok": .bool(false), "error": .string("pane not found")])
                     }
                     return .object([
@@ -194,7 +213,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                         "source": source.map(RPCValue.string) ?? .null,
                     ])
                 case .clear(let paneID, let source):
-                    guard windowController.clearPaneMetadataRows(paneID: paneID) else {
+                    guard windowController.clearPaneMetadataRows(paneID: paneID, source: source) else {
                         return .object(["ok": .bool(false), "error": .string("pane not found")])
                     }
                     return .object([
@@ -634,6 +653,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     @objc private func toggleSidebarFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.toggleSidebarVisibility()
+    }
+
+    @objc private func toggleVaultSidebarFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.toggleVaultSidebarVisibility()
+    }
+
+    @objc private func toggleWorktreesFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.toggleWorktreesVisibility()
     }
 
     @objc private func toggleAgentSessionsFromMenu(_ sender: Any?) {
@@ -1163,12 +1192,28 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let viewMenu = NSMenu(title: "View")
 
         let toggleSidebarMenuItem = NSMenuItem(
-            title: "Toggle Workspace Column",
+            title: "Left Sidebar",
             action: #selector(toggleSidebarFromMenu(_:)),
             keyEquivalent: ""
         )
         toggleSidebarMenuItem.target = self
         viewMenu.addItem(toggleSidebarMenuItem)
+
+        let toggleVaultSidebarMenuItem = NSMenuItem(
+            title: "Right Sidebar",
+            action: #selector(toggleVaultSidebarFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        toggleVaultSidebarMenuItem.target = self
+        viewMenu.addItem(toggleVaultSidebarMenuItem)
+
+        let toggleWorktreesMenuItem = NSMenuItem(
+            title: "Git Worktrees",
+            action: #selector(toggleWorktreesFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        toggleWorktreesMenuItem.target = self
+        viewMenu.addItem(toggleWorktreesMenuItem)
 
         viewMenu.addItem(.separator())
 
@@ -1199,6 +1244,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
+        self.toggleVaultSidebarMenuItem = toggleVaultSidebarMenuItem
+        self.toggleWorktreesMenuItem = toggleWorktreesMenuItem
         self.commandPaletteWorkspaceMenuItem = commandPaletteWorkspaceMenuItem
         self.commandPaletteCommandMenuItem = commandPaletteCommandMenuItem
         self.findInPaneMenuItem = findInPaneMenuItem
@@ -1253,6 +1300,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         searchAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible
         reindexAgentSessionsMenuItem?.isEnabled = hasWorkspace && agentSessionsMenuVisible && vaultStore != nil
         toggleSidebarMenuItem?.isEnabled = hasWorkspace
+        toggleVaultSidebarMenuItem?.isEnabled = hasWorkspace
+        toggleWorktreesMenuItem?.isEnabled = hasWorkspace
         commandPaletteWorkspaceMenuItem?.isEnabled = hasWorkspace
         commandPaletteCommandMenuItem?.isEnabled = hasWorkspace
         findInPaneMenuItem?.isEnabled = hasWorkspace
@@ -1286,6 +1335,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         setShortcut(for: restoreWorkspaceMenuItem, action: .workspaceRestoreLastClosed)
         setShortcut(for: deleteWorkspaceMenuItem, action: .workspaceClose)
         setShortcut(for: toggleSidebarMenuItem, action: .sidebarToggle)
+        setShortcut(for: toggleVaultSidebarMenuItem, action: .rightSidebarToggle)
         setShortcut(for: toggleAgentSessionsMenuItem, action: .agentSessionsToggle)
         setShortcut(for: searchAgentSessionsMenuItem, action: .agentSessionSearch)
         setShortcut(for: commandPaletteWorkspaceMenuItem, action: .commandPaletteWorkspace)

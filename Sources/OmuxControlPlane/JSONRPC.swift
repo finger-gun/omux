@@ -80,6 +80,7 @@ public enum ControlMethod: String, Sendable {
     case configGet = "config.get"
     case configApply = "config.apply"
     case terminalEvents = "terminal.events"
+    case agentObserve = "agent.observe"
     case getPaneAlias = "pane.alias.get"
     case setPaneAlias = "pane.alias.set"
     case clearPaneAlias = "pane.alias.clear"

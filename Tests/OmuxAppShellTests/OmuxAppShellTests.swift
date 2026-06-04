@@ -64,6 +64,21 @@ final class OmuxAppShellTests: XCTestCase {
         )
     }
 
+    @MainActor
+    private func appDelegateFixture() -> OpenMUXAppDelegate {
+        OpenMUXAppDelegate(
+            preparedConfiguration: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: OmuxWorkspacePathResolver.defaultRootPath,
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            ),
+            pluginMenuContributionProvider: { [] }
+        )
+    }
+
     private func targetPaneID(in response: JSONRPCResponse) -> PaneID? {
         guard case .object(let object)? = response.result,
               case .object(let target)? = object["target"],
@@ -77,7 +92,7 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuUsesScopeShortcutLadder() {
-        let delegate = OpenMUXAppDelegate()
+        let delegate = appDelegateFixture()
         let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(.defaults)
 
@@ -122,7 +137,7 @@ final class OmuxAppShellTests: XCTestCase {
             modifiers: [.command]
         ) ?? true)
         XCTAssertTrue(viewMenu?.items.containsShortcut(
-            title: "Toggle Workspace Column",
+            title: "Left Sidebar",
             key: "b",
             modifiers: [.command]
         ) ?? false)
@@ -204,17 +219,23 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Toggle Agent Sessions" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Search Agent Sessions…" })
         XCTAssertNotNil(agentSessionsMenu?.items.first { $0.title == "Reindex Agent Sessions" })
-        XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
+        XCTAssertFalse(agentSessionsMenu?.items.containsShortcut(
             title: "Toggle Agent Sessions",
             key: "b",
             modifiers: [.command, .shift]
-        ) ?? false)
+        ) ?? true)
         XCTAssertTrue(agentSessionsMenu?.items.containsShortcut(
             title: "Search Agent Sessions…",
             key: "a",
             modifiers: [.command, .shift]
         ) ?? false)
         XCTAssertNil(viewMenu?.items.first { $0.title == "Toggle Agent Sessions" })
+        XCTAssertTrue(viewMenu?.items.containsShortcut(
+            title: "Right Sidebar",
+            key: "b",
+            modifiers: [.command, .shift]
+        ) ?? false)
+        XCTAssertNotNil(viewMenu?.items.first { $0.title == "Git Worktrees" })
     }
 
     func testPluginMenuContributionRegistryParsesMenuMetadata() throws {
@@ -316,7 +337,7 @@ final class OmuxAppShellTests: XCTestCase {
 
     @MainActor
     func testApplicationMenuReflectsReboundAndUnboundKeybindings() throws {
-        let delegate = OpenMUXAppDelegate()
+        let delegate = appDelegateFixture()
         let mainMenu = delegate.configureMenus(assigningToApplication: false)
         delegate.applyKeyBindings(
             .effective(overrides: [
@@ -1278,6 +1299,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1287,7 +1309,8 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
 
         XCTAssertEqual(sidebar.updateNoticeTextForTesting, "New version 0.5.0 run: omux update")
@@ -1326,6 +1349,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: items,
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1335,7 +1359,8 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
 
@@ -1380,6 +1405,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         sidebar.render(
             workspaceItems: items,
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1389,12 +1415,13 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
 
         let scrollView = try XCTUnwrap(findView(ofType: NSScrollView.self, in: sidebar))
-        let titleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 1", in: sidebar))
+        let titleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let scrollFrame = scrollView.convert(scrollView.bounds, to: sidebar)
         let titleFrame = titleLabel.convert(titleLabel.bounds, to: sidebar)
 
@@ -1411,6 +1438,7 @@ final class OmuxAppShellTests: XCTestCase {
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1420,12 +1448,11 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
-        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
-
-        // Vault sidebar — via WorkspaceWindowController with vault enabled
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -1453,11 +1480,12 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testAgentSessionsSidebarTitleTopPaddingMatchesWorkspaceSidebar() throws {
+    func testRightSidebarTopWidgetTitlePaddingMatchesWorkspaceSidebar() throws {
         // Workspace sidebar header top inset
         let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 780))
         sidebar.render(
             workspaceItems: [],
+            isWorkspacesCollapsed: false,
             theme: .defaultTheme,
             onSelectWorkspace: { _ in },
             onCreateWorkspace: {},
@@ -1467,13 +1495,15 @@ final class OmuxAppShellTests: XCTestCase {
             onMoveWorkspace: { _, _ in },
             onToggleWorkspaceExpansion: { _ in },
             onRenameWorkspace: { _, _ in },
-            onSelectPane: { _ in }
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
         )
         sidebar.layoutSubtreeIfNeeded()
-        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES · 0", in: sidebar))
+        let workspaceTitleLabel = try XCTUnwrap(findLabelView(withString: "WORKSPACES", in: sidebar))
         let workspaceTitleFrame = workspaceTitleLabel.convert(workspaceTitleLabel.bounds, to: sidebar)
 
-        // Vault sidebar header top inset
+        // Right sidebar: the topmost widget is Git Worktrees; its header should
+        // have similar top inset to the workspace sidebar title.
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
             hookRunner: ExternalHookRunner()
@@ -1490,14 +1520,14 @@ final class OmuxAppShellTests: XCTestCase {
             findViews(ofType: NSView.self, in: rootView)
                 .first { $0.accessibilityIdentifier() == A11yID.vaultSidebar.rawValue }
         )
-        let agentTitleLabel = try XCTUnwrap(findLabelView(withString: "AGENT SESSIONS", in: vaultSidebarView))
-        let agentTitleFrame = agentTitleLabel.convert(agentTitleLabel.bounds, to: vaultSidebarView)
+        let worktreesTitleLabel = try XCTUnwrap(findLabelView(withString: "GIT WORKTREES", in: vaultSidebarView))
+        let worktreesTitleFrame = worktreesTitleLabel.convert(worktreesTitleLabel.bounds, to: vaultSidebarView)
 
         XCTAssertEqual(
             workspaceTitleFrame.minY.rounded(),
-            agentTitleFrame.minY.rounded(),
+            worktreesTitleFrame.minY.rounded(),
             accuracy: 4,
-            "Workspace and agent sessions sidebar titles should have similar top padding"
+            "Workspace sidebar and right sidebar top widget titles should have similar top padding"
         )
     }
 
@@ -4133,7 +4163,7 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
         let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
 
-        XCTAssertTrue(findLabel(withString: "WORKSPACES · 2", in: sidebar))
+        XCTAssertTrue(findLabel(withString: "WORKSPACES", in: sidebar))
         XCTAssertGreaterThanOrEqual(findViews(ofType: SidebarItemButton.self, in: sidebar).count, 2)
     }
 
@@ -4868,6 +4898,43 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertEqual(launcher.invocations.first?.name, "pane-metadata-changed")
     }
 
+    @MainActor
+    func testPaneMetadataRowsOverridePublishesSourceAttributedMetadataEvent() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(
+            HookDescriptor(
+                category: .session,
+                name: "pane-metadata-changed",
+                executableURL: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher)
+        )
+
+        var metadataEvents: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { event in
+            if event.name == ControlPlaneActionEventName.paneMetadataChanged.rawValue {
+                metadataEvents.append(event)
+            }
+        }
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+
+        XCTAssertTrue(windowController.setPaneMetadataRows(paneID: paneID, row1: "build", row2: "main", row3: "~/src", source: "rpc.test"))
+
+        XCTAssertEqual(metadataEvents.count, 1)
+        XCTAssertEqual(metadataEvents.first?.payload.objectValue?["source"], .string("rpc.test"))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(launcher.invocations.first?.payload.objectValue?["source"], .string("rpc.test"))
+    }
+
     func testTerminalSidebarMetadataUsesPaneDisplayTitle() {
         let pane = Pane(
             title: "path-like-title",
@@ -5427,6 +5494,33 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceWindowPreservesSidebarRowSlotsWhenLeadingRowsAreEmpty() throws {
+        let workspacePath = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspacePath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspacePath) }
+
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: workspacePath.path)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        windowController.updateSidebar(
+            OmuxConfigUI.Sidebar(
+                terminalRows: .init(row1: .gitBranch, row2: .abbreviatedPath, row3: .none)
+            )
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        let sidebar = try XCTUnwrap(findView(ofType: WorkspaceSidebarView.self, in: rootView))
+
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(findLabel(withString: workspacePath.lastPathComponent, in: sidebar))
+        XCTAssertTrue(findLabel(withString: workspacePath.path, in: sidebar) || findLabel(withString: workspacePath.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), in: sidebar))
+    }
+
+    @MainActor
     func testWorkspaceSidebarDragRegionsDoNotMoveWindow() {
         XCTAssertFalse(WorkspaceSidebarView().mouseDownCanMoveWindow)
         XCTAssertFalse(SidebarItemButton().mouseDownCanMoveWindow)
@@ -5631,7 +5725,9 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
-        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter { $0.menu != nil }
+        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter {
+            ($0.accessibilityIdentifier() ?? "").hasPrefix(A11yID.paneTabPrefix) && $0.menu != nil
+        }
         XCTAssertEqual(tabButtons.count, 2)
         let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
 

@@ -37,6 +37,10 @@ public enum ControlPlaneActionEventName: String, Codable, CaseIterable, Sendable
     case extensionPaneCreated = "extensionPane.created"
     case extensionPaneUpdated = "extensionPane.updated"
     case extensionPaneClosed = "extensionPane.closed"
+    case agentPromptSubmitted = "agent.promptSubmitted"
+    case agentResponseCompleted = "agent.responseCompleted"
+    case agentSlashCommandInvoked = "agent.slashCommandInvoked"
+    case agentHandoffWritten = "agent.handoffWritten"
 }
 
 public struct ControlPlaneEvent: Equatable, Codable, Sendable {

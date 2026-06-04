@@ -19,6 +19,7 @@ public enum OpenMUXKeyBindingAction: String, CaseIterable, Sendable {
     case workspaceFocus8 = "workspace.focus-8"
     case workspaceFocus9 = "workspace.focus-9"
     case sidebarToggle = "sidebar.toggle"
+    case rightSidebarToggle = "right-sidebar.toggle"
     case agentSessionsToggle = "agent-sessions.toggle"
     case agentSessionSearch = "agent-sessions.search"
     case paneSplitRight = "pane.split-right"
@@ -208,7 +209,7 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
         (try! OpenMUXKeyChord(parsing: "cmd+8"), .workspaceFocus8),
         (try! OpenMUXKeyChord(parsing: "cmd+9"), .workspaceFocus9),
         (try! OpenMUXKeyChord(parsing: "cmd+b"), .sidebarToggle),
-        (try! OpenMUXKeyChord(parsing: "cmd+shift+b"), .agentSessionsToggle),
+        (try! OpenMUXKeyChord(parsing: "cmd+shift+b"), .rightSidebarToggle),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+a"), .agentSessionSearch),
         (try! OpenMUXKeyChord(parsing: "cmd+d"), .paneSplitRight),
         (try! OpenMUXKeyChord(parsing: "cmd+shift+d"), .paneSplitDown),
@@ -236,12 +237,16 @@ public struct OpenMUXKeyBindingRegistry: Equatable, Sendable {
 
     public static func effective(overrides: [OpenMUXKeyBindingOverride]) -> OpenMUXKeyBindingRegistry {
         var bindings = Dictionary(uniqueKeysWithValues: defaultBindingPairs)
+        let reboundActions = Set(overrides.compactMap(\.action))
+        for action in reboundActions {
+            bindings = bindings.filter { $0.value != action }
+        }
+        for override in overrides {
+            bindings.removeValue(forKey: override.chord)
+        }
         for override in overrides {
             if let action = override.action {
-                bindings = bindings.filter { $0.value != action }
                 bindings[override.chord] = action
-            } else {
-                bindings.removeValue(forKey: override.chord)
             }
         }
         return OpenMUXKeyBindingRegistry(bindings: bindings)

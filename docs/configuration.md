@@ -85,6 +85,8 @@ plugins = ["https://github.com/finger-gun/omux-plugins"]
 "cmd+8" = "workspace.focus-8"
 "cmd+9" = "workspace.focus-9"
 "cmd+b" = "sidebar.toggle"
+"cmd+shift+b" = "right-sidebar.toggle"
+"cmd+shift+a" = "agent-sessions.search"
 "cmd+d" = "pane.split-right"
 "cmd+shift+d" = "pane.split-down"
 "cmd+shift+w" = "pane.remove"
@@ -275,6 +277,66 @@ Notes:
 1. OpenMUX owns the user-facing setting, but the behavior is intentionally Ghostty-compatible.
 2. OpenMUX does not hardcode Swedish, German, US, or other layout-specific Option character maps; text comes from AppKit for the active keyboard layout.
 3. For manual verification of international layouts and IME workflows, see the contributor guidance in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+## Agent settings
+
+`omux agent` is intentionally small: a local assistant for quick automation, repo inspection, and simple OpenMUX control. It supports one-shot prompts with `omux agent -p "..."` and an interactive REPL with host-handled commands such as `/tools`, `/stats`, and `/handoff`. The `[agent]` table controls whether the command is enabled at all and which read-only model tools are registered.
+
+```toml
+[agent]
+enabled = true
+skills_enabled = true
+external_tool_timeout_seconds = 60
+
+[agent.tools]
+read_terminal_history = true
+list_directory = true
+run_omux_cli = true
+read_file = true
+grep_files = true
+list_skills = true
+read_skill = true
+
+[agent.external.lookup]
+enabled = false
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | boolean | Enables or disables `omux agent` entirely. When `false`, the command exits with a clear CLI message. Defaults to `true`. |
+| `skills_enabled` | boolean | Enables repo-local and user-local read-only skill discovery under `.agents/skills/` and `~/.agents/skills/`. When `false`, both skill tools are suppressed even if their individual toggles are `true`. Defaults to `true`. |
+| `external_tool_timeout_seconds` | integer | Host timeout for one plugin-defined agent tool invocation, including any subprocess work the plugin performs. Defaults to `60`. |
+
+Per-tool toggles live under `[agent.tools]`:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `read_terminal_history` | boolean | Registers the tool for bounded recent terminal/session questions. |
+| `list_directory` | boolean | Registers the directory listing tool. |
+| `run_omux_cli` | boolean | Registers the non-interactive OpenMUX control tool. |
+| `read_file` | boolean | Registers the bounded local file reader. |
+| `grep_files` | boolean | Registers the ripgrep-backed code/content search tool. |
+| `list_skills` | boolean | Registers the skill discovery tool when `skills_enabled = true`. |
+| `read_skill` | boolean | Registers the skill reader tool when `skills_enabled = true`. |
+
+Repo-local skills live under `.agents/skills/*/SKILL.md` relative to the current working directory. User-local skills live under `~/.agents/skills/*/SKILL.md`. Repo-local names shadow user-local names when both exist.
+
+Installed manifest plugins can also contribute custom agent tools. Those plugin-defined tools are available by default, use the host timeout from `external_tool_timeout_seconds`, and can be disabled per plugin under `[agent.external.<plugin-command>]`.
+
+For a single invocation, `omux agent` can further narrow the registered tools without changing config:
+
+```sh
+omux agent --enabled-tools read_file,agenttools.webpage -p "..."
+omux agent --enabled-tools none -p "..."
+```
+
+The allow-list matches built-in tool names such as `read_file`, exact plugin tool names such as `agenttools.webpage.read-url`, and plugin provider names such as `agenttools.webpage`. When this flag is absent, config decides which tools are registered.
+
+Per-plugin overrides live under `[agent.external.<plugin-command>]`:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | boolean | Enables or disables one installed plugin tool provider for `omux agent`. Defaults to enabled when the table is absent. |
 
 ## Agent Sessions settings
 
@@ -552,6 +614,9 @@ Supported action identifiers:
 | `workspace.move-down`                       | Move the active workspace down.                                     |
 | `workspace.focus-1` ... `workspace.focus-9` | Focus a workspace by visible order.                                 |
 | `sidebar.toggle`                            | Toggle the workspace column.                                        |
+| `right-sidebar.toggle`                      | Toggle the right sidebar.                                           |
+| `agent-sessions.toggle`                     | Toggle the Agent Sessions panel inside the right sidebar.           |
+| `agent-sessions.search`                     | Open Agent Sessions search.                                         |
 | `pane.split-right`                          | Split the focused pane to the right.                                |
 | `pane.split-down`                           | Split the focused pane downward.                                    |
 | `pane.remove`                               | Remove the active pane.                                             |

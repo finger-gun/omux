@@ -47,6 +47,7 @@ private struct PaneMetadataRequest {
     let workspaceID: WorkspaceID
     let tabID: TabID?
     let pane: Pane
+    let source: String?
     let freshness: PaneMetadataFreshness
 }
 
@@ -3663,6 +3664,42 @@ public final class WorkspaceController: @unchecked Sendable {
         )
     }
 
+    func publishAgentObservation(_ observation: ControlPlaneAgentObservation) {
+        guard let category = HookCategory(rawValue: observation.hookCategory) else {
+            return
+        }
+
+        let payload: OmuxValue = .object(
+            ["cwd": .string(observation.cwd)]
+                .merging(observation.payload.objectValue ?? [:]) { _, new in new }
+        )
+
+        do {
+            try publication.emitHook(
+                category: category,
+                name: observation.hookName,
+                workspaceID: observation.workspaceID,
+                tabID: observation.tabID,
+                paneID: observation.paneID,
+                sessionID: observation.sessionID,
+                payload: payload
+            )
+        } catch {
+            fputs("warning: failed to emit \(observation.hookName) hook: \(error)\n", stderr)
+        }
+
+        publication.emitControlPlaneEvent(
+            ControlPlaneEvent(
+                name: observation.eventName,
+                workspaceID: observation.workspaceID,
+                tabID: observation.tabID,
+                paneID: observation.paneID,
+                sessionID: observation.sessionID,
+                payload: payload
+            )
+        )
+    }
+
     func publishControlPlaneEvent(_ event: ControlPlaneEvent) {
         publication.emitControlPlaneEvent(event)
     }
@@ -3671,7 +3708,31 @@ public final class WorkspaceController: @unchecked Sendable {
         publishControlPlaneEvent(event)
     }
 
-    private func paneMetadataPayload(from snapshot: PaneMetadataSnapshot) -> OmuxValue {
+    func publishPaneMetadataChange(paneID: PaneID, source: String? = nil) {
+        let request: PaneMetadataRequest?
+
+        lock.lock()
+        if let location = paneLocationLocked(for: paneID),
+           let resolution = workspacePaneLocked(at: location) {
+            request = paneMetadataRequest(
+                workspaceID: resolution.workspace.id,
+                tabID: resolution.tab?.id,
+                pane: resolution.pane,
+                source: source
+            )
+        } else {
+            request = nil
+        }
+        lock.unlock()
+
+        guard let request,
+              let publication = paneMetadataPublication(for: request) else {
+            return
+        }
+        publishPaneMetadataChanges([publication])
+    }
+
+    private func paneMetadataPayload(from snapshot: PaneMetadataSnapshot, source: String?) -> OmuxValue {
         .object([
             "displayTitle": .string(snapshot.displayTitle),
             "title": .string(snapshot.title),
@@ -3682,18 +3743,21 @@ public final class WorkspaceController: @unchecked Sendable {
             "gitBranch": snapshot.gitBranch.map(OmuxValue.string) ?? .null,
             "isWorktree": .bool(snapshot.isWorktree),
             "subtitle": snapshot.subtitle.map(OmuxValue.string) ?? .null,
+            "source": source.map(OmuxValue.string) ?? .null,
         ])
     }
 
     private func paneMetadataRequest(
         workspaceID: WorkspaceID,
         tabID: TabID?,
-        pane: Pane
+        pane: Pane,
+        source: String? = nil
     ) -> PaneMetadataRequest {
         PaneMetadataRequest(
             workspaceID: workspaceID,
             tabID: tabID,
             pane: pane,
+            source: source,
             freshness: PaneMetadataFreshness(pane: pane)
         )
     }
@@ -3712,7 +3776,7 @@ public final class WorkspaceController: @unchecked Sendable {
             subtitle: metadata.subtitle
         )
         let sessionID = request.pane.terminalSession?.id
-        let payload = paneMetadataPayload(from: snapshot)
+        let payload = paneMetadataPayload(from: snapshot, source: request.source)
 
         lock.lock()
         defer { lock.unlock() }
