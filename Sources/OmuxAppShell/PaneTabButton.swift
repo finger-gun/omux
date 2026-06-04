@@ -84,7 +84,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
         iconLabel.alignment = .center
         iconLabel.stringValue = icon?.text ?? ""
         iconLabel.toolTip = icon?.accessibilityLabel
-         iconLabel.textColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
+          iconLabel.textColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
             ?? (active ? theme.shell.textPrimary : theme.shell.textSecondary)
         iconLabel.isHidden = icon == nil || iconSymbolImage != nil
         addSubview(iconLabel)
@@ -92,7 +92,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
         iconImageView.symbolConfiguration = .init(pointSize: 11, weight: active ? .semibold : .medium)
         iconImageView.image = iconSymbolImage
-         iconImageView.contentTintColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
+          iconImageView.contentTintColor = icon.flatMap { theme.iconColor(for: $0, selected: active) }
             ?? (active ? theme.shell.textPrimary : theme.shell.textSecondary)
         iconImageView.toolTip = icon?.accessibilityLabel
         iconImageView.isHidden = iconSymbolImage == nil
@@ -103,7 +103,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
         titleLabel.lineBreakMode = .byTruncatingMiddle
         titleLabel.stringValue = pane.displayTitle
         titleLabel.toolTip = pane.displayTitle
-         titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
+          titleLabel.textColor = active ? theme.shell.textPrimary : theme.shell.textSecondary
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(titleLabel)
 

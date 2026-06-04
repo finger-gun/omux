@@ -35,10 +35,29 @@ extension PaneTests {
     /// Renames a pane tab using inline edit (double-click then type).
     func renamePaneTab(_ tab: XCUIElement, to newTitle: String) {
         XCTAssertTrue(tab.exists, "tab to rename should exist")
-        doubleClickCenter(tab)
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText(newTitle)
-        app.typeKey(.return, modifierFlags: [])
+
+        rightClickCenter(tab)
+        let renameItem = app.menuItems["Rename…"]
+        XCTAssertTrue(renameItem.waitForExistence(timeout: 3), "Rename… menu item should appear in context menu")
+        renameItem.click()
+
+        let sheet = app.windows[A11yID.mainWindow.rawValue].sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5), "Rename Tab sheet should appear within 5 seconds")
+
+        let nameField = sheet.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 3), "Name text field should exist in the sheet")
+        nameField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        nameField.typeKey("a", modifierFlags: .command)
+        nameField.typeText(newTitle)
+
+        sheet.buttons["Save"].click()
+
+        let dismissed = NSPredicate(format: "exists == false")
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: dismissed, object: sheet)], timeout: 3),
+            .completed,
+            "Rename Tab sheet should dismiss within 3 seconds"
+        )
     }
 
     /// Polls until the main window width differs from `baselineWidth` by at least `delta`.
@@ -198,10 +217,18 @@ final class PaneTests: OmuxUITestsBase {
         renamePaneTab(secondTab, to: "omux")
 
         let mainWindow = app.windows.matching(identifier: A11yID.mainWindow.rawValue).firstMatch
+        let baselineWidth = mainWindow.frame.width
         let rightEdge = mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.998, dy: 0.5))
         rightEdge.press(forDuration: 0.05, thenDragTo: rightEdge.withOffset(CGVector(dx: -260, dy: 0)))
         XCTAssertTrue(
-            firstTab.label.contains("a-very-long-tab-title-that-should-truncate-in-the-middle"),
+            waitForWindowWidthChange(mainWindow, baselineWidth: baselineWidth, delta: 80),
+            "window width should shrink enough to force visual truncation"
+        )
+
+        let updatedFirstTab = paneTabButtons().element(boundBy: 0)
+        XCTAssertTrue(updatedFirstTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            updatedFirstTab.label.contains("a-very-long-tab-title-that-should-truncate-in-the-middle"),
             "long tab should keep full accessibility label even when visually truncated"
         )
     }
