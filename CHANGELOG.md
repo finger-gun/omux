@@ -3,6 +3,32 @@
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
 
+
+## 0.21.0
+
+### Added
+
+- Added `omux agent`, a local agent command with one-shot prompts, an interactive REPL, streaming output, host-handled slash commands, and support for plugin-defined agent tools.
+- Added a right sidebar with Agent Sessions and Git worktrees widgets, including per-widget visibility controls and support for plugin-provided Agent Sessions adapters.
+- Added new agent and Agent Sessions configuration under `[agent]`, `[agent.external.<plugin-command>]`, `[agent-sessions.external.<name>]`, and related defaults for built-in adapter selection and sidebar paging.
+- Added more Open by Design coverage with new hooks and `omux events` payloads for pane metadata, config reload, local agent activity, and other workspace or pane transitions.
+- Added reproducible sandbox launch modes for `make app` and `make ui-test` so contributors can work against throwaway OpenMUX state instead of their real local data.
+
+### Changed
+
+- Changed pane and workspace chrome so sidebar widgets can be collapsed, reordered, and dragged across sidebars while keeping the right sidebar keyboard-accessible from the command palette and keybindings.
+- Changed pane tabs to expose richer metadata and context actions, including context-menu rename support and easier pop-out workflows.
+- Changed Agent Sessions indexing and configuration so built-in agents and plugin adapters can be controlled more precisely without replacing the entire default setup.
+
+### Fixed
+
+- Fixed pane-tab rename and interaction workflows so tab actions are available from the context menu in addition to direct inline editing.
+- Fixed developer launch and UI-test setup with isolated sandbox environments that make restore, persistence, and worktree scenarios easier to reproduce reliably.
+
+### Documentation
+
+- Updated the getting-started, configuration, hooks, events, plugin, agent-session, and developer docs to cover the local agent, right sidebar workflows, new config keys, expanded automation surfaces, and sandbox usage.
+
 ## 0.20.0
 
 ### Added
