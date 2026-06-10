@@ -2851,6 +2851,34 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/DungeonPlanner/App"))
     }
 
+    @MainActor
+    func testVaultConnectedPathsPrefersPanePathsForBroadNewWorkspaceRoots() {
+        let broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: ["/Users/example/projects/Reframe"]
+        )
+
+        XCTAssertEqual(connectedPaths, ["/Users/example/projects/Reframe"])
+    }
+
+    @MainActor
+    func testVaultConnectedPathsSkipsBroadWorkspaceRootFallbackWhenItContainsSiblingWorkspaces() {
+        let broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: []
+        )
+
+        XCTAssertTrue(connectedPaths.isEmpty)
+    }
+
     func testWorkspacePersistenceStoresBoundedPaneScrollbackForHistoryCommand() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3005,6 +3033,15 @@ final class OmuxAppShellTests: XCTestCase {
             Last login: Tue May 5 10:00:00 on ttys002
             """
         )
+    }
+
+    private func testWorkspace(rootPath: String) -> Workspace {
+        let pane = Pane(
+            title: "Main",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: rootPath)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        return Workspace(generatedName: "Test Workspace", rootPath: rootPath, tabs: [tab], focusedTabID: tab.id)
     }
 
     func testWorkspaceRestoreKeepsSavedScrollbackForHistoryCommandWithoutRenderingIt() throws {
@@ -4422,6 +4459,46 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(runtime.applicationFocusUpdates, [true, false])
+    }
+
+    @MainActor
+    func testWorkspaceWindowPresentationNotificationsRefreshRuntimeFocusAndResponder() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        _ = try controller.ensureVisibleTerminalSurfaces(
+            for: workspace.id,
+            presentationState: TerminalSurfacePresentationState(
+                appIsActive: true,
+                windowIsKey: false,
+                windowIsVisible: true
+            )
+        )
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        runtime.clearTrackedPresentationChanges()
+        _ = window.makeFirstResponder(nil)
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        rootView.layoutSubtreeIfNeeded()
+
+        let paneView = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
+        XCTAssertEqual(runtime.applicationFocusUpdates, [true])
+        XCTAssertTrue(window.firstResponder === paneView.focusTarget)
     }
 
     @MainActor

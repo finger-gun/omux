@@ -395,7 +395,9 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         windowIsKey = true
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace { update(workspace: workspace) }
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
+            refreshTerminalPresentation(for: workspace, restoreFocusIfPossible: true)
+        }
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
@@ -403,13 +405,15 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         windowIsKey = false
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace { update(workspace: workspace) }
+        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
+            refreshTerminalPresentation(for: workspace)
+        }
     }
 
     @objc private func windowPresentationStateDidChange(_ notification: Notification) {
         _ = notification
         if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            update(workspace: workspace)
+            refreshTerminalPresentation(for: workspace)
         }
     }
 
@@ -423,8 +427,36 @@ final class WorkspaceShellViewController: NSViewController {
             break
         }
         if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            update(workspace: workspace)
+            refreshTerminalPresentation(
+                for: workspace,
+                restoreFocusIfPossible: notification.name == NSApplication.didBecomeActiveNotification
+            )
         }
+    }
+
+    private func refreshTerminalPresentation(
+        for workspace: Workspace,
+        restoreFocusIfPossible: Bool = false
+    ) {
+        do {
+            _ = try controller.ensureVisibleTerminalSurfaces(
+                for: workspace.id,
+                presentationState: currentTerminalSurfacePresentationState()
+            )
+        } catch {
+            fputs("warning: failed to refresh terminal presentation state: \(error)\n", stderr)
+        }
+        update(workspace: workspace)
+
+        guard restoreFocusIfPossible,
+              currentTerminalSurfacePresentationState().runtimeIsFocused,
+              let focusedPaneID = workspace.focusedPane?.id,
+              let focusedPaneView = findHostedPaneView(in: canvasView, paneID: focusedPaneID)
+                ?? findHostedPaneView(in: floatingModalOverlayView, paneID: focusedPaneID)
+        else {
+            return
+        }
+        view.window?.makeFirstResponder(focusTarget(for: focusedPaneView))
     }
 
     func currentTerminalSurfacePresentationState() -> TerminalSurfacePresentationState {
@@ -772,8 +804,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func iconResolutionPath(for pane: Pane) -> String {
-        pane.terminalState.reportedWorkingDirectory
-            ?? pane.terminalSession?.workingDirectory
+        controller.workingDirectory(for: pane.id)
             ?? pane.extensionPane?.source
             ?? pane.id.rawValue
     }
@@ -992,7 +1023,10 @@ final class WorkspaceShellViewController: NSViewController {
                     return
                 }
                 guard let self else { return }
-                let connectedPaths = self.currentWorkspace.map { self.vaultConnectedPaths(for: $0) } ?? []
+                let allWorkspaces = self.controller.allWorkspaces()
+                let connectedPaths = self.currentWorkspace.map {
+                    self.vaultConnectedPaths(for: $0, allWorkspaces: allWorkspaces)
+                } ?? []
                 let pathMatches = Self.vaultPathMatches(snapshot.workingDirectory, connectedPaths: connectedPaths)
                 if pathMatches {
                     self.runVaultResumeCommand(sessionID: sessionID, resumeCommand: command)
@@ -1106,7 +1140,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private func restoreBannerRelevantRoots(for workspace: Workspace) -> Set<String> {
-        Self.restoreBannerRoots(for: vaultConnectedPaths(for: workspace))
+        Self.restoreBannerRoots(for: vaultConnectedPaths(for: workspace, allWorkspaces: controller.allWorkspaces()))
     }
 
     private static func restoreBannerRoots(for paths: [String]) -> Set<String> {
@@ -1624,19 +1658,19 @@ final class WorkspaceShellViewController: NSViewController {
         case .all:
             return vaultSessions
         case .current:
-            let connectedPaths = vaultConnectedPaths(for: activeWorkspace)
+            let connectedPaths = vaultConnectedPaths(for: activeWorkspace, allWorkspaces: allWorkspaces)
             return vaultSessions.filter {
                 Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
             }
         case .workspace(let workspaceID):
             guard let workspace = allWorkspaces.first(where: { $0.id == workspaceID }) else {
-                let connectedPaths = vaultConnectedPaths(for: activeWorkspace)
+                let connectedPaths = vaultConnectedPaths(for: activeWorkspace, allWorkspaces: allWorkspaces)
                 return vaultSessions.filter {
                     Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
                 }
             }
 
-            let connectedPaths = vaultConnectedPaths(for: workspace)
+            let connectedPaths = vaultConnectedPaths(for: workspace, allWorkspaces: allWorkspaces)
             return vaultSessions.filter {
                 Self.vaultPathMatches($0.workingDirectory, connectedPaths: connectedPaths)
             }
@@ -1679,19 +1713,48 @@ final class WorkspaceShellViewController: NSViewController {
         return items
     }
 
-    private func vaultConnectedPaths(for workspace: Workspace) -> [String] {
+    private func vaultConnectedPaths(for workspace: Workspace, allWorkspaces: [Workspace]) -> [String] {
         let panes = workspace.tabs.flatMap(\.panes) + workspace.floatingPaneModals.flatMap(\.panes)
-        let panePaths = panes.compactMap { pane in
-            (pane.terminalState.reportedWorkingDirectory ?? pane.terminalSession?.workingDirectory)
-                .flatMap(Self.standardizedVaultPath)
-        }
+        let panePaths = panes.compactMap { pane in controller.workingDirectory(for: pane.id) }
 
-        let scopePaths = Self.workspaceScopePaths(from: panePaths)
+        return Self.vaultConnectedPaths(
+            for: workspace,
+            allWorkspaces: allWorkspaces,
+            panePaths: panePaths
+        )
+    }
+
+    static func vaultConnectedPaths(
+        for workspace: Workspace,
+        allWorkspaces: [Workspace],
+        panePaths: [String]
+    ) -> [String] {
+        let standardizedPanePaths = panePaths.compactMap(Self.standardizedVaultPath)
+        let scopePaths = Self.workspaceScopePaths(from: standardizedPanePaths)
         if scopePaths.isEmpty == false {
             return Array(Set(scopePaths)).sorted { $0.count < $1.count }
         }
 
-        return [workspace.rootPath].compactMap(Self.standardizedVaultPath)
+        return Self.fallbackVaultRootPath(for: workspace, allWorkspaces: allWorkspaces)
+            .map { [$0] } ?? []
+    }
+
+    private static func fallbackVaultRootPath(
+        for workspace: Workspace,
+        allWorkspaces: [Workspace]
+    ) -> String? {
+        guard let rootPath = standardizedVaultPath(workspace.rootPath) else {
+            return nil
+        }
+
+        let siblingRoots = allWorkspaces
+            .filter { $0.id != workspace.id }
+            .compactMap { standardizedVaultPath($0.rootPath) }
+        let isOverlyBroadFallback = siblingRoots.contains { siblingRoot in
+            siblingRoot == rootPath || siblingRoot.hasPrefix(rootPath + "/")
+        }
+
+        return isOverlyBroadFallback ? nil : rootPath
     }
 
     private static func workspaceScopePaths(from panePaths: [String]) -> [String] {

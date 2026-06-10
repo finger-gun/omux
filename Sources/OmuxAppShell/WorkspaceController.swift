@@ -3251,15 +3251,24 @@ public final class WorkspaceController: @unchecked Sendable {
         historyTargets(in: workspace).first(where: { $0.paneID == paneID })
     }
 
-    private func workingDirectory(for paneID: PaneID) -> String? {
+    func workingDirectory(for paneID: PaneID) -> String? {
         lock.lock()
-        defer { lock.unlock() }
         guard let location = paneLocationLocked(for: paneID),
               let pane = workspacePaneLocked(at: location)?.pane
         else {
+            lock.unlock()
             return nil
         }
-        return Self.terminalWorkingDirectory(for: pane)
+        lock.unlock()
+
+        if let path = Self.terminalWorkingDirectory(for: pane) {
+            return path
+        }
+
+        return bridge.snapshot(for: paneID)?
+            .workingDirectory
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
     }
 
     private static func terminalWorkingDirectory(for pane: Pane) -> String? {
