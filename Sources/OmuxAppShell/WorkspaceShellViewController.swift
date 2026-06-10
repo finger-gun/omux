@@ -1144,12 +1144,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private static func restoreBannerRoots(for paths: [String]) -> Set<String> {
-        Set(
-            paths.compactMap(Self.standardizedVaultPath)
-                .flatMap { standardizedPath in
-                    [standardizedPath, projectLikeRoot(standardizedPath)]
-                }
-        )
+        Set(paths.compactMap(Self.standardizedVaultPath))
     }
 
     private func runVaultResumeCommand(
@@ -1729,10 +1724,9 @@ final class WorkspaceShellViewController: NSViewController {
         allWorkspaces: [Workspace],
         panePaths: [String]
     ) -> [String] {
-        let standardizedPanePaths = panePaths.compactMap(Self.standardizedVaultPath)
-        let scopePaths = Self.workspaceScopePaths(from: standardizedPanePaths)
-        if scopePaths.isEmpty == false {
-            return Array(Set(scopePaths)).sorted { $0.count < $1.count }
+        let standardizedPanePaths = panePaths.compactMap(WorkspaceRootPathCalculator.standardizedPath)
+        if let commonRootPath = WorkspaceRootPathCalculator.highestCommonPath(for: standardizedPanePaths) {
+            return [commonRootPath]
         }
 
         return Self.fallbackVaultRootPath(for: workspace, allWorkspaces: allWorkspaces)
@@ -1743,46 +1737,18 @@ final class WorkspaceShellViewController: NSViewController {
         for workspace: Workspace,
         allWorkspaces: [Workspace]
     ) -> String? {
-        guard let rootPath = standardizedVaultPath(workspace.rootPath) else {
+        guard let rootPath = WorkspaceRootPathCalculator.standardizedPath(workspace.rootPath) else {
             return nil
         }
 
         let siblingRoots = allWorkspaces
             .filter { $0.id != workspace.id }
-            .compactMap { standardizedVaultPath($0.rootPath) }
+            .compactMap { WorkspaceRootPathCalculator.standardizedPath($0.rootPath) }
         let isOverlyBroadFallback = siblingRoots.contains { siblingRoot in
             siblingRoot == rootPath || siblingRoot.hasPrefix(rootPath + "/")
         }
 
         return isOverlyBroadFallback ? nil : rootPath
-    }
-
-    private static func workspaceScopePaths(from panePaths: [String]) -> [String] {
-        let roots = panePaths.map(projectLikeRoot)
-        let counts = roots.reduce(into: [String: Int]()) { result, root in
-            result[root, default: 0] += 1
-        }
-        guard let maxCount = counts.values.max(), maxCount > 1 else {
-            return Array(Set(roots)).sorted { $0.count < $1.count }
-        }
-        return counts
-            .filter { $0.value == maxCount }
-            .map(\.key)
-            .sorted { $0.count < $1.count }
-    }
-
-    private static func projectLikeRoot(_ path: String) -> String {
-        let url = URL(fileURLWithPath: path)
-        let components = url.standardizedFileURL.pathComponents
-        let markers: Set<String> = ["projects", "project", "src", "source", "workspace", "workspaces", "developer"]
-        guard let markerIndex = components.firstIndex(where: { markers.contains($0.lowercased()) }),
-              markerIndex + 2 < components.count
-        else {
-            return path
-        }
-
-        let rootComponents = Array(components.prefix(markerIndex + 3))
-        return NSString.path(withComponents: rootComponents)
     }
 
     private static func vaultPathMatches(_ candidate: String?, connectedPaths: [String]) -> Bool {
@@ -1844,13 +1810,7 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     private static func standardizedVaultPath(_ path: String) -> String? {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            return nil
-        }
-        return URL(fileURLWithPath: NSString(string: trimmed).expandingTildeInPath)
-            .standardizedFileURL
-            .path
+        WorkspaceRootPathCalculator.standardizedPath(path)
     }
 
     private func makeWorkspaceSidebarItems(
@@ -2096,6 +2056,49 @@ final class WorkspaceShellViewController: NSViewController {
             } catch {
                 assertionFailure("Failed to rename workspace: \(error)")
             }
+        }
+    }
+
+    func presentWorkspaceRootPrompt(workspaceID: WorkspaceID? = nil) {
+        guard let workspace = workspaceID.flatMap({ id in
+            controller.allWorkspaces().first(where: { $0.id == id })
+        }) ?? controller.activeWorkspace() else {
+            return
+        }
+
+        let pathField = NSTextField(string: workspace.rootPath)
+        pathField.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+
+        let modeDescription = workspace.rootPathMode == .manual
+            ? "This workspace currently uses a manual root."
+            : "This workspace currently derives its root automatically."
+        presentConfirmation(
+            title: "Set Workspace Root",
+            message: "\(modeDescription) Enter the path OpenMUX should use for new tabs, hooks, and Agent Session filtering.",
+            actionTitle: "Set Root",
+            alertStyle: .informational,
+            accessoryView: pathField
+        ) { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try controller.setWorkspaceRootPath(workspace.id, to: pathField.stringValue)
+            } catch {
+                assertionFailure("Failed to set workspace root: \(error)")
+            }
+        }
+    }
+
+    func resetWorkspaceRootToAutomatic(workspaceID: WorkspaceID? = nil) {
+        guard let workspace = workspaceID.flatMap({ id in
+            controller.allWorkspaces().first(where: { $0.id == id })
+        }) ?? controller.activeWorkspace() else {
+            return
+        }
+
+        do {
+            _ = try controller.resetWorkspaceRootPath(workspace.id)
+        } catch {
+            assertionFailure("Failed to reset workspace root: \(error)")
         }
     }
 
@@ -2607,6 +2610,15 @@ final class WorkspaceShellViewController: NSViewController {
             } else {
                 self?.presentRenameWorkspacePrompt(workspaceID: workspace.id)
             }
+        }
+        menu.addItem(withTitle: "Set Root Path…", action: nil, keyEquivalent: "").onSelect { [weak self] in
+            self?.presentWorkspaceRootPrompt(workspaceID: workspace.id)
+        }
+        let resetRootTitle = workspace.rootPathMode == .manual
+            ? "Use Automatic Root"
+            : "Recompute Automatic Root"
+        menu.addItem(withTitle: resetRootTitle, action: nil, keyEquivalent: "").onSelect { [weak self] in
+            self?.resetWorkspaceRootToAutomatic(workspaceID: workspace.id)
         }
         let expansionTitle = collapsedWorkspaceIDs.contains(workspace.id)
             ? "Expand Workspace Panes"

@@ -274,6 +274,30 @@ final class OpenMUXControlPlaneService: @unchecked Sendable {
                 )
             }
             return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 409, message: "workspace cannot be closed"))
+        case .setWorkspaceRoot:
+            let workspaceID = request.params?.objectValue?["workspaceID"]?.stringValue.map(WorkspaceID.init(rawValue:))
+            let mode = request.params?.objectValue?["mode"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let path = request.params?.objectValue?["path"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let updatedWorkspace: Workspace?
+            if mode == WorkspaceRootPathMode.automatic.rawValue {
+                updatedWorkspace = try controller.resetWorkspaceRootPath(workspaceID)
+            } else if let path, path.isEmpty == false {
+                let resolvedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
+                updatedWorkspace = try controller.setWorkspaceRootPath(workspaceID, to: resolvedPath)
+            } else {
+                return JSONRPCResponse(
+                    id: request.id,
+                    error: JSONRPCError(code: 400, message: "workspace root update requires a path or mode=automatic")
+                )
+            }
+
+            guard let updatedWorkspace else {
+                return JSONRPCResponse(id: request.id, error: JSONRPCError(code: 404, message: "workspace not found"))
+            }
+            return JSONRPCResponse(id: request.id, result: .object(updatedWorkspace.rpcObject))
         case .listWorkspaces:
             if request.params?.objectValue?["full"]?.boolValue == true {
                 let workspaces = controller.allWorkspaces()
@@ -960,6 +984,8 @@ private extension Workspace {
             "generatedName": .string(generatedName),
             "customName": customName.map { .string($0) } ?? .null,
             "rootPath": .string(rootPath),
+            "rootPathMode": .string(rootPathMode.rawValue),
+            "hasManualRootPath": .bool(rootPathMode == .manual),
             "tabCount": .integer(tabs.count),
             "paneCount": .integer(panes.count),
             "focusedTabID": .string(focusedTabID.rawValue),
@@ -1065,6 +1091,8 @@ private extension WorkspaceSummary {
             "generatedName": .string(generatedName),
             "customName": customName.map { .string($0) } ?? .null,
             "rootPath": .string(rootPath),
+            "rootPathMode": .string(rootPathMode.rawValue),
+            "hasManualRootPath": .bool(rootPathMode == .manual),
             "tabCount": .integer(tabCount),
             "paneCount": .integer(paneCount),
         ]

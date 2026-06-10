@@ -19,6 +19,7 @@ public enum ControlPlaneTerminalEventName: String, Codable, CaseIterable, Sendab
 public enum ControlPlaneActionEventName: String, Codable, CaseIterable, Sendable {
     case workspaceOpened = "workspace.opened"
     case workspaceClosed = "workspace.closed"
+    case workspaceRootChanged = "workspace.rootChanged"
     case tabCreated = "tab.created"
     case paneSplit = "pane.split"
     case paneRemoved = "pane.removed"

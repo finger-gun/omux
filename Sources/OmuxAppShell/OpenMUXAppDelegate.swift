@@ -20,6 +20,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var newWorkspaceMenuItem: NSMenuItem?
     private weak var restoreWorkspaceMenuItem: NSMenuItem?
     private weak var renameWorkspaceMenuItem: NSMenuItem?
+    private weak var setWorkspaceRootMenuItem: NSMenuItem?
+    private weak var resetWorkspaceRootMenuItem: NSMenuItem?
     private weak var deleteWorkspaceMenuItem: NSMenuItem?
     private weak var splitRightMenuItem: NSMenuItem?
     private weak var splitDownMenuItem: NSMenuItem?
@@ -362,6 +364,16 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     @objc private func renameWorkspaceFromMenu(_ sender: Any?) {
         _ = sender
         windowController?.presentRenameWorkspacePrompt()
+    }
+
+    @objc private func setWorkspaceRootFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.presentWorkspaceRootPrompt()
+    }
+
+    @objc private func resetWorkspaceRootFromMenu(_ sender: Any?) {
+        _ = sender
+        windowController?.resetWorkspaceRootToAutomatic()
     }
 
     @objc private func splitPaneRightFromMenu(_ sender: Any?) {
@@ -977,6 +989,20 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         renameWorkspaceMenuItem.target = self
         workspaceMenu.addItem(renameWorkspaceMenuItem)
+        let setWorkspaceRootMenuItem = NSMenuItem(
+            title: "Set Workspace Root…",
+            action: #selector(setWorkspaceRootFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        setWorkspaceRootMenuItem.target = self
+        workspaceMenu.addItem(setWorkspaceRootMenuItem)
+        let resetWorkspaceRootMenuItem = NSMenuItem(
+            title: "Use Automatic Workspace Root",
+            action: #selector(resetWorkspaceRootFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        resetWorkspaceRootMenuItem.target = self
+        workspaceMenu.addItem(resetWorkspaceRootMenuItem)
         workspaceMenu.addItem(.separator())
 
         let previousWorkspaceMenuItem = NSMenuItem(
@@ -1242,6 +1268,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         self.newWorkspaceMenuItem = newWorkspaceMenuItem
         self.restoreWorkspaceMenuItem = restoreWorkspaceMenuItem
         self.renameWorkspaceMenuItem = renameWorkspaceMenuItem
+        self.setWorkspaceRootMenuItem = setWorkspaceRootMenuItem
+        self.resetWorkspaceRootMenuItem = resetWorkspaceRootMenuItem
         self.deleteWorkspaceMenuItem = deleteWorkspaceMenuItem
         self.toggleSidebarMenuItem = toggleSidebarMenuItem
         self.toggleVaultSidebarMenuItem = toggleVaultSidebarMenuItem
@@ -1283,8 +1311,11 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     private func refreshMenuValidation() {
+        let hasActiveWorkspace = workspaceController.activeWorkspace() != nil
         newWorkspaceMenuItem?.isEnabled = workspaceController.activeWorkspace() != nil
         renameWorkspaceMenuItem?.isEnabled = workspaceController.canRenameActiveWorkspace()
+        setWorkspaceRootMenuItem?.isEnabled = hasActiveWorkspace
+        resetWorkspaceRootMenuItem?.isEnabled = hasActiveWorkspace
         deleteWorkspaceMenuItem?.isEnabled = workspaceController.canDeleteActiveWorkspace()
         let cliInstaller = OmuxCLIInstaller(executablePath: bundledCLIExecutablePath())
         let cliInstallStatus = cliInstallStatusResolver.status(

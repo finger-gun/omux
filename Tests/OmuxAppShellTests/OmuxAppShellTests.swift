@@ -2879,6 +2879,77 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(connectedPaths.isEmpty)
     }
 
+    @MainActor
+    func testAutomaticWorkspaceRootTracksHighestCommonPanePath() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+
+        var workspace = try controller.createWorkspace()
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        workspace = try XCTUnwrap(controller.setPaneWorkingDirectory(
+            target: .pane(firstPaneID),
+            path: "/Users/example/projects/Reframe"
+        ))
+        XCTAssertEqual(workspace.rootPathMode, .automatic)
+        XCTAssertEqual(workspace.rootPath, "/Users/example/projects/Reframe")
+
+        workspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        workspace = try XCTUnwrap(controller.setPaneWorkingDirectory(
+            target: .pane(secondPaneID),
+            path: "/Users/example/projects/Reframe/App"
+        ))
+
+        XCTAssertEqual(workspace.rootPathMode, .automatic)
+        XCTAssertEqual(workspace.rootPath, "/Users/example/projects/Reframe")
+    }
+
+    @MainActor
+    func testWorkspaceRootCanBeManuallySetAndResetWithSignals() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(HookDescriptor(
+            category: .lifecycle,
+            name: "workspace-root-changed",
+            executableURL: URL(fileURLWithPath: "/usr/bin/true")
+        ))
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+        var events: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { events.append($0) }
+
+        let workspace = try controller.createWorkspace()
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        let manuallyRootedWorkspace = try XCTUnwrap(try controller.setWorkspaceRootPath(
+            workspace.id,
+            to: "/Users/example/projects/Reframe"
+        ))
+        _ = controller.setPaneWorkingDirectory(
+            target: ControlPlaneTerminalTarget.pane(paneID),
+            path: "/Users/example/projects/Reframe/App"
+        )
+        let resetWorkspace = try XCTUnwrap(try controller.resetWorkspaceRootPath(workspace.id))
+
+        XCTAssertEqual(manuallyRootedWorkspace.rootPathMode, .manual)
+        XCTAssertEqual(manuallyRootedWorkspace.rootPath, "/Users/example/projects/Reframe")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe/App")
+        XCTAssertEqual(resetWorkspace.rootPathMode, .automatic)
+        XCTAssertEqual(resetWorkspace.rootPath, "/Users/example/projects/Reframe/App")
+        let rootChangeEvents = events.filter { $0.name == "workspace.rootChanged" }
+        XCTAssertEqual(rootChangeEvents.map(\.name), ["workspace.rootChanged", "workspace.rootChanged"])
+        XCTAssertEqual(rootChangeEvents[0].payload.objectValue?["source"], .string("manual"))
+        XCTAssertEqual(rootChangeEvents[1].payload.objectValue?["source"], .string("reset"))
+        XCTAssertEqual(launcher.invocations.map { $0.name }, ["workspace-root-changed", "workspace-root-changed"])
+    }
+
     func testWorkspacePersistenceStoresBoundedPaneScrollbackForHistoryCommand() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -6398,6 +6469,64 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertNil(response.error)
         XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/tmp")
+    }
+
+    @MainActor
+    func testControlPlaneCanSetAndResetWorkspaceRoot() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/Users/example",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "wr.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+
+        let workspace = try controller.createWorkspace()
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        _ = controller.setPaneWorkingDirectory(target: .pane(paneID), path: "/Users/example/projects/Reframe/App")
+
+        let setResponse = try await Self.requestControlMethod(
+            .setWorkspaceRoot,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["path": .string("/Users/example/projects/Reframe")])
+        )
+        XCTAssertNil(setResponse.error)
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPathMode, .manual)
+
+        let resetResponse = try await Self.requestControlMethod(
+            .setWorkspaceRoot,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["mode": .string("automatic")])
+        )
+        XCTAssertNil(resetResponse.error)
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe/App")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPathMode, .automatic)
     }
 
     @MainActor

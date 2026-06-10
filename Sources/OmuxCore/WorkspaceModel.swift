@@ -26,6 +26,11 @@ public enum OpenMUXWorkspaceEnvironment {
     public static let shellHistoryFileKey = "HISTFILE"
 }
 
+public enum WorkspaceRootPathMode: String, Codable, Sendable {
+    case automatic
+    case manual
+}
+
 public enum ExtensionPaneContentKind: String, Codable, Sendable {
     case html
     case placeholder
@@ -1672,6 +1677,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         case generatedName
         case customName
         case rootPath
+        case rootPathMode
         case tabs
         case focusedTabID
         case floatingPaneModals
@@ -1682,6 +1688,7 @@ public struct Workspace: Equatable, Codable, Sendable {
     public var generatedName: String
     public var customName: String?
     public var rootPath: String
+    public var rootPathMode: WorkspaceRootPathMode
     public var tabs: [Tab]
     public var focusedTabID: TabID
     public var floatingPaneModals: [FloatingPaneModal]
@@ -1692,6 +1699,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         generatedName: String,
         customName: String? = nil,
         rootPath: String,
+        rootPathMode: WorkspaceRootPathMode = .automatic,
         tabs: [Tab],
         focusedTabID: TabID,
         floatingPaneModals: [FloatingPaneModal] = [],
@@ -1701,6 +1709,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         self.generatedName = generatedName
         self.customName = customName
         self.rootPath = rootPath
+        self.rootPathMode = rootPathMode
         self.tabs = tabs
         self.focusedTabID = focusedTabID
         self.floatingPaneModals = floatingPaneModals
@@ -1711,6 +1720,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         id: WorkspaceID = WorkspaceID(),
         name: String,
         rootPath: String,
+        rootPathMode: WorkspaceRootPathMode = .automatic,
         tabs: [Tab],
         focusedTabID: TabID
     ) {
@@ -1719,6 +1729,7 @@ public struct Workspace: Equatable, Codable, Sendable {
             generatedName: name,
             customName: nil,
             rootPath: rootPath,
+            rootPathMode: rootPathMode,
             tabs: tabs,
             focusedTabID: focusedTabID
         )
@@ -1730,6 +1741,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         self.generatedName = try container.decode(String.self, forKey: .generatedName)
         self.customName = try container.decodeIfPresent(String.self, forKey: .customName)
         self.rootPath = try container.decode(String.self, forKey: .rootPath)
+        self.rootPathMode = try container.decodeIfPresent(WorkspaceRootPathMode.self, forKey: .rootPathMode) ?? .automatic
         self.tabs = try container.decode([Tab].self, forKey: .tabs)
         self.focusedTabID = try container.decode(TabID.self, forKey: .focusedTabID)
         self.floatingPaneModals = try container.decodeIfPresent([FloatingPaneModal].self, forKey: .floatingPaneModals) ?? []
@@ -1742,6 +1754,7 @@ public struct Workspace: Equatable, Codable, Sendable {
         try container.encode(generatedName, forKey: .generatedName)
         try container.encodeIfPresent(customName, forKey: .customName)
         try container.encode(rootPath, forKey: .rootPath)
+        try container.encode(rootPathMode, forKey: .rootPathMode)
         try container.encode(tabs, forKey: .tabs)
         try container.encode(focusedTabID, forKey: .focusedTabID)
         try container.encode(floatingPaneModals, forKey: .floatingPaneModals)
@@ -2297,6 +2310,7 @@ public struct WorkspaceSummary: Equatable, Codable, Sendable {
     public let customName: String?
     public let hasCustomName: Bool
     public let rootPath: String
+    public let rootPathMode: WorkspaceRootPathMode
     public let tabCount: Int
     public let paneCount: Int
 
@@ -2307,6 +2321,7 @@ public struct WorkspaceSummary: Equatable, Codable, Sendable {
         self.customName = workspace.customName
         self.hasCustomName = workspace.hasCustomName
         self.rootPath = workspace.rootPath
+        self.rootPathMode = workspace.rootPathMode
         self.tabCount = workspace.tabs.count
         self.paneCount = workspace.panes.count
     }

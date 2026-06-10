@@ -247,6 +247,7 @@ omux send-text --session "$session_id" -- "Analysis complete. See logs above."
 | --- | --- | --- | --- |
 | `workspace-opened` | A workspace is opened. | `workspaceID`, `sessionID` | `{ "path": string }` |
 | `workspace-renamed` | A workspace custom name changes. | `workspaceID` | `{ "name": string }` |
+| `workspace-root-changed` | A workspace root switches between automatic/manual mode or resolves to a new automatic path. | `workspaceID` | `{ "path": string, "mode": "automatic" \| "manual", "source": "automatic" \| "manual" \| "reset" }` |
 | `workspace-closed` | A workspace is closed. | `workspaceID` | `{ "path": string }` |
 | `workspace-restored` | A workspace is restored into focus. | `workspaceID`, `tabID`, `paneID`, `sessionID` when available | `{ "path": string }` |
 | `pane-status-updated` | A pane status is set, changed, or cleared through `omux pane-status`. | `workspaceID`, `tabID`, `paneID`, `sessionID` | `{ "state": string, "value": integer \| null, "label": string \| null, "message": string \| null, "source": string }` |

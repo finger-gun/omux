@@ -342,6 +342,7 @@ final class WorkspaceScrollbackPayloadStore {
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
+            rootPathMode: workspace.rootPathMode,
             tabs: workspace.tabs.map { persistPayloads(in: $0, workspaceID: workspace.id) },
             focusedTabID: workspace.focusedTabID,
             floatingPaneModals: workspace.floatingPaneModals.map {
@@ -400,6 +401,7 @@ final class WorkspaceScrollbackPayloadStore {
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
+            rootPathMode: workspace.rootPathMode,
             tabs: workspace.tabs.map(resolvePayloads(in:)),
             focusedTabID: workspace.focusedTabID,
             floatingPaneModals: workspace.floatingPaneModals.map(resolvePayloads(in:)),
@@ -413,6 +415,7 @@ final class WorkspaceScrollbackPayloadStore {
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
+            rootPathMode: workspace.rootPathMode,
             tabs: workspace.tabs.map { resolvePayloads(in: $0, paneIDs: paneIDs) },
             focusedTabID: workspace.focusedTabID,
             floatingPaneModals: workspace.floatingPaneModals.map { resolvePayloads(in: $0, paneIDs: paneIDs) },

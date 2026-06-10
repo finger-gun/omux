@@ -1417,6 +1417,44 @@ final class OmuxCLITests: XCTestCase {
         XCTAssertEqual(output, ["ok", "ok", "ok", "ok", "usage: omux pane-remove [--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused]"])
     }
 
+    func testCLIWorkspaceRootSendsExpectedParameters() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "wr.sock")
+            .path(percentEncoded: false)
+        let requests = LockedValue<[JSONRPCRequest]>([])
+        let server = LocalControlServer(socketPath: socketPath)
+        try server.start { request in
+            requests.value.append(request)
+            return JSONRPCResponse(id: request.id, result: .string("ok"))
+        }
+        defer { server.stop() }
+
+        var output = [String]()
+        let command = OmuxCLICommand(
+            client: OmuxControlClient(socketPath: socketPath),
+            writeLine: { output.append($0) }
+        )
+
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-root", "/tmp/reframe"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-root", "--workspace", "workspace-1", "--auto"]), 0)
+        XCTAssertEqual(command.run(arguments: ["omux", "workspace-root"]), 1)
+
+        XCTAssertEqual(requests.value.map(\.method), [
+            ControlMethod.setWorkspaceRoot.rawValue,
+            ControlMethod.setWorkspaceRoot.rawValue,
+        ])
+        XCTAssertEqual(requests.value[0].params?.objectValue?["path"], .string("/tmp/reframe"))
+        XCTAssertNil(requests.value[0].params?.objectValue?["mode"])
+        XCTAssertEqual(requests.value[1].params?.objectValue?["workspaceID"], .string("workspace-1"))
+        XCTAssertEqual(requests.value[1].params?.objectValue?["mode"], .string("automatic"))
+        XCTAssertEqual(output, [
+            "ok",
+            "ok",
+            "usage: omux workspace-root [--workspace <id>] <path>\n       omux workspace-root [--workspace <id>] --auto",
+        ])
+    }
+
     func testCLISupportsTabSplitAndRunCommands() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
