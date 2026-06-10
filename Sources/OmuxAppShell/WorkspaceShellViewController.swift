@@ -789,7 +789,16 @@ final class WorkspaceShellViewController: NSViewController {
         let previousPaths = Dictionary(
             uniqueKeysWithValues: previousWorkspace.tabs
                 .flatMap(\.panes)
-                .map { ($0.id, iconResolutionPath(for: $0)) }
+                .map {
+                    (
+                        $0.id,
+                        iconResolutionPath(
+                            for: $0,
+                            workingDirectory: $0.terminalState.reportedWorkingDirectory
+                                ?? $0.terminalSession?.workingDirectory
+                        )
+                    )
+                }
         )
 
         for pane in workspace.tabs.flatMap(\.panes) {
@@ -803,8 +812,9 @@ final class WorkspaceShellViewController: NSViewController {
         }
     }
 
-    private func iconResolutionPath(for pane: Pane) -> String {
-        controller.workingDirectory(for: pane.id)
+    private func iconResolutionPath(for pane: Pane, workingDirectory: String? = nil) -> String {
+        workingDirectory
+            ?? controller.workingDirectory(for: pane.id)
             ?? pane.extensionPane?.source
             ?? pane.id.rawValue
     }
