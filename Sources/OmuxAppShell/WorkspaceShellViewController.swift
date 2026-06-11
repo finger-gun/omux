@@ -1739,6 +1739,11 @@ final class WorkspaceShellViewController: NSViewController {
             return [commonRootPath]
         }
 
+        if workspace.rootPathMode == .manual,
+           let manualRootPath = WorkspaceRootPathCalculator.standardizedPath(workspace.rootPath) {
+            return [manualRootPath]
+        }
+
         return Self.fallbackVaultRootPath(for: workspace, allWorkspaces: allWorkspaces)
             .map { [$0] } ?? []
     }
@@ -2093,7 +2098,12 @@ final class WorkspaceShellViewController: NSViewController {
             do {
                 _ = try controller.setWorkspaceRootPath(workspace.id, to: pathField.stringValue)
             } catch {
-                assertionFailure("Failed to set workspace root: \(error)")
+                notifyWorkspaceRootChangeFailure(
+                    title: "Set workspace root failed",
+                    workspace: workspace,
+                    path: pathField.stringValue,
+                    error: error
+                )
             }
         }
     }
@@ -2108,8 +2118,29 @@ final class WorkspaceShellViewController: NSViewController {
         do {
             _ = try controller.resetWorkspaceRootPath(workspace.id)
         } catch {
-            assertionFailure("Failed to reset workspace root: \(error)")
+            notifyWorkspaceRootChangeFailure(
+                title: "Reset workspace root failed",
+                workspace: workspace,
+                path: workspace.rootPath,
+                error: error
+            )
         }
+    }
+
+    private func notifyWorkspaceRootChangeFailure(
+        title: String,
+        workspace: Workspace,
+        path: String,
+        error: Error
+    ) {
+        let resolvedPath = path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? workspace.rootPath : path
+        try? controller.notify(
+            NotificationRequest(
+                title: title,
+                body: "Workspace \(workspace.id.rawValue) root path '\(resolvedPath)': \(error.localizedDescription)",
+                severity: .error
+            )
+        )
     }
 
     func presentCommandPalette(initialQuery: String, keyBindings: OpenMUXKeyBindingRegistry) {

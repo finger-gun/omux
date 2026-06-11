@@ -2880,6 +2880,21 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testVaultConnectedPathsPreservesManualWorkspaceRootWhenSiblingIsNested() {
+        var broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        broadWorkspace.rootPathMode = .manual
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: []
+        )
+
+        XCTAssertEqual(connectedPaths, ["/Users/example"])
+    }
+
+    @MainActor
     func testAutomaticWorkspaceRootTracksHighestCommonPanePath() throws {
         let controller = WorkspaceController(
             bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
