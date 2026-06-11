@@ -41,6 +41,7 @@ public struct JSONRPCResponse: Codable, Equatable, Sendable {
 public enum ControlMethod: String, Sendable {
     case openWorkspace = "workspace.open"
     case closeWorkspace = "workspace.close"
+    case setWorkspaceRoot = "workspace.root.set"
     case listWorkspaces = "workspace.list"
     case createTab = "workspace.createTab"
     case splitPane = "workspace.splitPane"

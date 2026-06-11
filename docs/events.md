@@ -52,6 +52,7 @@ These are success-shaped events emitted for completed OpenMUX actions.
 | --- | --- | --- |
 | `workspace.opened` | A workspace opens successfully. | `{ "path": string }` |
 | `workspace.closed` | A workspace closes successfully. | `{ "path": string }` |
+| `workspace.rootChanged` | A workspace root changes or switches between automatic/manual mode. | `{ "path": string, "mode": "automatic" \| "manual", "source": "automatic" \| "manual" \| "reset" }` |
 | `workspace.restored` | A workspace is restored successfully. | `{ "path": string }` |
 | `tab.created` | A top-level workspace tab is created. | `{}` |
 | `pane.split` | A split creates a pane. | `{ "axis": "columns" \| "rows" }` |

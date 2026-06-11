@@ -76,21 +76,14 @@ struct RecentlyClosedWorkspaceEntry: Codable, Equatable, Sendable {
     }
 
     fileprivate static func workspacePaths(for workspace: Workspace) -> [String]? {
-        let paths = workspace.tabs.compactMap { tab in
-            tab.focusedPane?.terminalState.reportedWorkingDirectory
-                ?? tab.focusedPane?.terminalSession?.workingDirectory
+        let paths = WorkspaceRootPathCalculator.terminalPaths(in: workspace)
+        if paths.isEmpty == false {
+            return paths
         }
-        .compactMap { path in
-            let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
-            return normalizedPath.isEmpty ? nil : normalizedPath
-        }
-
-        guard paths.isEmpty == false else {
+        guard let rootPath = WorkspaceRootPathCalculator.standardizedPath(workspace.rootPath) else {
             return nil
         }
-
-        var seen = Set<String>()
-        return paths.filter { seen.insert($0).inserted }
+        return [rootPath]
     }
 }
 
@@ -147,10 +140,12 @@ final class RecentlyClosedWorkspaceStore: @unchecked Sendable {
     }
 
     func find(byPath path: String) -> RecentlyClosedWorkspaceEntry? {
-        let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
+        let normalizedPath = WorkspaceRootPathCalculator.standardizedPath(path) ?? path
         lock.lock()
         let entry = loadLocked().first { entry in
-            entry.workspacePaths.contains(normalizedPath)
+            entry.workspacePaths.contains(where: { workspacePath in
+                WorkspaceRootPathCalculator.contains(path: normalizedPath, withinRoot: workspacePath)
+            })
         }
         lock.unlock()
         return entry

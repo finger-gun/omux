@@ -484,6 +484,55 @@ public struct OmuxCLICommand {
                 }
                 let response = try client.request(method: .closeWorkspace, params: params)
                 writeLine(response.result?.prettyPrinted ?? "")
+            case "workspace-root":
+                let arguments = Array(commandArguments.dropFirst())
+                var workspaceID: String?
+                var rootPath: String?
+                var useAutomaticRoot = false
+                var index = 0
+                while index < arguments.count {
+                    let argument = arguments[index]
+                    switch argument {
+                    case "--workspace":
+                        guard index + 1 < arguments.count else {
+                            writeLine("usage: omux workspace-root [--workspace <id>] <path>\n       omux workspace-root [--workspace <id>] --auto")
+                            return 1
+                        }
+                        workspaceID = arguments[index + 1]
+                        index += 2
+                    case "--auto":
+                        useAutomaticRoot = true
+                        index += 1
+                    default:
+                        guard argument.hasPrefix("--") == false, rootPath == nil else {
+                            writeLine("usage: omux workspace-root [--workspace <id>] <path>\n       omux workspace-root [--workspace <id>] --auto")
+                            return 1
+                        }
+                        rootPath = resolveCLIPath(argument)
+                        index += 1
+                    }
+                }
+
+                guard useAutomaticRoot != (rootPath != nil) else {
+                    writeLine("usage: omux workspace-root [--workspace <id>] <path>\n       omux workspace-root [--workspace <id>] --auto")
+                    return 1
+                }
+
+                var params = [String: RPCValue]()
+                if let workspaceID {
+                    params["workspaceID"] = .string(workspaceID)
+                }
+                if useAutomaticRoot {
+                    params["mode"] = .string(WorkspaceRootPathMode.automatic.rawValue)
+                } else if let rootPath {
+                    params["path"] = .string(rootPath)
+                }
+
+                let response = try client.request(
+                    method: .setWorkspaceRoot,
+                    params: .object(params)
+                )
+                writeLine(response.result?.prettyPrinted ?? "")
             case "focus":
                 guard let target = parseFocusTarget(Array(commandArguments.dropFirst())) else {
                     writeLine("usage: omux focus <session-id>|--session <id>|--pane <id>|--tab <id>|--workspace <id>|--focused")

@@ -2851,6 +2851,120 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertTrue(restoredDirectories.contains("/Users/example/projects/DungeonPlanner/App"))
     }
 
+    @MainActor
+    func testVaultConnectedPathsPrefersPanePathsForBroadNewWorkspaceRoots() {
+        let broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: ["/Users/example/projects/Reframe"]
+        )
+
+        XCTAssertEqual(connectedPaths, ["/Users/example/projects/Reframe"])
+    }
+
+    @MainActor
+    func testVaultConnectedPathsSkipsBroadWorkspaceRootFallbackWhenItContainsSiblingWorkspaces() {
+        let broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: []
+        )
+
+        XCTAssertTrue(connectedPaths.isEmpty)
+    }
+
+    @MainActor
+    func testVaultConnectedPathsPreservesManualWorkspaceRootWhenSiblingIsNested() {
+        var broadWorkspace = testWorkspace(rootPath: "/Users/example")
+        broadWorkspace.rootPathMode = .manual
+        let siblingWorkspace = testWorkspace(rootPath: "/Users/example/projects/OpenMUX")
+
+        let connectedPaths = WorkspaceShellViewController.vaultConnectedPaths(
+            for: broadWorkspace,
+            allWorkspaces: [broadWorkspace, siblingWorkspace],
+            panePaths: []
+        )
+
+        XCTAssertEqual(connectedPaths, ["/Users/example"])
+    }
+
+    @MainActor
+    func testAutomaticWorkspaceRootTracksHighestCommonPanePath() throws {
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: ActionEmittingGhosttyRuntime()),
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+
+        var workspace = try controller.createWorkspace()
+        let firstPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        workspace = try XCTUnwrap(controller.setPaneWorkingDirectory(
+            target: .pane(firstPaneID),
+            path: "/Users/example/projects/Reframe"
+        ))
+        XCTAssertEqual(workspace.rootPathMode, .automatic)
+        XCTAssertEqual(workspace.rootPath, "/Users/example/projects/Reframe")
+
+        workspace = try XCTUnwrap(controller.splitFocusedPane(axis: .columns))
+        let secondPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        workspace = try XCTUnwrap(controller.setPaneWorkingDirectory(
+            target: .pane(secondPaneID),
+            path: "/Users/example/projects/Reframe/App"
+        ))
+
+        XCTAssertEqual(workspace.rootPathMode, .automatic)
+        XCTAssertEqual(workspace.rootPath, "/Users/example/projects/Reframe")
+    }
+
+    @MainActor
+    func testWorkspaceRootCanBeManuallySetAndResetWithSignals() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let launcher = CapturingHookLauncher()
+        let registry = HookRegistry()
+        registry.register(HookDescriptor(
+            category: .lifecycle,
+            name: "workspace-root-changed",
+            executableURL: URL(fileURLWithPath: "/usr/bin/true")
+        ))
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner(registry: registry, launcher: launcher),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+        var events: [ControlPlaneEvent] = []
+        controller.onControlPlaneEvent = { events.append($0) }
+
+        let workspace = try controller.createWorkspace()
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+
+        let manuallyRootedWorkspace = try XCTUnwrap(try controller.setWorkspaceRootPath(
+            workspace.id,
+            to: "/Users/example/projects/Reframe"
+        ))
+        _ = controller.setPaneWorkingDirectory(
+            target: ControlPlaneTerminalTarget.pane(paneID),
+            path: "/Users/example/projects/Reframe/App"
+        )
+        let resetWorkspace = try XCTUnwrap(try controller.resetWorkspaceRootPath(workspace.id))
+
+        XCTAssertEqual(manuallyRootedWorkspace.rootPathMode, .manual)
+        XCTAssertEqual(manuallyRootedWorkspace.rootPath, "/Users/example/projects/Reframe")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe/App")
+        XCTAssertEqual(resetWorkspace.rootPathMode, .automatic)
+        XCTAssertEqual(resetWorkspace.rootPath, "/Users/example/projects/Reframe/App")
+        let rootChangeEvents = events.filter { $0.name == "workspace.rootChanged" }
+        XCTAssertEqual(rootChangeEvents.map(\.name), ["workspace.rootChanged", "workspace.rootChanged"])
+        XCTAssertEqual(rootChangeEvents[0].payload.objectValue?["source"], .string("manual"))
+        XCTAssertEqual(rootChangeEvents[1].payload.objectValue?["source"], .string("reset"))
+        XCTAssertEqual(launcher.invocations.map { $0.name }, ["workspace-root-changed", "workspace-root-changed"])
+    }
+
     func testWorkspacePersistenceStoresBoundedPaneScrollbackForHistoryCommand() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)
@@ -3005,6 +3119,15 @@ final class OmuxAppShellTests: XCTestCase {
             Last login: Tue May 5 10:00:00 on ttys002
             """
         )
+    }
+
+    private func testWorkspace(rootPath: String) -> Workspace {
+        let pane = Pane(
+            title: "Main",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: rootPath)
+        )
+        let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
+        return Workspace(generatedName: "Test Workspace", rootPath: rootPath, tabs: [tab], focusedTabID: tab.id)
     }
 
     func testWorkspaceRestoreKeepsSavedScrollbackForHistoryCommandWithoutRenderingIt() throws {
@@ -4422,6 +4545,46 @@ final class OmuxAppShellTests: XCTestCase {
         )
 
         XCTAssertEqual(runtime.applicationFocusUpdates, [true, false])
+    }
+
+    @MainActor
+    func testWorkspaceWindowPresentationNotificationsRefreshRuntimeFocusAndResponder() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner()
+        )
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        _ = try controller.ensureVisibleTerminalSurfaces(
+            for: workspace.id,
+            presentationState: TerminalSurfacePresentationState(
+                appIsActive: true,
+                windowIsKey: false,
+                windowIsVisible: true
+            )
+        )
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        runtime.clearTrackedPresentationChanges()
+        _ = window.makeFirstResponder(nil)
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        rootView.layoutSubtreeIfNeeded()
+
+        let paneView = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
+        XCTAssertEqual(runtime.applicationFocusUpdates, [true])
+        XCTAssertTrue(window.firstResponder === paneView.focusTarget)
     }
 
     @MainActor
@@ -6321,6 +6484,64 @@ final class OmuxAppShellTests: XCTestCase {
 
         XCTAssertNil(response.error)
         XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/tmp")
+    }
+
+    @MainActor
+    func testControlPlaneCanSetAndResetWorkspaceRoot() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            defaultWorkspaceRootPath: "/Users/example"
+        )
+        let configurationCoordinator = OpenMUXConfigurationCoordinator(
+            bridge: bridge,
+            initialState: OpenMUXPreparedConfiguration(
+                theme: .defaultTheme,
+                defaultWorkspaceRootPath: "/Users/example",
+                keyBindingRegistry: .defaults,
+                compiledConfigURL: nil,
+                compiledHash: nil,
+                diagnostics: []
+            )
+        )
+        let socketURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appending(path: "wr.sock")
+        let service = OpenMUXControlPlaneService(
+            controller: controller,
+            configurationCoordinator: configurationCoordinator,
+            socketPath: socketURL.path(percentEncoded: false)
+        )
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent())
+        }
+
+        try service.start()
+
+        let workspace = try controller.createWorkspace()
+        let paneID = try XCTUnwrap(workspace.focusedPane?.id)
+        _ = controller.setPaneWorkingDirectory(target: .pane(paneID), path: "/Users/example/projects/Reframe/App")
+
+        let setResponse = try await Self.requestControlMethod(
+            .setWorkspaceRoot,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["path": .string("/Users/example/projects/Reframe")])
+        )
+        XCTAssertNil(setResponse.error)
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPathMode, .manual)
+
+        let resetResponse = try await Self.requestControlMethod(
+            .setWorkspaceRoot,
+            socketPath: socketURL.path(percentEncoded: false),
+            params: .object(["mode": .string("automatic")])
+        )
+        XCTAssertNil(resetResponse.error)
+        XCTAssertEqual(controller.activeWorkspace()?.rootPath, "/Users/example/projects/Reframe/App")
+        XCTAssertEqual(controller.activeWorkspace()?.rootPathMode, .automatic)
     }
 
     @MainActor

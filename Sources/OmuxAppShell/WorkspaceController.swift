@@ -43,6 +43,11 @@ private struct PaneMetadataPublication {
     let event: ControlPlaneEvent
 }
 
+private struct WorkspaceRootChange {
+    let workspace: Workspace
+    let payload: OmuxValue
+}
+
 private struct PaneMetadataRequest {
     let workspaceID: WorkspaceID
     let tabID: TabID?
@@ -255,17 +260,21 @@ public final class WorkspaceController: @unchecked Sendable {
         withControllerLock { workspaceShellEnvironment }
     }
 
-    public func openWorkspace(at path: String) throws -> Workspace {
+    public func openWorkspace(
+        at path: String,
+        rootPathMode: WorkspaceRootPathMode = .manual
+    ) throws -> Workspace {
         let generatedWorkspaceName = withControllerLock { nextGeneratedWorkspaceName() }
+        let workspacePath = WorkspaceRootPathCalculator.standardizedPath(path) ?? path
 
         let workspaceID = WorkspaceID()
-        let paneTitle = Self.basePaneTitle(for: path)
+        let paneTitle = Self.basePaneTitle(for: workspacePath)
         let shellEnvironment = workspaceShellEnvironmentSnapshot()
         let pane = try makePane(
             title: paneTitle,
-            workingDirectory: path,
+            workingDirectory: workspacePath,
             workspaceID: workspaceID,
-            workspaceRootPath: path,
+            workspaceRootPath: workspacePath,
             shellEnvironment: shellEnvironment
         )
         let tab = Tab(title: "Main", panes: [pane], focusedPaneID: pane.id)
@@ -273,7 +282,8 @@ public final class WorkspaceController: @unchecked Sendable {
         let workspace = Workspace(
             id: workspaceID,
             generatedName: generatedWorkspaceName,
-            rootPath: path,
+            rootPath: workspacePath,
+            rootPathMode: rootPathMode,
             tabs: [tab],
             focusedTabID: tab.id
         )
@@ -296,7 +306,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: tab.id,
                 paneID: pane.id,
                 sessionID: pane.session.id,
-                payload: .object(["path": .string(path)])
+                payload: .object(["path": .string(workspacePath)])
             )
         )
         onChange?(workspace)
@@ -309,7 +319,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 tabID: tab.id,
                 paneID: pane.id,
                 sessionID: pane.session.id,
-                payload: .object(["path": .string(path)])
+                payload: .object(["path": .string(workspacePath)])
             )
         )
         return workspace
@@ -1305,7 +1315,81 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         let rootPath = defaultWorkspaceRootPath
         lock.unlock()
-        return try openWorkspace(at: rootPath)
+        return try openWorkspace(at: rootPath, rootPathMode: .automatic)
+    }
+
+    @discardableResult
+    public func setWorkspaceRootPath(
+        _ workspaceID: WorkspaceID? = nil,
+        to proposedPath: String
+    ) throws -> Workspace? {
+        let trimmedPath = proposedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedPath.isEmpty == false else {
+            return nil
+        }
+        let normalizedPath = WorkspaceRootPathCalculator.standardizedPath(trimmedPath) ?? trimmedPath
+        lock.lock()
+        guard let targetWorkspaceID = workspaceID ?? activeWorkspaceID,
+              let index = workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        let previousWorkspace = workspaces[index]
+        workspaces[index].rootPath = normalizedPath
+        workspaces[index].rootPathMode = .manual
+        let updatedWorkspace = workspaces[index]
+        let didChange = previousWorkspace.rootPath != updatedWorkspace.rootPath
+            || previousWorkspace.rootPathMode != updatedWorkspace.rootPathMode
+        lock.unlock()
+
+        guard didChange else {
+            return nil
+        }
+
+        let payload = Self.workspaceRootChangePayload(
+            path: updatedWorkspace.rootPath,
+            mode: updatedWorkspace.rootPathMode,
+            source: "manual"
+        )
+        try emitWorkspaceRootChange(workspace: updatedWorkspace, payload: payload)
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
+    }
+
+    @discardableResult
+    public func resetWorkspaceRootPath(_ workspaceID: WorkspaceID? = nil) throws -> Workspace? {
+        lock.lock()
+        guard let targetWorkspaceID = workspaceID ?? activeWorkspaceID,
+              let index = workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            lock.unlock()
+            return nil
+        }
+
+        let previousWorkspace = workspaces[index]
+        workspaces[index].rootPathMode = .automatic
+        if let derivedRootPath = Self.derivedWorkspaceRootPath(for: workspaces[index]) {
+            workspaces[index].rootPath = derivedRootPath
+        }
+        let updatedWorkspace = workspaces[index]
+        let didChange = previousWorkspace.rootPath != updatedWorkspace.rootPath
+            || previousWorkspace.rootPathMode != updatedWorkspace.rootPathMode
+        lock.unlock()
+
+        guard didChange else {
+            return nil
+        }
+
+        let payload = Self.workspaceRootChangePayload(
+            path: updatedWorkspace.rootPath,
+            mode: updatedWorkspace.rootPathMode,
+            source: "reset"
+        )
+        try emitWorkspaceRootChange(workspace: updatedWorkspace, payload: payload)
+        onChange?(updatedWorkspace)
+        return updatedWorkspace
     }
 
     @discardableResult
@@ -1359,7 +1443,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func createTab() throws -> Workspace? {
-        let creation = try withControllerLock { () -> (pane: Pane, tab: Tab, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
+        let creation = try withControllerLock { () -> (pane: Pane, tab: Tab, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment, rootChange: WorkspaceRootChange?)? in
             guard let index = activeWorkspaceIndex else {
                 return nil
             }
@@ -1375,7 +1459,8 @@ public final class WorkspaceController: @unchecked Sendable {
             )
             let tab = Tab(title: "Tab \(workspaces[index].tabs.count + 1)", panes: [pane], focusedPaneID: pane.id)
             workspaces[index].appendTab(tab)
-            return (pane, tab, workspaces[index], shellEnvironment)
+            let rootChange = refreshWorkspaceRootPathLocked(at: index)
+            return (pane, tab, workspaces[index], shellEnvironment, rootChange)
         }
 
         guard let creation else {
@@ -1385,12 +1470,14 @@ public final class WorkspaceController: @unchecked Sendable {
         let tab = creation.tab
         let updatedWorkspace = creation.workspace
         let shellEnvironment = creation.shellEnvironment
+        let rootChange = creation.rootChange
 
         _ = try bridge.createSurface(for: pane)
         _ = try bridge.attach(
             session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
             to: pane
         )
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
 
         try publication.emitHook(
             HookInvocation(
@@ -1419,7 +1506,7 @@ public final class WorkspaceController: @unchecked Sendable {
 
     @discardableResult
     public func splitFocusedPane(axis: PaneSplitAxis = .columns) throws -> Workspace? {
-        let split = try withControllerLock { () -> (pane: Pane, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
+        let split = try withControllerLock { () -> (pane: Pane, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment, rootChange: WorkspaceRootChange?)? in
             guard let index = activeWorkspaceIndex,
                   let focusedPane = workspaces[index].focusedPane
             else {
@@ -1438,7 +1525,11 @@ public final class WorkspaceController: @unchecked Sendable {
                 shellEnvironment: shellEnvironment
             )
             let success = workspaces[index].appendPaneToFocusedTab(pane, axis: axis)
-            return success ? (pane, workspaces[index], shellEnvironment) : nil
+            guard success else {
+                return nil
+            }
+            let rootChange = refreshWorkspaceRootPathLocked(at: index)
+            return (pane, workspaces[index], shellEnvironment, rootChange)
         }
 
         guard let split else {
@@ -1447,12 +1538,14 @@ public final class WorkspaceController: @unchecked Sendable {
         let pane = split.pane
         let updatedWorkspace = split.workspace
         let shellEnvironment = split.shellEnvironment
+        let rootChange = split.rootChange
 
         _ = try bridge.createSurface(for: pane)
         _ = try bridge.attach(
             session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
             to: pane
         )
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
 
         try publication.emitHook(
             HookInvocation(
@@ -1932,7 +2025,7 @@ public final class WorkspaceController: @unchecked Sendable {
         workingDirectory explicitWorkingDirectory: String? = nil,
         title explicitTitle: String? = nil
     ) throws -> Workspace? {
-        let creation = try withControllerLock { () -> (pane: Pane, stackID: PaneStackID, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment)? in
+        let creation = try withControllerLock { () -> (pane: Pane, stackID: PaneStackID, workspace: Workspace, shellEnvironment: WorkspaceShellEnvironment, rootChange: WorkspaceRootChange?)? in
             guard let index = activeWorkspaceIndex else {
                 return nil
             }
@@ -1967,7 +2060,11 @@ public final class WorkspaceController: @unchecked Sendable {
             } else {
                 success = workspaces[index].createPaneInFocusedStack(pane)
             }
-            return success ? (pane, targetStack.id, workspaces[index], shellEnvironment) : nil
+            guard success else {
+                return nil
+            }
+            let rootChange = refreshWorkspaceRootPathLocked(at: index)
+            return (pane, targetStack.id, workspaces[index], shellEnvironment, rootChange)
         }
 
         guard let creation else {
@@ -1977,12 +2074,14 @@ public final class WorkspaceController: @unchecked Sendable {
         let targetStackID = creation.stackID
         let updatedWorkspace = creation.workspace
         let shellEnvironment = creation.shellEnvironment
+        let rootChange = creation.rootChange
 
         _ = try bridge.createSurface(for: pane)
         _ = try bridge.attach(
             session: launchSession(for: pane, workspace: updatedWorkspace, shellEnvironment: shellEnvironment),
             to: pane
         )
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
 
         try publication.emitHook(
             HookInvocation(
@@ -2060,6 +2159,7 @@ public final class WorkspaceController: @unchecked Sendable {
             }
         }
 
+        let rootChange = refreshWorkspaceRootPathLocked(at: index)
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
@@ -2068,6 +2168,7 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if removedPane.extensionPane != nil {
             cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
         try publication.emitHook(
             HookInvocation(
                 category: .session,
@@ -2103,6 +2204,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         var removedPane: Pane?
         var updatedWorkspace: Workspace?
+        var rootChange: WorkspaceRootChange?
         var workspaceID: WorkspaceID?
         var tabID: TabID?
         var paneStackID: PaneStackID?
@@ -2134,6 +2236,7 @@ public final class WorkspaceController: @unchecked Sendable {
             }
 
             if removedPane != nil {
+                rootChange = refreshWorkspaceRootPathLocked(at: workspaceIndex)
                 updatedWorkspace = workspaces[workspaceIndex]
             }
             break
@@ -2153,6 +2256,7 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if removedPane.extensionPane != nil {
             cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
 
         let hookName = closedPaneTab ? "pane-tab-closed" : "pane-removed"
         try publication.emitHook(
@@ -2270,6 +2374,7 @@ public final class WorkspaceController: @unchecked Sendable {
             removedPane = pane
         }
 
+        let rootChange = refreshWorkspaceRootPathLocked(at: index)
         let updatedWorkspace = workspaces[index]
         lock.unlock()
 
@@ -2278,6 +2383,7 @@ public final class WorkspaceController: @unchecked Sendable {
         } else if removedPane.extensionPane != nil {
             cancelMarkdownPreviewWatch(paneID: removedPane.id)
         }
+        try emitWorkspaceRootChangeIfNeeded(rootChange)
         try publication.emitHook(
             HookInvocation(
                 category: .session,
@@ -2584,6 +2690,7 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.lock()
         var updatedWorkspace: Workspace?
         var metadataRequest: PaneMetadataRequest?
+        var rootChange: WorkspaceRootChange?
         for workspaceIndex in workspaces.indices {
             guard workspaces[workspaceIndex].panes.contains(where: { $0.id == context.paneID }) else {
                 continue
@@ -2606,6 +2713,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 return nil
             }
 
+            rootChange = refreshWorkspaceRootPathLocked(at: workspaceIndex)
             updatedWorkspace = workspaces[workspaceIndex]
             if let pane = workspaces[workspaceIndex].panes.first(where: { $0.id == context.paneID }) {
                 let tabID = workspaces[workspaceIndex].tabs.first(where: { tab in
@@ -2621,6 +2729,7 @@ public final class WorkspaceController: @unchecked Sendable {
         }
         lock.unlock()
 
+        try? emitWorkspaceRootChangeIfNeeded(rootChange)
         if let updatedWorkspace {
             onChange?(updatedWorkspace)
         }
@@ -3251,15 +3360,24 @@ public final class WorkspaceController: @unchecked Sendable {
         historyTargets(in: workspace).first(where: { $0.paneID == paneID })
     }
 
-    private func workingDirectory(for paneID: PaneID) -> String? {
+    func workingDirectory(for paneID: PaneID) -> String? {
         lock.lock()
-        defer { lock.unlock() }
         guard let location = paneLocationLocked(for: paneID),
               let pane = workspacePaneLocked(at: location)?.pane
         else {
+            lock.unlock()
             return nil
         }
-        return Self.terminalWorkingDirectory(for: pane)
+        lock.unlock()
+
+        if let path = Self.terminalWorkingDirectory(for: pane) {
+            return path
+        }
+
+        return bridge.snapshot(for: paneID)?
+            .workingDirectory
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
     }
 
     private static func terminalWorkingDirectory(for pane: Pane) -> String? {
@@ -3837,6 +3955,7 @@ public final class WorkspaceController: @unchecked Sendable {
     func applyTerminalActionState(_ event: TerminalActionEvent) -> ControlPlaneTerminalContext? {
         var updatedWorkspace: Workspace?
         var context: ControlPlaneTerminalContext?
+        var rootChange: WorkspaceRootChange?
         var shouldScheduleTrailingTitleUpdate = false
         var restoreOfferEntry: RecentlyClosedWorkspaceEntry?
         var paneMetadataRequests: [PaneMetadataRequest] = []
@@ -3878,6 +3997,7 @@ public final class WorkspaceController: @unchecked Sendable {
                 }
             }
             if didChange {
+                rootChange = refreshWorkspaceRootPathLocked(at: workspaceIndex)
                 updatedWorkspace = workspaces[workspaceIndex]
                 shouldEvaluatePaneMetadata = true
             }
@@ -4025,6 +4145,7 @@ public final class WorkspaceController: @unchecked Sendable {
         if let restoreOfferEntry {
             offerRestore(of: restoreOfferEntry)
         }
+        try? emitWorkspaceRootChangeIfNeeded(rootChange)
         if let updatedWorkspace {
             scheduleTerminalStateChangeUpdate(for: updatedWorkspace.id)
         }
@@ -4080,18 +4201,78 @@ public final class WorkspaceController: @unchecked Sendable {
         }
     }
 
-    private static func workspacePaths(for workspace: Workspace) -> [String] {
-        let paths = workspace.tabs.compactMap { tab in
-            tab.focusedPane?.terminalState.reportedWorkingDirectory
-                ?? tab.focusedPane?.terminalSession?.workingDirectory
-        }
-        .compactMap { path -> String? in
-            let normalizedPath = OmuxWorkspacePathResolver.resolve(path) ?? path
-            return normalizedPath.isEmpty ? nil : normalizedPath
+    private static func workspaceRootChangePayload(
+        path: String,
+        mode: WorkspaceRootPathMode,
+        source: String
+    ) -> OmuxValue {
+        .object([
+            "path": .string(path),
+            "mode": .string(mode.rawValue),
+            "source": .string(source),
+        ])
+    }
+
+    private static func derivedWorkspaceRootPath(for workspace: Workspace) -> String? {
+        WorkspaceRootPathCalculator.automaticRootPath(for: workspace)
+            ?? WorkspaceRootPathCalculator.standardizedPath(workspace.rootPath)
+    }
+
+    private func refreshWorkspaceRootPathLocked(at index: Int) -> WorkspaceRootChange? {
+        guard workspaces.indices.contains(index),
+              workspaces[index].rootPathMode == .automatic,
+              let derivedRootPath = Self.derivedWorkspaceRootPath(for: workspaces[index])
+        else {
+            return nil
         }
 
-        var seen = Set<String>()
-        return paths.filter { seen.insert($0).inserted }
+        let currentRootPath = WorkspaceRootPathCalculator.standardizedPath(workspaces[index].rootPath)
+            ?? workspaces[index].rootPath
+        guard currentRootPath != derivedRootPath else {
+            return nil
+        }
+
+        workspaces[index].rootPath = derivedRootPath
+        let updatedWorkspace = workspaces[index]
+        return WorkspaceRootChange(
+            workspace: updatedWorkspace,
+            payload: Self.workspaceRootChangePayload(
+                path: updatedWorkspace.rootPath,
+                mode: updatedWorkspace.rootPathMode,
+                source: "automatic"
+            )
+        )
+    }
+
+    private func emitWorkspaceRootChange(workspace: Workspace, payload: OmuxValue) throws {
+        try publication.emitHook(
+            HookInvocation(
+                category: .lifecycle,
+                name: "workspace-root-changed",
+                workspaceID: workspace.id,
+                payload: payload
+            )
+        )
+        publication.emitActionEvent(
+            name: .workspaceRootChanged,
+            workspaceID: workspace.id,
+            payload: payload
+        )
+    }
+
+    private func emitWorkspaceRootChangeIfNeeded(_ change: WorkspaceRootChange?) throws {
+        guard let change else {
+            return
+        }
+        try emitWorkspaceRootChange(workspace: change.workspace, payload: change.payload)
+    }
+
+    private static func workspacePaths(for workspace: Workspace) -> [String] {
+        let paths = WorkspaceRootPathCalculator.terminalPaths(in: workspace)
+        if paths.isEmpty == false {
+            return paths
+        }
+        return WorkspaceRootPathCalculator.standardizedPath(workspace.rootPath).map { [$0] } ?? []
     }
 
     private static func findWorkspace(
@@ -4103,8 +4284,7 @@ public final class WorkspaceController: @unchecked Sendable {
             if workspace.id == excludedWorkspaceID {
                 return false
             }
-            let rootPath = OmuxWorkspacePathResolver.resolve(workspace.rootPath) ?? workspace.rootPath
-            if rootPath == path {
+            if WorkspaceRootPathCalculator.contains(path: path, withinRoot: workspace.rootPath) {
                 return true
             }
             return workspacePaths(for: workspace).contains(path)
@@ -4447,6 +4627,7 @@ public final class WorkspaceController: @unchecked Sendable {
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
+            rootPathMode: workspace.rootPathMode,
             tabs: workspace.tabs.map {
                 sanitizedTabForPersistence($0, mode: mode, historyClearSuppression: historyClearSuppression)
             },
@@ -4633,6 +4814,7 @@ public final class WorkspaceController: @unchecked Sendable {
             generatedName: workspace.generatedName,
             customName: workspace.customName,
             rootPath: workspace.rootPath,
+            rootPathMode: workspace.rootPathMode,
             tabs: normalizedTabs,
             focusedTabID: focusedTabID,
             floatingPaneModals: normalizedFloatingPaneModals,

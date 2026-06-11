@@ -289,6 +289,14 @@ final class WorkspaceWindowController: NSWindowController {
         rootViewController.presentRenameWorkspacePrompt(workspaceID: workspaceID)
     }
 
+    func presentWorkspaceRootPrompt(workspaceID: WorkspaceID? = nil) {
+        rootViewController.presentWorkspaceRootPrompt(workspaceID: workspaceID)
+    }
+
+    func resetWorkspaceRootToAutomatic(workspaceID: WorkspaceID? = nil) {
+        rootViewController.resetWorkspaceRootToAutomatic(workspaceID: workspaceID)
+    }
+
     func presentCommandPalette(initialQuery: String, keyBindings: OpenMUXKeyBindingRegistry) {
         rootViewController.presentCommandPalette(initialQuery: initialQuery, keyBindings: keyBindings)
     }

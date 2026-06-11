@@ -27,6 +27,7 @@ Each row is an action that OpenMUX supports or could support. Rows grouped by ca
 | Open workspace | ✅ | ✅ | ✅ | Fully wired. |
 | Close workspace | ✅ | ✅ | ✅ | Fully wired. |
 | Rename workspace | ✅ | | | Hook only. No event, no CLI verb. |
+| Set/reset workspace root | ✅ | ✅ | ✅ | Fully wired. Manual overrides and automatic recompute transitions share the same surfaces. |
 | Switch workspace focus | | | | Most common workspace action. Not observable. |
 | Reorder workspace | | | | Move up/down has no external signal. |
 | Restore workspace | ✅ | ✅ | ✅ | Fully wired. |

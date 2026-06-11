@@ -369,6 +369,16 @@ public enum OpenMUXCLICommandCatalog {
             paletteExecution: .keyBindingAction(.workspaceClose)
         ),
         OpenMUXCLICommandSpec(
+            id: "omux.workspace-root",
+            usage: "omux workspace-root [--workspace <id>] <path>|--auto",
+            title: "omux: Set Workspace Root",
+            summary: "Set or reset the effective workspace root",
+            aliases: ["workspace root", "set workspace root", "reset workspace root"],
+            requiresArguments: true,
+            hasSafeDefaultTarget: false,
+            paletteExecution: .sendToTerminal
+        ),
+        OpenMUXCLICommandSpec(
             id: "omux.tab",
             usage: "omux tab",
             title: "omux: Create Workspace Tab",
