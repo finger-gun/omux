@@ -2,7 +2,27 @@
 
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
+## 0.22.0
 
+### Added
+
+- Added workspace root management across the app, CLI, and control plane. You can now set a manual workspace root or reset a workspace back to automatic root detection from the Workspace menu, workspace context menus, `omux workspace-root`, or the `workspace.root.set` control-plane method.
+- Added workspace root observability for automations with the `workspace.rootChanged` event and `workspace-root-changed` hook, including the resolved path, mode, and change source.
+
+### Changed
+
+- Changed automatic workspace root detection to follow the highest common working directory across a workspace's panes, so new tabs, hooks, and workspace-scoped integrations stay aligned with the directories you are actually working in.
+- Changed workspace summaries and persisted workspace state to track whether a root is automatic or manually pinned.
+
+### Fixed
+
+- Fixed workspace-scoped Vault and restore matching so broad parent directories do not incorrectly absorb sibling projects, while manual workspace roots still remain stable when you intentionally pin them.
+- Fixed project icon resolution to prefer each pane's reported working directory, improving icon selection when terminal state has moved beyond the launch directory.
+- Fixed terminal focus restoration when the app or window becomes active again so the focused pane reliably regains keyboard input.
+
+### Documentation
+
+- Documented the new workspace root event and hook coverage, and added repository security reporting guidance.
 
 ## 0.21.0
 
