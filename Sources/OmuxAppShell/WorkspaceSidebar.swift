@@ -44,7 +44,7 @@ final class WorkspacesSidebarWidget: NSView {
 
             scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
             {
                 let c = scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
                 c.priority = .defaultLow
@@ -122,6 +122,7 @@ final class WorkspacesSidebarWidget: NSView {
     func apply(theme: WorkspaceShellTheme) {
         header.applyTheme(theme)
         workspacesSection.apply(theme: theme)
+        scrollView.applySidebarScrollerTheme(theme)
     }
 
     private var _onCreateWorkspace: (() -> Void)?
