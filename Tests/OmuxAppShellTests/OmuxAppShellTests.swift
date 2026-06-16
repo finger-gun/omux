@@ -4008,8 +4008,8 @@ final class OmuxAppShellTests: XCTestCase {
         let defaultLabel = try XCTUnwrap(findLabelView(withString: secondWorkspace.name, in: sidebar))
         let defaultButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: defaultLabel))
 
-        let renamedMenuTitles = renamedButton.menu?.items.map(\.title) ?? []
-        let defaultMenuTitles = defaultButton.menu?.items.map(\.title) ?? []
+        let renamedMenuTitles = renamedButton.contextMenuProvider?()?.items.map(\.title) ?? []
+        let defaultMenuTitles = defaultButton.contextMenuProvider?()?.items.map(\.title) ?? []
 
         XCTAssertTrue(renamedMenuTitles.contains("Remove Custom Name"))
         XCTAssertFalse(defaultMenuTitles.contains("Remove Custom Name"))
@@ -4314,7 +4314,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         let firstLabel = try XCTUnwrap(findLabelView(withString: "First", in: sidebar))
         let firstButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: firstLabel))
-        let collapseItem = try XCTUnwrap(firstButton.menu?.items.first { $0.title == "Collapse Workspace Panes" })
+        let collapseItem = try XCTUnwrap(firstButton.contextMenuProvider?()?.items.first { $0.title == "Collapse Workspace Panes" })
         XCTAssertTrue(NSApp.sendAction(collapseItem.action!, to: collapseItem.target, from: collapseItem))
         rootView.layoutSubtreeIfNeeded()
 
@@ -5690,6 +5690,152 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testSidebarContextMenusAreBuiltLazily() throws {
+        var sidebarMenuBuilds = 0
+        let sidebarButton = SidebarItemButton()
+        sidebarButton.contextMenuProvider = {
+            sidebarMenuBuilds += 1
+            return NSMenu()
+        }
+
+        var chromeMenuBuilds = 0
+        let chromeButton = ChromePillButton()
+        chromeButton.contextMenuProvider = {
+            chromeMenuBuilds += 1
+            return NSMenu()
+        }
+
+        var paneTabMenuBuilds = 0
+        let pane = Pane(title: "shell", session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp"))
+        let paneTabButton = PaneTabButton(
+            pane: pane,
+            active: false,
+            theme: .defaultTheme,
+            icon: nil,
+            progress: nil,
+            showsClose: false,
+            onClose: {}
+        )
+        paneTabButton.contextMenuProvider = {
+            paneTabMenuBuilds += 1
+            return NSMenu()
+        }
+
+        XCTAssertNil(sidebarButton.menu)
+        XCTAssertNil(chromeButton.menu)
+        XCTAssertNil(paneTabButton.menu)
+        XCTAssertEqual(sidebarMenuBuilds, 0)
+        XCTAssertEqual(chromeMenuBuilds, 0)
+        XCTAssertEqual(paneTabMenuBuilds, 0)
+    }
+
+    @MainActor
+    func testWorkspaceSidebarSkipsUnchangedButtonRebuild() throws {
+        let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 400))
+        let workspaceID = WorkspaceID()
+        let paneID = PaneID()
+        let items = [
+            SidebarItem(
+                kind: .workspace,
+                identifier: workspaceID.rawValue,
+                icon: nil,
+                progress: nil,
+                title: "Workspace",
+                subtitle: nil,
+                isActive: true,
+                isExpanded: true,
+                action: .workspace(workspaceID),
+                contextMenuProvider: nil
+            ),
+            SidebarItem(
+                kind: .terminal,
+                identifier: paneID.rawValue,
+                icon: nil,
+                progress: nil,
+                title: "shell",
+                subtitle: "~/project",
+                isActive: true,
+                action: .pane(paneID),
+                contextMenuProvider: nil
+            ),
+        ]
+
+        sidebar.render(
+            workspaceItems: items,
+            isWorkspacesCollapsed: false,
+            theme: .defaultTheme,
+            onSelectWorkspace: { _ in },
+            onCreateWorkspace: {},
+            onDeleteWorkspace: {},
+            canDeleteWorkspace: true,
+            updateAvailability: nil,
+            onMoveWorkspace: { _, _ in },
+            onToggleWorkspaceExpansion: { _ in },
+            onRenameWorkspace: { _, _ in },
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
+        )
+        let firstButtons = findViews(ofType: SidebarItemButton.self, in: sidebar)
+
+        sidebar.render(
+            workspaceItems: items,
+            isWorkspacesCollapsed: false,
+            theme: .defaultTheme,
+            onSelectWorkspace: { _ in },
+            onCreateWorkspace: {},
+            onDeleteWorkspace: {},
+            canDeleteWorkspace: true,
+            updateAvailability: nil,
+            onMoveWorkspace: { _, _ in },
+            onToggleWorkspaceExpansion: { _ in },
+            onRenameWorkspace: { _, _ in },
+            onSelectPane: { _ in },
+            onToggleWorkspacesCollapse: {}
+        )
+        let secondButtons = findViews(ofType: SidebarItemButton.self, in: sidebar)
+
+        XCTAssertEqual(firstButtons.count, 2)
+        XCTAssertEqual(secondButtons.count, 2)
+        XCTAssertTrue(zip(firstButtons, secondButtons).allSatisfy { $0 === $1 })
+    }
+
+    @MainActor
+    func testVaultIndexRefreshDoesNotResnapshotWorkspaceSidebarText() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(controller.terminalBridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.transcript = "vim - Vi IMproved"
+        let vaultRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+        let vaultStore = try VaultStore(
+            databaseURL: vaultRoot.appendingPathComponent("agent-sessions.sqlite"),
+            configuration: VaultConfiguration(enabled: true, externalAdaptersEnabled: false)
+        )
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            vaultStore: vaultStore,
+            vaultConfiguration: VaultConfiguration(enabled: true, externalAdaptersEnabled: false)
+        )
+        _ = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(surfaceID, "action:\(pane.id.rawValue)")
+        let baselineSnapshotCount = runtime.terminalTextSnapshotCount
+        windowController.vaultIndexDidUpdate()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, baselineSnapshotCount)
+    }
+
+    @MainActor
     func testSidebarStatusOrbDoesNotShiftTerminalMetadata() throws {
         let theme = WorkspaceShellTheme.defaultTheme
         let icon = OmuxRenderedIcon(
@@ -5873,7 +6019,7 @@ final class OmuxAppShellTests: XCTestCase {
         }
 
         XCTAssertEqual(tabButtons.count, paneStack.panes.count)
-        XCTAssertTrue(tabButtons.allSatisfy { $0.menu != nil })
+        XCTAssertTrue(tabButtons.allSatisfy { ($0 as? PaneTabButton)?.contextMenuProvider != nil })
     }
 
     @MainActor
@@ -5888,11 +6034,11 @@ final class OmuxAppShellTests: XCTestCase {
         let windowController = WorkspaceWindowController(workspace: updatedWorkspace, controller: controller)
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
-        let tabButtons = findViews(ofType: NSControl.self, in: rootView).filter {
-            ($0.accessibilityIdentifier() ?? "").hasPrefix(A11yID.paneTabPrefix) && $0.menu != nil
+        let tabButtons = findViews(ofType: PaneTabButton.self, in: rootView).filter {
+            $0.accessibilityIdentifier().hasPrefix(A11yID.paneTabPrefix)
         }
         XCTAssertEqual(tabButtons.count, 2)
-        let menuTitles = tabButtons[0].menu?.items.map(\.title) ?? []
+        let menuTitles = tabButtons[0].contextMenuProvider?().items.map(\.title) ?? []
 
         XCTAssertTrue(menuTitles.contains("Rename…"))
         XCTAssertTrue(menuTitles.contains("Pop Out to Modal"))
@@ -5917,10 +6063,10 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
         let firstPaneButton = try XCTUnwrap(
-            findViews(ofType: NSControl.self, in: rootView)
+            findViews(ofType: PaneTabButton.self, in: rootView)
                 .first { $0.identifier?.rawValue == "pane-tab-\(firstPaneID.rawValue)" }
         )
-        let popOutItem = try XCTUnwrap(firstPaneButton.menu?.items.first { $0.title == "Pop Out to Modal" })
+        let popOutItem = try XCTUnwrap(firstPaneButton.contextMenuProvider?().items.first { $0.title == "Pop Out to Modal" })
 
         XCTAssertTrue(popOutItem.isEnabled)
         XCTAssertTrue(NSApp.sendAction(popOutItem.action!, to: popOutItem.target, from: popOutItem))
@@ -5942,10 +6088,10 @@ final class OmuxAppShellTests: XCTestCase {
         let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
 
         let paneButton = try XCTUnwrap(
-            findViews(ofType: NSControl.self, in: rootView)
+            findViews(ofType: PaneTabButton.self, in: rootView)
                 .first { $0.identifier?.rawValue == "pane-tab-\(paneID.rawValue)" }
         )
-        let popOutItem = try XCTUnwrap(paneButton.menu?.items.first { $0.title == "Pop Out to Modal" })
+        let popOutItem = try XCTUnwrap(paneButton.contextMenuProvider?().items.first { $0.title == "Pop Out to Modal" })
 
         XCTAssertTrue(popOutItem.isEnabled)
         XCTAssertTrue(NSApp.sendAction(popOutItem.action!, to: popOutItem.target, from: popOutItem))
@@ -5971,7 +6117,7 @@ final class OmuxAppShellTests: XCTestCase {
 
         let terminalLabel = try XCTUnwrap(findLabelView(withString: "hx", in: sidebar))
         let terminalButton = try XCTUnwrap(findAncestor(ofType: SidebarItemButton.self, for: terminalLabel))
-        let menuTitles = terminalButton.menu?.items.map(\.title) ?? []
+        let menuTitles = terminalButton.contextMenuProvider?()?.items.map(\.title) ?? []
 
         XCTAssertTrue(menuTitles.contains("Rename…"))
         XCTAssertTrue(menuTitles.contains("Close"))

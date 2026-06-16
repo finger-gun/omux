@@ -536,9 +536,6 @@ final class WorkspaceShellViewController: NSViewController {
         if vaultWorkspaceFilter != normalizedWorkspaceFilter {
             vaultWorkspaceFilter = normalizedWorkspaceFilter
         }
-        let scopedVaultSessions = vaultSessions(for: normalizedWorkspaceFilter, activeWorkspace: workspace, allWorkspaces: allWorkspaces)
-        pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
-        let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         sidebarView.render(
             workspaceItems: workspaceItems,
             isWorkspacesCollapsed: isWorkspacesSectionCollapsed,
@@ -570,68 +567,7 @@ final class WorkspaceShellViewController: NSViewController {
                 self?.toggleWorkspacesCollapsed()
             }
         )
-        let availableAgents = availableVaultAgents.union(vaultSessions.map(\.agent))
-        vaultSidebarView.render(
-            sessions: scopedVaultSessions,
-            searchQuery: vaultSearchQuery,
-            selectedAgent: vaultAgentFilter,
-            availableAgents: availableAgents,
-            workspaceFilter: normalizedWorkspaceFilter,
-            workspaceFilterItems: workspaceFilterItems,
-            isLoading: vaultIsLoading,
-            hasMore: vaultHasMore,
-            sessionActivityByID: [:],
-            theme: currentTheme,
-            isCollapsed: isAgentSessionsSectionCollapsed,
-            isAgentSessionsEnabled: vaultConfiguration.enabled,
-            onToggle: { [weak self] in
-                self?.toggleVaultSidebar()
-            },
-            onRefresh: { [weak self] in
-                self?.refreshVaultSessions()
-            },
-            onSearchChanged: { [weak self] query in
-                self?.updateVaultSearchQuery(query)
-            },
-            onAgentFilterChanged: { [weak self] agent in
-                self?.updateVaultAgentFilter(agent)
-            },
-            onWorkspaceFilterChanged: { [weak self] filter in
-                self?.updateVaultWorkspaceFilter(filter)
-            },
-            onNeedsMore: { [weak self] in
-                self?.loadMoreVaultSessions()
-            },
-            onResume: { [weak self] sessionID in
-                self?.resumeVaultSession(sessionID)
-            },
-            onDelete: { [weak self] sessionID in
-                self?.deleteVaultSessionPrompt(sessionID: sessionID)
-            },
-            onToggleCollapse: { [weak self] in
-                self?.toggleAgentSessionsCollapsed()
-            }
-        )
-        vaultSidebarView.worktreesWidget.render(
-            worktrees: worktrees,
-            isCollapsed: isWorktreesSectionCollapsed,
-            theme: currentTheme,
-            onNavigate: { [weak self] worktree in
-                self?.navigateToWorktree(worktree)
-            },
-            onDelete: { [weak self] worktree in
-                self?.deleteWorktreePrompt(worktree)
-            },
-            onCreate: { [weak self] in
-                self?.showCreateWorktreeSheet()
-            },
-            onRefresh: { [weak self] in
-                self?.reloadWorktrees()
-            },
-            onToggleCollapse: { [weak self] in
-                self?.toggleWorktreesCollapsed()
-            }
-        )
+        renderVaultSidebar(activeWorkspace: workspace, allWorkspaces: allWorkspaces)
         let plan = WorkspaceRenderReconciliationPlanner.classify(
             previousWorkspaceID: previousWorkspace?.id,
             previousFocusedTabID: previousWorkspace?.focusedTabID,
@@ -903,7 +839,7 @@ final class WorkspaceShellViewController: NSViewController {
             vaultIsLoading = true
             reloadAvailableVaultAgents()
             if let workspace = currentWorkspace {
-                update(workspace: workspace)
+                renderVaultSidebar(activeWorkspace: workspace)
             }
         } else if vaultHasMore == false {
             return
@@ -935,18 +871,95 @@ final class WorkspaceShellViewController: NSViewController {
                 self.vaultIsLoading = false
                 self.vaultSessions = nextSessions
                 if let workspace = self.currentWorkspace {
-                    self.update(workspace: workspace)
+                    self.renderVaultSidebar(activeWorkspace: workspace)
                 }
             } catch {
                 if let self, self.vaultLoadGeneration == generation {
                     self.vaultIsLoading = false
                     if let workspace = self.currentWorkspace {
-                        self.update(workspace: workspace)
+                        self.renderVaultSidebar(activeWorkspace: workspace)
                     }
                 }
                 fputs("Agent Sessions list failed: \(error)\n", stderr)
             }
         }
+    }
+
+    private func renderVaultSidebar(activeWorkspace: Workspace, allWorkspaces providedWorkspaces: [Workspace]? = nil) {
+        let allWorkspaces = providedWorkspaces ?? controller.allWorkspaces()
+        let normalizedWorkspaceFilter = normalizedVaultWorkspaceFilter(for: allWorkspaces)
+        if vaultWorkspaceFilter != normalizedWorkspaceFilter {
+            vaultWorkspaceFilter = normalizedWorkspaceFilter
+        }
+        let scopedVaultSessions = vaultSessions(
+            for: normalizedWorkspaceFilter,
+            activeWorkspace: activeWorkspace,
+            allWorkspaces: allWorkspaces
+        )
+        pruneActiveVaultSessionBindings(allWorkspaces: allWorkspaces)
+        let workspaceFilterItems = vaultWorkspaceFilterItems(activeWorkspace: activeWorkspace, allWorkspaces: allWorkspaces)
+        let availableAgents = availableVaultAgents.union(vaultSessions.map(\.agent))
+        vaultSidebarView.render(
+            sessions: scopedVaultSessions,
+            searchQuery: vaultSearchQuery,
+            selectedAgent: vaultAgentFilter,
+            availableAgents: availableAgents,
+            workspaceFilter: normalizedWorkspaceFilter,
+            workspaceFilterItems: workspaceFilterItems,
+            isLoading: vaultIsLoading,
+            hasMore: vaultHasMore,
+            sessionActivityByID: [:],
+            theme: currentTheme,
+            isCollapsed: isAgentSessionsSectionCollapsed,
+            isAgentSessionsEnabled: vaultConfiguration.enabled,
+            onToggle: { [weak self] in
+                self?.toggleVaultSidebar()
+            },
+            onRefresh: { [weak self] in
+                self?.refreshVaultSessions()
+            },
+            onSearchChanged: { [weak self] query in
+                self?.updateVaultSearchQuery(query)
+            },
+            onAgentFilterChanged: { [weak self] agent in
+                self?.updateVaultAgentFilter(agent)
+            },
+            onWorkspaceFilterChanged: { [weak self] filter in
+                self?.updateVaultWorkspaceFilter(filter)
+            },
+            onNeedsMore: { [weak self] in
+                self?.loadMoreVaultSessions()
+            },
+            onResume: { [weak self] sessionID in
+                self?.resumeVaultSession(sessionID)
+            },
+            onDelete: { [weak self] sessionID in
+                self?.deleteVaultSessionPrompt(sessionID: sessionID)
+            },
+            onToggleCollapse: { [weak self] in
+                self?.toggleAgentSessionsCollapsed()
+            }
+        )
+        vaultSidebarView.worktreesWidget.render(
+            worktrees: worktrees,
+            isCollapsed: isWorktreesSectionCollapsed,
+            theme: currentTheme,
+            onNavigate: { [weak self] worktree in
+                self?.navigateToWorktree(worktree)
+            },
+            onDelete: { [weak self] worktree in
+                self?.deleteWorktreePrompt(worktree)
+            },
+            onCreate: { [weak self] in
+                self?.showCreateWorktreeSheet()
+            },
+            onRefresh: { [weak self] in
+                self?.reloadWorktrees()
+            },
+            onToggleCollapse: { [weak self] in
+                self?.toggleWorktreesCollapsed()
+            }
+        )
     }
 
     private func loadMoreVaultSessions() {
@@ -990,7 +1003,7 @@ final class WorkspaceShellViewController: NSViewController {
             guard let self, self.vaultAgentLoadGeneration == generation else { return }
             self.availableVaultAgents = agents
             if let workspace = self.currentWorkspace {
-                self.update(workspace: workspace)
+                self.renderVaultSidebar(activeWorkspace: workspace)
             }
         }
     }

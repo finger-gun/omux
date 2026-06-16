@@ -14,7 +14,7 @@ final class PaneTabButton: NSControl, NSTextFieldDelegate {
     var canStartDrag: (() -> Bool)?
     var contextMenuProvider: (() -> NSMenu)? {
         didSet {
-            menu = contextMenuProvider?()
+            menu = nil
         }
     }
     /// Called when the user commits a non-empty inline rename.
@@ -404,7 +404,7 @@ class ChromePillButton: NSControl {
     var onPress: (() -> Void)?
     var contextMenuProvider: (() -> NSMenu)? {
         didSet {
-            menu = contextMenuProvider?()
+            menu = nil
         }
     }
     private let titleLabel = NSTextField(labelWithString: "")
@@ -608,7 +608,7 @@ final class SidebarItemButton: NSView, NSTextFieldDelegate {
     var onDragEnded: ((SidebarItemButton, NSEvent) -> Void)?
     var contextMenuProvider: (() -> NSMenu?)? {
         didSet {
-            menu = contextMenuProvider?()
+            menu = nil
         }
     }
     private let titleField = NSTextField(labelWithString: "")

@@ -341,6 +341,29 @@ final class SidebarUpdateNoticeView: NSView {
 
 @MainActor
 final class WorkspaceSidebarSectionView: NSView {
+    private struct RenderSignature: Equatable {
+        struct Item: Equatable {
+            let kind: String
+            let identifier: String
+            let icon: OmuxRenderedIcon?
+            let progress: PaneProgress?
+            let title: String
+            let subtitle: String?
+            let detail: String?
+            let subtitleAccentPrefixLength: Int?
+            let isActive: Bool
+            let isExpanded: Bool?
+            let action: String
+            let rowHeight: CGFloat
+        }
+
+        let title: String
+        let count: Int
+        let emptyState: String
+        let themeIdentifier: String
+        let items: [Item]
+    }
+
     private struct WorkspaceDragGroup {
         let workspaceID: WorkspaceID
         var buttons: [SidebarItemButton]
@@ -354,6 +377,7 @@ final class WorkspaceSidebarSectionView: NSView {
     private var workspaceButtons: [SidebarItemButton] = []
     private var workspaceDragGroups: [WorkspaceDragGroup] = []
     private var currentTheme: WorkspaceShellTheme?
+    private var currentRenderSignature: RenderSignature?
     private var reorderHandler: ((WorkspaceID, Int) -> Void)?
     private var draggingWorkspaceID: WorkspaceID?
 
@@ -424,6 +448,20 @@ final class WorkspaceSidebarSectionView: NSView {
         emptyLabel.stringValue = emptyState
         currentTheme = theme
         reorderHandler = onMoveWorkspace
+        let renderSignature = accessories.isEmpty
+            ? Self.renderSignature(
+                items: items,
+                title: title,
+                count: count,
+                emptyState: emptyState,
+                themeIdentifier: theme.identifier
+            )
+            : nil
+        if draggingWorkspaceID == nil,
+           let renderSignature,
+           renderSignature == currentRenderSignature {
+            return
+        }
         draggingWorkspaceID = nil
 
         for button in itemButtons {
@@ -439,6 +477,7 @@ final class WorkspaceSidebarSectionView: NSView {
             accessoryButton.removeFromSuperview()
         }
         accessoryButtons.removeAll()
+        currentRenderSignature = renderSignature
         for accessory in accessories {
             let button = ChromePillButton()
             switch accessory.content {
@@ -512,6 +551,37 @@ final class WorkspaceSidebarSectionView: NSView {
             button.heightAnchor.constraint(equalToConstant: item.rowHeight).isActive = true
             itemButtons.append(button)
         }
+    }
+
+    private static func renderSignature(
+        items: [SidebarItem],
+        title: String,
+        count: Int,
+        emptyState: String,
+        themeIdentifier: String
+    ) -> RenderSignature {
+        RenderSignature(
+            title: title,
+            count: count,
+            emptyState: emptyState,
+            themeIdentifier: themeIdentifier,
+            items: items.map { item in
+                RenderSignature.Item(
+                    kind: item.kind.signature,
+                    identifier: item.identifier,
+                    icon: item.icon,
+                    progress: item.progress,
+                    title: item.title,
+                    subtitle: item.subtitle,
+                    detail: item.detail,
+                    subtitleAccentPrefixLength: item.subtitleAccentPrefixLength,
+                    isActive: item.isActive,
+                    isExpanded: item.isExpanded,
+                    action: item.action.signature,
+                    rowHeight: item.rowHeight
+                )
+            }
+        )
     }
 
     private func beginWorkspaceDrag(for button: SidebarItemButton) {
@@ -616,6 +686,28 @@ final class VaultWorkspaceFilterBox {
 @MainActor
 final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
+}
+
+private extension SidebarItem.Kind {
+    var signature: String {
+        switch self {
+        case .workspace:
+            return "workspace"
+        case .terminal:
+            return "terminal"
+        }
+    }
+}
+
+private extension SidebarItem.Action {
+    var signature: String {
+        switch self {
+        case .workspace(let workspaceID):
+            return "workspace:\(workspaceID.rawValue)"
+        case .pane(let paneID):
+            return "pane:\(paneID.rawValue)"
+        }
+    }
 }
 
 private extension NSColor {
