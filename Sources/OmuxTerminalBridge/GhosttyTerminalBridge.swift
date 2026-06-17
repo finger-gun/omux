@@ -402,6 +402,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     private let dependency: GhosttyPinnedDependency
     private let runtime: any GhosttyRuntime
+    private let diagnostics: @Sendable (String) -> Void
     private let lock = NSLock()
     private var surfaces: [PaneID: TerminalSurfaceDescriptor] = [:]
     private var sessionsByPane: [PaneID: SessionID] = [:]
@@ -414,10 +415,12 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     public init(
         dependency: GhosttyPinnedDependency = .foundationDefault(),
         runtime: (any GhosttyRuntime)? = nil,
-        compiledConfigPath: URL? = nil
+        compiledConfigPath: URL? = nil,
+        diagnostics: @escaping @Sendable (String) -> Void = { fputs($0, stderr) }
     ) {
         self.dependency = dependency
         self.runtime = runtime ?? defaultGhosttyRuntime(compiledConfigPath: compiledConfigPath)
+        self.diagnostics = diagnostics
         self.runtime.setTerminalActionHandler { [weak self] record in
             self?.handleRuntimeTerminalAction(record) ?? false
         }
@@ -773,10 +776,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
                     return
                 }
             } catch {
-                fputs(
-                    "warning: failed to attach Ghostty runtime surface \(runtimeSurfaceID) (attempt \(attempt)/\(attempts)): \(error)\n",
-                    stderr
-                )
+                diagnostics("warning: failed to attach Ghostty runtime surface \(runtimeSurfaceID) (attempt \(attempt)/\(attempts)): \(error)\n")
             }
 
             if attempt < attempts {

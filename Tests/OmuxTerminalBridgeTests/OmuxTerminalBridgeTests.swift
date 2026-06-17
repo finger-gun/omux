@@ -552,24 +552,28 @@ final class OmuxTerminalBridgeTests: XCTestCase {
     func testBridgeFailsWhenRuntimeAttachCannotRecover() throws {
         let runtime = InspectableGhosttyRuntime()
         runtime.attachFailuresRemaining = 3
-        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let diagnostics = TerminalBridgeDiagnosticsRecorder()
+        let bridge = GhosttyTerminalBridge(runtime: runtime, diagnostics: diagnostics.record)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
         let pane = Pane(title: "Runtime", session: session)
 
         XCTAssertThrowsError(try bridge.attach(session: session, to: pane))
         XCTAssertEqual(runtime.attachAttempts, 3)
+        XCTAssertEqual(diagnostics.messages.count, 3)
     }
 
     func testBridgeRetriesTransientRuntimeAttachBeforeFailing() throws {
         let runtime = InspectableGhosttyRuntime()
         runtime.attachFailuresRemaining = 2
-        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let diagnostics = TerminalBridgeDiagnosticsRecorder()
+        let bridge = GhosttyTerminalBridge(runtime: runtime, diagnostics: diagnostics.record)
         let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp")
         let pane = Pane(title: "Runtime", session: session)
 
         _ = try bridge.attach(session: session, to: pane)
 
         XCTAssertEqual(runtime.attachAttempts, 3)
+        XCTAssertEqual(diagnostics.messages.count, 2)
         XCTAssertEqual(bridge.snapshot(for: pane.id)?.textUnavailableReason, "history unavailable")
     }
 
@@ -1859,6 +1863,23 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.count, 1)
         XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.first?.keyCode, 36)
         XCTAssertEqual(runtime.handledEventsBySurface[runtimeSurfaceID]?.first?.text, "\r")
+    }
+}
+
+private final class TerminalBridgeDiagnosticsRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedMessages: [String] = []
+
+    var messages: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedMessages
+    }
+
+    func record(_ message: String) {
+        lock.lock()
+        recordedMessages.append(message)
+        lock.unlock()
     }
 }
 

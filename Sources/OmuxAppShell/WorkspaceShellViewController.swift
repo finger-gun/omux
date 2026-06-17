@@ -1030,7 +1030,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
         vaultWorkspaceFilter = filter
         if let workspace = currentWorkspace {
-            update(workspace: workspace)
+            renderVaultSidebar(activeWorkspace: workspace)
         }
     }
 
@@ -1185,7 +1185,7 @@ final class WorkspaceShellViewController: NSViewController {
         }
         activeVaultSessionByPaneID[paneID] = sessionID
         if let workspace = currentWorkspace {
-            update(workspace: workspace)
+            renderVaultSidebar(activeWorkspace: workspace)
         }
     }
 
@@ -1365,7 +1365,7 @@ final class WorkspaceShellViewController: NSViewController {
     private func navigateToWorktree(_ worktree: GitWorktree) {
         let path = worktree.path
         let escaped = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        try? controller.runCommand(target: .focused, command: "cd \(escaped)")
+        _ = try? controller.runCommand(target: .focused, command: "cd \(escaped)")
         controller.setPaneWorkingDirectory(target: .focused, path: path)
     }
 

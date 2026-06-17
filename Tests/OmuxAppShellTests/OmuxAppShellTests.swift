@@ -5836,6 +5836,48 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testVaultWorkspaceFilterChangeDoesNotResnapshotWorkspaceSidebarText() async throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let controller = WorkspaceController(
+            bridge: GhosttyTerminalBridge(runtime: runtime),
+            hookRunner: ExternalHookRunner()
+        )
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        let surfaceID = try XCTUnwrap(controller.terminalBridge.surface(for: pane.id)?.runtimeSurfaceID)
+        runtime.transcript = "vim - Vi IMproved"
+        let vaultDatabaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: vaultDatabaseURL) }
+        let vaultStore = try VaultStore(
+            databaseURL: vaultDatabaseURL,
+            configuration: VaultConfiguration(enabled: true, externalAdaptersEnabled: false)
+        )
+        let windowController = WorkspaceWindowController(
+            workspace: workspace,
+            controller: controller,
+            vaultStore: vaultStore,
+            vaultConfiguration: VaultConfiguration(enabled: true, externalAdaptersEnabled: false)
+        )
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let workspacePopup = try XCTUnwrap(findViews(ofType: NSPopUpButton.self, in: rootView).first { popup in
+            popup.itemArray.contains { $0.representedObject is VaultWorkspaceFilterBox }
+        })
+        let allWorkspacesItem = try XCTUnwrap(workspacePopup.itemArray.first { item in
+            (item.representedObject as? VaultWorkspaceFilterBox)?.filter == .all
+        })
+        XCTAssertEqual(surfaceID, "action:\(pane.id.rawValue)")
+        let baselineSnapshotCount = runtime.terminalTextSnapshotCount
+
+        workspacePopup.select(allWorkspacesItem)
+        _ = workspacePopup.target?.perform(workspacePopup.action, with: workspacePopup)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(runtime.terminalTextSnapshotCount, baselineSnapshotCount)
+    }
+
+    @MainActor
     func testSidebarStatusOrbDoesNotShiftTerminalMetadata() throws {
         let theme = WorkspaceShellTheme.defaultTheme
         let icon = OmuxRenderedIcon(
