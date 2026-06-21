@@ -295,6 +295,7 @@ final class GitWorktreesSidebarWidget: NSView {
         emptyLabel.textColor = theme.shell.textMuted
         refreshButton.contentTintColor = theme.shell.textMuted
         addButton.contentTintColor = theme.shell.textMuted
+        scrollView.applySidebarScrollerTheme(theme)
         for case let row as WorktreeRowButton in stack.arrangedSubviews {
             row.apply(theme: theme)
         }
