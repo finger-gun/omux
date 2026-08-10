@@ -4581,10 +4581,84 @@ final class OmuxAppShellTests: XCTestCase {
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         rootView.layoutSubtreeIfNeeded()
+        // Presentation-state refreshes are coalesced to the end of the runloop
+        // turn, so drain the main queue before asserting on the deferred result.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 
         let paneView = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
         XCTAssertEqual(runtime.applicationFocusUpdates, [true])
         XCTAssertTrue(window.firstResponder === paneView.focusTarget)
+    }
+
+    @MainActor
+    func testNonStructuralUpdatePreservesTerminalRendererView() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let focusedPaneID = try XCTUnwrap(workspace.focusedPane?.id)
+        let runtimeSurfaceID = try XCTUnwrap(bridge.surface(for: focusedPaneID)?.runtimeSurfaceID)
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let rootView = try XCTUnwrap(windowController.window?.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+
+        let rendererBefore = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
+        let superviewBefore = rendererBefore.superview
+
+        // Non-structural update should mutate the pane card in place, keeping the
+        // existing terminal renderer view attached instead of tearing it down.
+        runtime.emit(.progressReported(state: .active, progress: 51), on: runtimeSurfaceID)
+        windowController.update(workspace: try XCTUnwrap(controller.activeWorkspace()))
+        rootView.layoutSubtreeIfNeeded()
+
+        let rendererAfter = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
+        XCTAssertTrue(rendererBefore === rendererAfter, "non-structural update must reuse the terminal renderer view")
+        XCTAssertNotNil(rendererAfter.superview, "renderer must remain attached after in-place reconfigure")
+        XCTAssertTrue(rendererAfter.superview === superviewBefore, "renderer must stay in the same container")
+    }
+
+    @MainActor
+    func testKeyWindowRefreshIsCoalescedToRunloopTurn() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let controller = WorkspaceController(bridge: bridge, hookRunner: ExternalHookRunner())
+
+        let workspace = try controller.openWorkspace(at: "/tmp")
+        let windowController = WorkspaceWindowController(workspace: workspace, controller: controller)
+        let window = try XCTUnwrap(windowController.window)
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        let rootView = try XCTUnwrap(window.contentViewController?.view)
+        rootView.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        let paneView = try XCTUnwrap(findViews(ofType: HostedTerminalPaneView.self, in: rootView).first)
+
+        // Drop focus and resign key so the next become-key must restore it.
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        _ = window.makeFirstResponder(nil)
+        runtime.clearTrackedPresentationChanges()
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        // The presentation refresh is coalesced to the end of the runloop turn, so
+        // focus is not restored synchronously while the notifications are posted.
+        XCTAssertFalse(
+            window.firstResponder === paneView.focusTarget,
+            "key-window refresh must be deferred, not applied synchronously"
+        )
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(
+            window.firstResponder === paneView.focusTarget,
+            "coalesced refresh must restore terminal focus on the next runloop turn"
+        )
+        XCTAssertEqual(runtime.applicationFocusUpdates, [true])
     }
 
     @MainActor

@@ -791,36 +791,68 @@ final class PaneCardView: NSView {
         windowIsKey: Bool,
         inactiveOpacity: Double
     ) {
-        container.arrangedSubviews.forEach { view in
-            container.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-
         paneRenderer.apply(theme: theme)
         let paneView = paneRenderer.rootPaneView
         paneView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         paneView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        headerView?.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
+
+        // Status text is always updated in place; visibility is toggled without
+        // removing the label from the container. This avoids Auto Layout engine
+        // churn when only the status string changes.
         statusLabel.stringValue = statusText ?? ""
         statusLabel.textColor = theme.shell.textMuted
         statusLabel.isHidden = statusText == nil
 
+        // Desired ordered arrangement: header (optional), status label, pane content.
+        var desired: [NSView] = []
         if let headerView {
-            container.addArrangedSubview(headerView)
-            headerView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+            desired.append(headerView)
+        }
+        desired.append(statusLabel)
+        desired.append(paneView)
 
-        }
-        if statusText != nil {
-            container.addArrangedSubview(statusLabel)
-            statusLabel.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
-        }
-        container.addArrangedSubview(paneView)
-        paneView.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        reconcileArrangedSubviews(to: desired, headerView: headerView)
 
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
         layer?.borderColor = nil
         alphaValue = (focused && windowIsKey) ? 1.0 : inactiveOpacity
+    }
+
+    /// Reconciles the container's arranged subviews to match `desired`, removing
+    /// and re-adding only the views whose identity changed. Views that remain
+    /// identical across configuration keep their existing Auto Layout constraints,
+    /// avoiding the deep `_setLayoutEngine:` recursion that a full teardown causes.
+    private func reconcileArrangedSubviews(to desired: [NSView], headerView: PaneHeaderView?) {
+        // Remove any currently arranged subview that is no longer desired.
+        for view in container.arrangedSubviews where !desired.contains(where: { $0 === view }) {
+            container.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        // Insert (or reorder) desired views into their correct positions. Views
+        // already present at the correct index are left untouched.
+        for (index, view) in desired.enumerated() {
+            let current = container.arrangedSubviews
+            if index < current.count, current[index] === view {
+                continue
+            }
+
+            if current.contains(where: { $0 === view }) {
+                container.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
+
+            container.insertArrangedSubview(view, at: index)
+            activateArrangedConstraints(for: view, isHeader: view === headerView)
+        }
+    }
+
+    private func activateArrangedConstraints(for view: NSView, isHeader: Bool) {
+        if isHeader {
+            view.heightAnchor.constraint(equalToConstant: ShellLayoutMetrics.paneHeaderHeight).isActive = true
+        }
+        view.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
     }
 }
 

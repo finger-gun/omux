@@ -74,6 +74,9 @@ final class WorkspaceShellViewController: NSViewController {
     private var isSidebarVisible: Bool
     private var applicationIsActive: Bool = NSApplication.shared.isActive
     private var windowIsKey: Bool = false
+    private var lastRefreshedWorkspaceID: WorkspaceID?
+    private var pendingPresentationRefresh: Bool = false
+    private var pendingPresentationRefreshRestoresFocus: Bool = false
     private var focusRestoreGeneration: UInt = 0
     private var terminalIconRefreshTimer: Timer?
     private var renderedIconKindByPaneID: [PaneID: OmuxSemanticIcon.Kind] = [:]
@@ -391,13 +394,19 @@ final class WorkspaceShellViewController: NSViewController {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
-        guard windowIsKey == false else {
+        let workspace = controller.activeWorkspace() ?? currentWorkspace
+        // Suppress redundant key-window notifications: if the window was already
+        // key and the active workspace is unchanged since the last refresh, there
+        // is nothing to do. This prevents a full workspace refresh (and its Auto
+        // Layout churn) from firing on no-op key-window events.
+        if windowIsKey, workspace?.id == lastRefreshedWorkspaceID {
             return
         }
+        // Set the presentation state synchronously so that
+        // `currentTerminalSurfacePresentationState()` reports the correct value,
+        // even though the refresh itself is coalesced to the end of the runloop.
         windowIsKey = true
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            refreshTerminalPresentation(for: workspace, restoreFocusIfPossible: true)
-        }
+        scheduleTerminalPresentationRefresh(restoreFocusIfPossible: true)
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
@@ -405,16 +414,12 @@ final class WorkspaceShellViewController: NSViewController {
             return
         }
         windowIsKey = false
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            refreshTerminalPresentation(for: workspace)
-        }
+        scheduleTerminalPresentationRefresh(restoreFocusIfPossible: false)
     }
 
     @objc private func windowPresentationStateDidChange(_ notification: Notification) {
         _ = notification
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            refreshTerminalPresentation(for: workspace)
-        }
+        scheduleTerminalPresentationRefresh(restoreFocusIfPossible: false)
     }
 
     @objc private func applicationPresentationStateDidChange(_ notification: Notification) {
@@ -426,11 +431,31 @@ final class WorkspaceShellViewController: NSViewController {
         default:
             break
         }
-        if let workspace = controller.activeWorkspace() ?? currentWorkspace {
-            refreshTerminalPresentation(
-                for: workspace,
-                restoreFocusIfPossible: notification.name == NSApplication.didBecomeActiveNotification
-            )
+        scheduleTerminalPresentationRefresh(
+            restoreFocusIfPossible: notification.name == NSApplication.didBecomeActiveNotification
+        )
+    }
+
+    /// Coalesces presentation-state-driven refreshes (key window, app active,
+    /// occlusion) so that multiple notifications firing within the same runloop
+    /// turn result in at most one `refreshTerminalPresentation` call.
+    private func scheduleTerminalPresentationRefresh(restoreFocusIfPossible: Bool) {
+        pendingPresentationRefreshRestoresFocus = pendingPresentationRefreshRestoresFocus || restoreFocusIfPossible
+        guard pendingPresentationRefresh == false else {
+            return
+        }
+        pendingPresentationRefresh = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.pendingPresentationRefresh = false
+            let restoreFocus = self.pendingPresentationRefreshRestoresFocus
+            self.pendingPresentationRefreshRestoresFocus = false
+            guard let workspace = self.controller.activeWorkspace() ?? self.currentWorkspace else {
+                return
+            }
+            self.refreshTerminalPresentation(for: workspace, restoreFocusIfPossible: restoreFocus)
         }
     }
 
@@ -443,6 +468,7 @@ final class WorkspaceShellViewController: NSViewController {
                 for: workspace.id,
                 presentationState: currentTerminalSurfacePresentationState()
             )
+            lastRefreshedWorkspaceID = workspace.id
         } catch {
             fputs("warning: failed to refresh terminal presentation state: \(error)\n", stderr)
         }
