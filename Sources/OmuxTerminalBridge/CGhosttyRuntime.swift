@@ -123,6 +123,14 @@ private final class GhosttyHostedSurfaceView: RuntimeTerminalHostView {
                 runtimeSurfaceID: self.runtimeSurfaceID
             )
         }
+        bufferTextProvider = { [weak self] in
+            guard let self else { return "" }
+            return self.runtime?.terminalTextSnapshot(
+                runtimeSurfaceID: self.runtimeSurfaceID,
+                maxBytes: 1024 * 1024,
+                maxLines: 1000
+            ).text ?? ""
+        }
     }
 
     @available(*, unavailable)

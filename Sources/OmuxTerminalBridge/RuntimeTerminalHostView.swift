@@ -23,6 +23,7 @@ class RuntimeTerminalHostView: NSView, RuntimeTerminalInteractionConfiguring {
     var copyHandler: (() -> Void)?
     var pasteHandler: (() -> Void)?
     var selectAllHandler: (() -> Void)?
+    var bufferTextProvider: (() -> String)?
     var mouseButtonHandler: ((ghostty_input_mouse_state_e, Int, KeyModifiers) -> Bool)?
     var mousePositionHandler: ((CGPoint?, KeyModifiers) -> Void)?
     var mouseScrollHandler: ((Double, Double, Bool, NSEvent.Phase) -> Void)?
@@ -544,5 +545,50 @@ enum TerminalDroppedFileText {
             return "''"
         }
         return "'\(path.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+}
+
+extension RuntimeTerminalHostView {
+    // MARK: - Accessibility
+
+    override func isAccessibilityElement() -> Bool { true }
+
+    override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+
+    override func isAccessibilityFocused() -> Bool {
+        isFocusedPane || window?.firstResponder == self
+    }
+
+    override func isAccessibilityEnabled() -> Bool { true }
+
+    override func accessibilityValue() -> Any? {
+        bufferTextProvider?() ?? ""
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        if let selection = selectionProvider?(), selection.length > 0 {
+            return selection.range
+        }
+        return NSRange(location: 0, length: 0)
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        if range.length == 0 {
+            return imeRectProvider?() ?? .zero
+        }
+        return super.accessibilityFrame(for: range)
+    }
+
+    override func accessibilityIdentifier() -> String {
+        guard let paneID = paneID else { return "terminal" }
+        return "terminal-pane-\(paneID.rawValue)"
+    }
+
+    override func accessibilityRoleDescription() -> String? {
+        "terminal"
+    }
+
+    override func accessibilityLabel() -> String? {
+        "terminal"
     }
 }
