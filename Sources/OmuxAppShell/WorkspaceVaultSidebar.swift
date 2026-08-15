@@ -286,6 +286,7 @@ final class WorkspaceVaultSidebarView: SidebarContainerView, NSSearchFieldDelega
         workspacePopup.contentTintColor = theme.shell.textMuted
         agentPopup.contentTintColor = theme.shell.textMuted
         statusLabel.textColor = theme.shell.textMuted
+        scrollView.applySidebarScrollerTheme(theme)
         applySearchFieldTheme()
         applyFilterMenuTheme()
         for case let row as VaultSessionRowButton in stack.arrangedSubviews {

@@ -485,6 +485,7 @@ final class WorkspaceShellViewController: NSViewController {
         view.window?.makeFirstResponder(focusTarget(for: focusedPaneView))
     }
 
+
     func currentTerminalSurfacePresentationState() -> TerminalSurfacePresentationState {
         guard let window = view.window else {
             return TerminalSurfacePresentationState(
