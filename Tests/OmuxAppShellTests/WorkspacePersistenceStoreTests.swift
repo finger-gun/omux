@@ -207,6 +207,74 @@ final class WorkspacePersistenceStoreTests: XCTestCase {
         XCTAssertEqual(fullHiddenPane.terminalState.restoredScrollback?.text, "hidden output")
     }
 
+    func testWorkspacePersistenceResolvesAllPayloadsWhenAnInactiveWorkspaceIsActivated() throws {
+        let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspacePersistenceStoreTests-\(UUID().uuidString)", isDirectory: true)
+        let stateFileURL = root
+            .appendingPathComponent("WorkspaceState", isDirectory: true)
+            .appendingPathComponent("current.json", isDirectory: false)
+        let scrollbackDirectory = root.appendingPathComponent("Scrollback", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let store = WorkspacePersistenceStore(
+            defaults: defaults,
+            stateFileURL: stateFileURL,
+            scrollbackPayloadStore: WorkspaceScrollbackPayloadStore(directoryURL: scrollbackDirectory)
+        )
+        let session = SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/project")
+        let activePane = Pane(
+            title: "active",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "active output", truncated: false))
+        )
+        let inactiveFocusedPane = Pane(
+            title: "inactive focused",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "focused output", truncated: false))
+        )
+        let inactiveBackgroundPane = Pane(
+            title: "inactive background",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "background output", truncated: false))
+        )
+        let inactiveModalPane = Pane(
+            title: "inactive modal",
+            session: session,
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(text: "modal output", truncated: false))
+        )
+        let activeTab = Tab(title: "Active", panes: [activePane], focusedPaneID: activePane.id)
+        let inactiveFocusedTab = Tab(title: "Focused", panes: [inactiveFocusedPane], focusedPaneID: inactiveFocusedPane.id)
+        let inactiveBackgroundTab = Tab(title: "Background", panes: [inactiveBackgroundPane], focusedPaneID: inactiveBackgroundPane.id)
+        let modal = FloatingPaneModal(paneStack: PaneStack(panes: [inactiveModalPane], focusedPaneID: inactiveModalPane.id))
+        let activeWorkspace = Workspace(generatedName: "Active", rootPath: "/tmp/active", tabs: [activeTab], focusedTabID: activeTab.id)
+        let inactiveWorkspace = Workspace(
+            generatedName: "Inactive",
+            rootPath: "/tmp/inactive",
+            tabs: [inactiveFocusedTab, inactiveBackgroundTab],
+            focusedTabID: inactiveFocusedTab.id,
+            floatingPaneModals: [modal],
+            focusedFloatingPaneModalID: modal.id
+        )
+
+        store.save(.init(workspaces: [activeWorkspace, inactiveWorkspace], activeWorkspaceID: activeWorkspace.id))
+
+        let startupSnapshot = try XCTUnwrap(store.load(scrollbackPayloadResolution: .initiallyVisible))
+        let startupInactiveWorkspace = try XCTUnwrap(startupSnapshot.workspaces.first { $0.id == inactiveWorkspace.id })
+        XCTAssertEqual(startupInactiveWorkspace.panes.compactMap { $0.terminalState.restoredScrollback?.text }, ["", "", ""])
+
+        let hydratedWorkspace = store.resolveScrollbackPayloads(in: startupInactiveWorkspace)
+        XCTAssertEqual(
+            hydratedWorkspace.panes.compactMap { $0.terminalState.restoredScrollback?.text }.sorted(),
+            ["background output", "focused output", "modal output"]
+        )
+    }
+
     func testWorkspacePersistenceStorePreservesFloatingPaneModalsWhenPersistingScrollbackPayloads() throws {
         let suiteName = "WorkspacePersistenceStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

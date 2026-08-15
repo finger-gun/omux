@@ -209,16 +209,18 @@ final class WorkspaceWindowController: NSWindowController {
     func update(workspace: Workspace) {
         let displayedWorkspace = controller.activeWorkspace() ?? workspace
         let presentationState = rootViewController.currentTerminalSurfacePresentationState()
+        let hydratedWorkspace: Workspace
         do {
-            _ = try controller.ensureVisibleTerminalSurfaces(
+            hydratedWorkspace = try controller.ensureVisibleTerminalSurfaces(
                 for: displayedWorkspace.id,
                 presentationState: presentationState
-            )
+            ) ?? displayedWorkspace
         } catch {
             fputs("warning: failed to ensure visible terminal surfaces: \(error)\n", stderr)
+            hydratedWorkspace = displayedWorkspace
         }
-        window?.title = displayedWorkspace.name
-        rootViewController.update(workspace: displayedWorkspace)
+        window?.title = hydratedWorkspace.name
+        rootViewController.update(workspace: hydratedWorkspace)
     }
 
     func updateTheme(_ theme: WorkspaceShellTheme) {

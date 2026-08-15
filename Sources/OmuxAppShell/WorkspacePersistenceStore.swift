@@ -4,6 +4,7 @@ import OmuxCore
 @MainActor
 protocol WorkspacePersistenceStoring: AnyObject {
     func load(scrollbackPayloadResolution: WorkspaceScrollbackPayloadResolution) -> WorkspacePersistenceSnapshot?
+    func resolveScrollbackPayloads(in workspace: Workspace) -> Workspace
     func save(_ snapshot: WorkspacePersistenceSnapshot?)
 }
 
@@ -88,6 +89,10 @@ final class WorkspacePersistenceStore: WorkspacePersistenceStoring {
 
         save(migratedSnapshot)
         return migratedSnapshot
+    }
+
+    func resolveScrollbackPayloads(in workspace: Workspace) -> Workspace {
+        scrollbackPayloadStore?.resolvePayloads(in: workspace) ?? workspace
     }
 
     func save(_ snapshot: WorkspacePersistenceSnapshot?) {
@@ -395,7 +400,7 @@ final class WorkspaceScrollbackPayloadStore {
         return updatedPane
     }
 
-    private func resolvePayloads(in workspace: Workspace) -> Workspace {
+    func resolvePayloads(in workspace: Workspace) -> Workspace {
         Workspace(
             id: workspace.id,
             generatedName: workspace.generatedName,
@@ -474,6 +479,13 @@ final class WorkspaceScrollbackPayloadStore {
               let scrollback = pane.terminalState.restoredScrollback,
               let storageIdentifier = scrollback.storageIdentifier
         else {
+            return pane
+        }
+
+        // A non-empty payload has already been hydrated into memory. Do not
+        // re-read it when the workspace is revisited, since it may now have
+        // live terminal output associated with it.
+        guard scrollback.text.isEmpty else {
             return pane
         }
 

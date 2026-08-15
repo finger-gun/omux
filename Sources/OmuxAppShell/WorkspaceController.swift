@@ -126,6 +126,7 @@ public final class WorkspaceController: @unchecked Sendable {
     private var workspaceShellEnvironment: WorkspaceShellEnvironment
     private let scrollbackReplayStore: ScrollbackReplayStore?
     private let scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore?
+    private let scrollbackPayloadResolver: (Workspace) -> Workspace
     private let recentlyClosedStore: RecentlyClosedWorkspaceStore
     private var defaultWorkspaceRootPath: String
     private var workspaces: [Workspace] = [] {
@@ -190,6 +191,7 @@ public final class WorkspaceController: @unchecked Sendable {
         aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
+        scrollbackPayloadResolver: @escaping (Workspace) -> Workspace = { $0 },
         progressIdleClearDelay: TimeInterval = 3,
         terminalStateChangeCoalescingDelay: TimeInterval = 0.05,
         terminalDisplayTitleUpdateMinimumInterval: TimeInterval = 0.5
@@ -207,6 +209,7 @@ public final class WorkspaceController: @unchecked Sendable {
             aiStatusConfiguration: aiStatusConfiguration,
             scrollbackReplayStore: scrollbackReplayStore,
             scrollbackReplayWrapperStore: scrollbackReplayWrapperStore,
+            scrollbackPayloadResolver: scrollbackPayloadResolver,
             progressIdleClearDelay: progressIdleClearDelay,
             terminalStateChangeCoalescingDelay: terminalStateChangeCoalescingDelay,
             terminalDisplayTitleUpdateMinimumInterval: terminalDisplayTitleUpdateMinimumInterval
@@ -226,6 +229,7 @@ public final class WorkspaceController: @unchecked Sendable {
         aiStatusConfiguration: OmuxConfigPlugins.AIStatus = OmuxConfigPlugins.AIStatus(enabled: false),
         scrollbackReplayStore: ScrollbackReplayStore? = nil,
         scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore? = nil,
+        scrollbackPayloadResolver: @escaping (Workspace) -> Workspace = { $0 },
         progressIdleClearDelay: TimeInterval = 3,
         terminalStateChangeCoalescingDelay: TimeInterval = 0.05,
         terminalDisplayTitleUpdateMinimumInterval: TimeInterval = 0.5
@@ -242,6 +246,7 @@ public final class WorkspaceController: @unchecked Sendable {
         self.aiStatusConfiguration = aiStatusConfiguration
         self.scrollbackReplayStore = scrollbackReplayStore
         self.scrollbackReplayWrapperStore = scrollbackReplayWrapperStore
+        self.scrollbackPayloadResolver = scrollbackPayloadResolver
         self.recentlyClosedStore = recentlyClosedStore
         self.defaultWorkspaceRootPath = defaultWorkspaceRootPath
         self.progressIdleClearDelay = progressIdleClearDelay
@@ -547,19 +552,52 @@ public final class WorkspaceController: @unchecked Sendable {
         presentationState: TerminalSurfacePresentationState = .visible
     ) throws -> Workspace? {
         lock.lock()
-        guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else {
+        guard let workspaceIndex = workspaces.firstIndex(where: { $0.id == workspaceID }) else {
             lock.unlock()
             return nil
         }
+        let workspace = workspaces[workspaceIndex]
         lock.unlock()
 
-        try ensureTerminalSurfaces(in: workspace)
+        let hydratedWorkspace = scrollbackPayloadResolver(workspace)
+        let resolvedWorkspace: Workspace
+
+        if hydratedWorkspace != workspace {
+            lock.lock()
+            if let currentWorkspaceIndex = workspaces.firstIndex(where: { $0.id == workspaceID }) {
+                var currentWorkspace = workspaces[currentWorkspaceIndex]
+                
+                for hydratedPane in hydratedWorkspace.panes {
+                    guard let originalPane = workspace.panes.first(where: { $0.id == hydratedPane.id }) else {
+                        continue
+                    }
+                    
+                    if hydratedPane.terminalState.restoredScrollback != originalPane.terminalState.restoredScrollback {
+                        _ = currentWorkspace.updatePane(hydratedPane.id) { currentPane in
+                            if currentPane.terminalState.restoredScrollback == originalPane.terminalState.restoredScrollback {
+                                currentPane.terminalState.restoredScrollback = hydratedPane.terminalState.restoredScrollback
+                            }
+                        }
+                    }
+                }
+                
+                workspaces[currentWorkspaceIndex] = currentWorkspace
+                resolvedWorkspace = currentWorkspace
+            } else {
+                resolvedWorkspace = hydratedWorkspace
+            }
+            lock.unlock()
+        } else {
+            resolvedWorkspace = hydratedWorkspace
+        }
+
+        try ensureTerminalSurfaces(in: resolvedWorkspace)
         bridge.setApplicationFocused(presentationState.runtimeIsFocused)
         reconcileTerminalSurfaceVisibility(
             activeWorkspaceID: workspaceID,
             presentationState: presentationState
         )
-        return workspace
+        return resolvedWorkspace
     }
 
     private func launchSession(for pane: Pane, workspace: Workspace) throws -> SessionDescriptor {

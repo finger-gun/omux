@@ -3268,6 +3268,58 @@ final class OmuxAppShellTests: XCTestCase {
         XCTAssertNil(runtime.visibilityBySurface[runtimeSurfaceB])
     }
 
+    func testWorkspaceActivationHydratesInactiveWorkspaceScrollbackBeforeAttachingSurface() throws {
+        let runtime = ActionEmittingGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+        let activePane = Pane(title: "active", session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/active"))
+        let inactivePane = Pane(
+            title: "inactive",
+            session: SessionDescriptor(shell: "/bin/zsh", workingDirectory: "/tmp/inactive"),
+            terminalState: PaneTerminalState(restoredScrollback: PaneScrollbackSnapshot(
+                text: "",
+                truncated: false,
+                storageIdentifier: "inactive/pane.ansi"
+            ))
+        )
+        let activeTab = Tab(title: "Active", panes: [activePane], focusedPaneID: activePane.id)
+        let inactiveTab = Tab(title: "Inactive", panes: [inactivePane], focusedPaneID: inactivePane.id)
+        let activeWorkspace = Workspace(generatedName: "Active", rootPath: "/tmp/active", tabs: [activeTab], focusedTabID: activeTab.id)
+        let inactiveWorkspace = Workspace(generatedName: "Inactive", rootPath: "/tmp/inactive", tabs: [inactiveTab], focusedTabID: inactiveTab.id)
+        var resolvedWorkspaceIDs: [WorkspaceID] = []
+        let controller = WorkspaceController(
+            bridge: bridge,
+            hookRunner: ExternalHookRunner(),
+            scrollbackPayloadResolver: { workspace in
+                resolvedWorkspaceIDs.append(workspace.id)
+                guard workspace.id == inactiveWorkspace.id else {
+                    return workspace
+                }
+                var hydratedWorkspace = workspace
+                _ = hydratedWorkspace.updatePane(inactivePane.id) { pane in
+                    pane.terminalState.restoredScrollback = PaneScrollbackSnapshot(
+                        text: "restored inactive output",
+                        truncated: false,
+                        storageIdentifier: "inactive/pane.ansi"
+                    )
+                }
+                return hydratedWorkspace
+            }
+        )
+
+        _ = try XCTUnwrap(controller.restorePersistedState(
+            .init(workspaces: [activeWorkspace, inactiveWorkspace], activeWorkspaceID: activeWorkspace.id)
+        ))
+        XCTAssertTrue(resolvedWorkspaceIDs.isEmpty)
+
+        _ = controller.restore(workspaceID: inactiveWorkspace.id)
+        let hydratedWorkspace = try XCTUnwrap(controller.ensureVisibleTerminalSurfaces(for: inactiveWorkspace.id))
+
+        XCTAssertEqual(resolvedWorkspaceIDs, [inactiveWorkspace.id])
+        XCTAssertEqual(hydratedWorkspace.focusedPane?.terminalState.restoredScrollback?.text, "restored inactive output")
+        XCTAssertEqual(controller.activeWorkspace()?.focusedPane?.terminalState.restoredScrollback?.text, "restored inactive output")
+        XCTAssertNotNil(bridge.surface(for: inactivePane.id))
+    }
+
     func testPaneStackVisibilitySwitchHidesInactivePaneTabSurface() throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let bridge = GhosttyTerminalBridge(runtime: runtime)

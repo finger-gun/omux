@@ -92,6 +92,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             registry: UserHookDirectoryDiscovery.registry(in: OmuxConfigPaths.hooksDirectoryURL),
             executionMode: .asynchronous
         )
+        let workspacePersistenceStore = WorkspacePersistenceStore.shared
         let workspaceController = WorkspaceController(
             bridge: bridge,
             hookRunner: hookRunner,
@@ -103,7 +104,10 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             markdownPreviewConfiguration: preparedConfiguration.markdownPreview,
             aiStatusConfiguration: preparedConfiguration.aiStatus,
             scrollbackReplayStore: ScrollbackReplayStore(directoryURL: Self.appReplayDirectory()),
-            scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory())
+            scrollbackReplayWrapperStore: ScrollbackReplayWrapperStore(directoryURL: Self.appReplayDirectory()),
+            scrollbackPayloadResolver: { workspace in
+                workspacePersistenceStore.resolveScrollbackPayloads(in: workspace)
+            }
         )
         self.workspaceController = workspaceController
         let vaultStore: VaultStore?
@@ -126,7 +130,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             extensionPaneActionService: extensionPaneActionService,
             vaultStore: vaultStore
         )
-        self.workspacePersistenceStore = WorkspacePersistenceStore.shared
+        self.workspacePersistenceStore = workspacePersistenceStore
         self.initialTheme = preparedConfiguration.theme
         self.autoCheckUpdate = preparedConfiguration.autoCheckUpdate
         self.vaultConfiguration = preparedConfiguration.agentSessions
