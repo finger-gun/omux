@@ -2,6 +2,25 @@
 
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
+
+## 0.23.0
+
+### Added
+
+- Added accessibility support for terminal panes, including readable terminal text, selection ranges, stable pane identifiers, and terminal roles for assistive tools.
+
+### Changed
+
+- Improved sidebar scrollbar rendering with theme-aware colors and more compact indicators.
+- Improved pane updates so unchanged terminal views remain attached during non-structural refreshes.
+- Coalesced rapid window and application focus updates to reduce redundant workspace rendering and Auto Layout work.
+- Built sidebar context menus lazily and reused unchanged sidebar rows during refreshes.
+
+### Fixed
+
+- Fixed inactive workspace activation so persisted scrollback is hydrated before terminal surfaces attach.
+- Fixed redundant key-window refreshes that could cause excessive layout churn and application hangs.
+
 ## 0.22.0
 
 ### Added
