@@ -3,6 +3,18 @@
 OpenMUX release notes are committed here before tagging a release. Use `Scripts/check-changes-since-release.sh` to inspect changes since the latest `v*` tag, then use `Scripts/prepare-release.sh <version>` with a reviewed changelog body to prepare the next release.
 
 
+
+## 0.23.1
+
+### Fixed
+
+- Fixed workspace-sidebar updates that could trigger excessive Auto Layout work and make OpenMUX unresponsive during frequent terminal state changes.
+- Coalesced burst workspace updates so only the latest state is rendered per event-loop turn.
+
+### Changed
+
+- Added terminal resource-pressure diagnostics to help identify abnormal memory growth in long-running sessions without interrupting active panes.
+
 ## 0.23.0
 
 ### Added
