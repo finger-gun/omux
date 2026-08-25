@@ -192,9 +192,34 @@ final class OmuxTerminalBridgeTests: XCTestCase {
         XCTAssertEqual(surface.paneID, pane.id)
         XCTAssertEqual(attachment.sessionID, session.id)
         XCTAssertEqual(bridge.attachedSession(for: pane.id), session.id)
+        XCTAssertEqual(bridge.resourceSnapshot().liveSurfaceCount, 1)
+        XCTAssertEqual(bridge.resourceSnapshot().attachedSessionCount, 1)
+        XCTAssertEqual(bridge.resourceSnapshot().paneIDs, [pane.id])
 
         try bridge.teardown(paneID: pane.id)
         XCTAssertNil(bridge.surface(for: pane.id))
+        XCTAssertEqual(bridge.resourceSnapshot().liveSurfaceCount, 0)
+        XCTAssertEqual(bridge.resourceSnapshot().attachedSessionCount, 0)
+        XCTAssertEqual(bridge.resourceSnapshot().paneIDs, [])
+    }
+
+    func testBridgeResourceSnapshotReturnsToBaselineAfterRepeatedSurfaceLifecycle() throws {
+        let runtime = InspectableGhosttyRuntime()
+        let bridge = GhosttyTerminalBridge(runtime: runtime)
+
+        for index in 0 ..< 12 {
+            let session = SessionDescriptor(shell: "/bin/sh", workingDirectory: "/tmp/\(index)")
+            let pane = Pane(title: "Pane \(index)", session: session)
+            _ = try bridge.attach(session: session, to: pane)
+            bridge.setHostedSurfaceVisible(paneID: pane.id, isVisible: index.isMultiple(of: 2))
+            try bridge.teardown(paneID: pane.id)
+        }
+
+        let snapshot = bridge.resourceSnapshot()
+        XCTAssertEqual(snapshot.liveSurfaceCount, 0)
+        XCTAssertEqual(snapshot.attachedSessionCount, 0)
+        XCTAssertEqual(snapshot.visibleSurfaceCount, 0)
+        XCTAssertTrue(snapshot.paneIDs.isEmpty)
     }
 
     func testBridgeMarksSurfaceVisibilityWithoutDestroyingSession() throws {

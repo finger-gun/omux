@@ -55,6 +55,8 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var workspaceJumpMenuItems: [NSMenuItem] = []
     private var keyBindingRegistry: OpenMUXKeyBindingRegistry
     private var scrollbackAutosaveTask: Task<Void, Never>?
+    private var pendingWorkspaceRender: Workspace?
+    private var workspaceRenderScheduled = false
     private lazy var layoutPersistenceCoordinator = WorkspaceLayoutPersistenceCoordinator { [weak self] in
         self?.persistWorkspaceLayoutStateNow()
     }
@@ -147,8 +149,7 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         workspaceController.onChange = { [weak self] workspace in
             self?.scheduleWorkspaceLayoutStatePersistence()
             Task { @MainActor in
-                self?.windowController?.update(workspace: workspace)
-                self?.refreshMenuValidation()
+                self?.scheduleWorkspaceRender(workspace)
             }
         }
         workspaceController.onRestoreOffer = { [weak self, weak workspaceController] entry in
@@ -305,6 +306,30 @@ public final class OpenMUXAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             }
         } catch {
             assertionFailure("Failed to launch OpenMUX foundation: \(error)")
+        }
+    }
+
+    /// Workspace mutations may be emitted in bursts by terminal state changes.
+    /// Render only the newest state in the current runloop turn; terminal
+    /// surfaces themselves are still hydrated synchronously by the eventual
+    /// window update.
+    private func scheduleWorkspaceRender(_ workspace: Workspace) {
+        pendingWorkspaceRender = workspace
+        guard workspaceRenderScheduled == false else {
+            return
+        }
+        workspaceRenderScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.workspaceRenderScheduled = false
+            guard let workspace = self.pendingWorkspaceRender else {
+                return
+            }
+            self.pendingWorkspaceRender = nil
+            self.windowController?.update(workspace: workspace)
+            self.refreshMenuValidation()
         }
     }
 

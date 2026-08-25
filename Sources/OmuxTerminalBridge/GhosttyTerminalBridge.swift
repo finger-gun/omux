@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import OmuxConfig
 import OmuxCore
@@ -23,6 +24,30 @@ public struct TerminalSessionAttachment: Equatable, Sendable {
         self.sessionID = sessionID
         self.paneID = paneID
         self.runtimeSurfaceID = runtimeSurfaceID
+    }
+}
+
+/// A bridge-owned snapshot used to diagnose long-running terminal resource
+/// retention without exposing any libghostty implementation details.
+public struct TerminalResourceSnapshot: Equatable, Sendable {
+    public let physicalFootprintBytes: UInt64?
+    public let liveSurfaceCount: Int
+    public let attachedSessionCount: Int
+    public let visibleSurfaceCount: Int
+    public let paneIDs: [PaneID]
+
+    public init(
+        physicalFootprintBytes: UInt64?,
+        liveSurfaceCount: Int,
+        attachedSessionCount: Int,
+        visibleSurfaceCount: Int,
+        paneIDs: [PaneID]
+    ) {
+        self.physicalFootprintBytes = physicalFootprintBytes
+        self.liveSurfaceCount = liveSurfaceCount
+        self.attachedSessionCount = attachedSessionCount
+        self.visibleSurfaceCount = visibleSurfaceCount
+        self.paneIDs = paneIDs
     }
 }
 
@@ -411,6 +436,8 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
     private var applicationFocused: Bool?
     private var observers: [PaneID: [UUID: @Sendable (TerminalSessionSnapshot) -> Void]] = [:]
     private var terminalActionObservers: [UUID: @Sendable (TerminalActionEvent) -> Void] = [:]
+    private var lastReportedResourceFootprintBytes: UInt64 = 0
+    private static let resourcePressureFootprintBytes: UInt64 = 2 * 1_024 * 1_024 * 1_024
 
     public init(
         dependency: GhosttyPinnedDependency = .foundationDefault(),
@@ -428,6 +455,21 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
     public var pinnedDependency: GhosttyPinnedDependency {
         dependency
+    }
+
+    /// Returns only OpenMUX-native ownership counts and process footprint. This
+    /// is intentionally diagnostic: it never tears down or restarts sessions.
+    public func resourceSnapshot() -> TerminalResourceSnapshot {
+        lock.lock()
+        let snapshot = TerminalResourceSnapshot(
+            physicalFootprintBytes: Self.currentPhysicalFootprintBytes(),
+            liveSurfaceCount: surfaces.count,
+            attachedSessionCount: sessionsByPane.count,
+            visibleSurfaceCount: visibilityByPane.values.filter { $0 }.count,
+            paneIDs: surfaces.keys.sorted { $0.rawValue < $1.rawValue }
+        )
+        lock.unlock()
+        return snapshot
     }
 
     @discardableResult
@@ -484,6 +526,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         surfaces[pane.id] = descriptor
         visibilityByPane[pane.id] = true
         lock.unlock()
+        reportResourcePressureIfNeeded(context: "create", paneID: pane.id)
         return descriptor
     }
 
@@ -501,6 +544,7 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
         lock.unlock()
 
         publishSnapshot(for: pane.id)
+        reportResourcePressureIfNeeded(context: "attach", paneID: pane.id)
 
         return TerminalSessionAttachment(
             sessionID: runtimeSession.id,
@@ -525,6 +569,46 @@ public final class GhosttyTerminalBridge: @unchecked Sendable {
 
         _ = sessionState
         try runtime.destroySurface(runtimeSurfaceID: surface.runtimeSurfaceID)
+        reportResourcePressureIfNeeded(context: "teardown", paneID: paneID)
+    }
+
+    private func reportResourcePressureIfNeeded(context: String, paneID: PaneID) {
+        let snapshot = resourceSnapshot()
+        guard let footprint = snapshot.physicalFootprintBytes,
+              footprint >= Self.resourcePressureFootprintBytes
+        else {
+            return
+        }
+
+        lock.lock()
+        let shouldReport = footprint >= lastReportedResourceFootprintBytes + Self.resourcePressureFootprintBytes
+            || lastReportedResourceFootprintBytes == 0
+        if shouldReport {
+            lastReportedResourceFootprintBytes = footprint
+        }
+        lock.unlock()
+        guard shouldReport else {
+            return
+        }
+
+        let gibibytes = Double(footprint) / Double(1_024 * 1_024 * 1_024)
+        diagnostics(
+            "warning: terminal resource pressure context=\(context) paneID=\(paneID.rawValue) "
+                + "footprintGiB=\(String(format: "%.2f", gibibytes)) "
+                + "liveSurfaces=\(snapshot.liveSurfaceCount) attachedSessions=\(snapshot.attachedSessionCount) "
+                + "visibleSurfaces=\(snapshot.visibleSurfaceCount) panes=\(snapshot.paneIDs.map(\.rawValue).joined(separator: ","))\n"
+        )
+    }
+
+    private static func currentPhysicalFootprintBytes() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { integerPointer in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), integerPointer, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? info.phys_footprint : nil
     }
 
     public func surface(for paneID: PaneID) -> TerminalSurfaceDescriptor? {

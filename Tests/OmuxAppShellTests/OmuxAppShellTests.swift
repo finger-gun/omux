@@ -5926,6 +5926,77 @@ final class OmuxAppShellTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceSidebarMutatesChangedRowsWithoutReplacingThem() throws {
+        let sidebar = WorkspaceSidebarView(frame: NSRect(x: 0, y: 0, width: 224, height: 400))
+        let workspaceID = WorkspaceID()
+        let paneID = PaneID()
+        let baseItems = [
+            SidebarItem(
+                kind: .workspace,
+                identifier: workspaceID.rawValue,
+                icon: nil,
+                progress: nil,
+                title: "Workspace",
+                subtitle: nil,
+                isActive: true,
+                isExpanded: true,
+                action: .workspace(workspaceID),
+                contextMenuProvider: nil
+            ),
+            SidebarItem(
+                kind: .terminal,
+                identifier: paneID.rawValue,
+                icon: nil,
+                progress: nil,
+                title: "shell",
+                subtitle: "~/project",
+                isActive: true,
+                action: .pane(paneID),
+                contextMenuProvider: nil
+            ),
+        ]
+        func render(_ items: [SidebarItem]) {
+            sidebar.render(
+                workspaceItems: items,
+                isWorkspacesCollapsed: false,
+                theme: .defaultTheme,
+                onSelectWorkspace: { _ in },
+                onCreateWorkspace: {},
+                onDeleteWorkspace: {},
+                canDeleteWorkspace: true,
+                updateAvailability: nil,
+                onMoveWorkspace: { _, _ in },
+                onToggleWorkspaceExpansion: { _ in },
+                onRenameWorkspace: { _, _ in },
+                onSelectPane: { _ in },
+                onToggleWorkspacesCollapse: {}
+            )
+        }
+
+        render(baseItems)
+        let buttonsBefore = findViews(ofType: SidebarItemButton.self, in: sidebar)
+        let updatedItems = [baseItems[0], SidebarItem(
+            kind: .terminal,
+            identifier: paneID.rawValue,
+            icon: nil,
+            progress: .init(state: .active, value: 42),
+            title: "build",
+            subtitle: "~/project",
+            isActive: true,
+            action: .pane(paneID),
+            contextMenuProvider: nil
+        )]
+
+        render(updatedItems)
+        let buttonsAfter = findViews(ofType: SidebarItemButton.self, in: sidebar)
+
+        XCTAssertEqual(buttonsBefore.count, 2)
+        XCTAssertEqual(buttonsAfter.count, 2)
+        XCTAssertTrue(zip(buttonsBefore, buttonsAfter).allSatisfy { $0 === $1 })
+        XCTAssertNotNil(findLabelView(withString: "build", in: sidebar))
+    }
+
+    @MainActor
     func testVaultIndexRefreshDoesNotResnapshotWorkspaceSidebarText() async throws {
         let runtime = ActionEmittingGhosttyRuntime()
         let controller = WorkspaceController(

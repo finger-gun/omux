@@ -375,6 +375,8 @@ final class WorkspaceSidebarSectionView: NSView {
     private let emptyLabel = NSTextField(labelWithString: "")
     private var accessoryButtons: [ChromePillButton] = []
     private var itemButtons: [SidebarItemButton] = []
+    private var itemButtonsByKey: [String: SidebarItemButton] = [:]
+    private var itemHeightConstraintsByKey: [String: NSLayoutConstraint] = [:]
     private var workspaceButtons: [SidebarItemButton] = []
     private var workspaceDragGroups: [WorkspaceDragGroup] = []
     private var currentTheme: WorkspaceShellTheme?
@@ -463,22 +465,42 @@ final class WorkspaceSidebarSectionView: NSView {
            renderSignature == currentRenderSignature {
             return
         }
-        draggingWorkspaceID = nil
 
-        for button in itemButtons {
-            itemStack.removeArrangedSubview(button)
-            button.removeFromSuperview()
+        // A controller update can arrive while a workspace drag is in progress
+        // (for example from a terminal title or progress event). Reconciling
+        // the rows here would invalidate the drag's temporary ordering, so leave
+        // the current view tree alone until the drop produces its next update.
+        guard draggingWorkspaceID == nil else {
+            return
         }
-        itemButtons.removeAll()
-        workspaceButtons.removeAll()
-        workspaceDragGroups.removeAll()
 
+        reconcileAccessoryButtons(accessories, theme: theme)
+        reconcileItemButtons(
+            items: items,
+            theme: theme,
+            onMoveWorkspace: onMoveWorkspace,
+            onToggleWorkspaceExpansion: onToggleWorkspaceExpansion,
+            onRenameWorkspace: onRenameWorkspace,
+            buttonHandler: buttonHandler
+        )
+        currentRenderSignature = renderSignature
+
+        emptyLabel.isHidden = !items.isEmpty
+        itemStack.isHidden = items.isEmpty
+    }
+
+    private func reconcileAccessoryButtons(
+        _ accessories: [SidebarSectionAccessory],
+        theme: WorkspaceShellTheme
+    ) {
+        // Workspace sections currently have no accessories. Keep this isolated
+        // from row reconciliation so a future accessory never forces all rows
+        // through an Auto Layout teardown.
         for accessoryButton in accessoryButtons {
             headerView.removeArrangedSubview(accessoryButton)
             accessoryButton.removeFromSuperview()
         }
         accessoryButtons.removeAll()
-        currentRenderSignature = renderSignature
         for accessory in accessories {
             let button = ChromePillButton()
             switch accessory.content {
@@ -492,66 +514,121 @@ final class WorkspaceSidebarSectionView: NSView {
             accessoryButtons.append(button)
             headerView.addArrangedSubview(button)
         }
+    }
 
-        emptyLabel.isHidden = !items.isEmpty
-        itemStack.isHidden = items.isEmpty
+    private func reconcileItemButtons(
+        items: [SidebarItem],
+        theme: WorkspaceShellTheme,
+        onMoveWorkspace: @escaping (WorkspaceID, Int) -> Void,
+        onToggleWorkspaceExpansion: @escaping (WorkspaceID) -> Void,
+        onRenameWorkspace: @escaping (WorkspaceID, String) -> Void,
+        buttonHandler: @escaping (SidebarItem) -> Void
+    ) {
+        let desiredKeys = Set(items.map(Self.itemKey(for:)))
+        let removedKeys = itemButtonsByKey.keys.filter { !desiredKeys.contains($0) }
+        for key in removedKeys {
+            guard let button = itemButtonsByKey[key] else {
+                continue
+            }
+            itemStack.removeArrangedSubview(button)
+            button.removeFromSuperview()
+            itemHeightConstraintsByKey.removeValue(forKey: key)?.isActive = false
+            itemButtonsByKey.removeValue(forKey: key)
+        }
+
+        workspaceButtons.removeAll(keepingCapacity: true)
+        workspaceDragGroups.removeAll(keepingCapacity: true)
+        var desiredButtons: [SidebarItemButton] = []
 
         for item in items {
-            let button = SidebarItemButton()
-            button.configure(item: item, theme: theme)
-            button.onPress = {
-                buttonHandler(item)
-            }
-            button.onToggleExpansion = {
-                if let workspaceID = item.workspaceID {
-                    onToggleWorkspaceExpansion(workspaceID)
-                }
-            }
-            button.contextMenuProvider = item.contextMenuProvider
-            if let workspaceID = item.workspaceID {
-                button.workspaceID = workspaceID
-                button.onRename = { newName in
-                    onRenameWorkspace(workspaceID, newName)
-                }
-                button.onBeginRename = { [weak button] in
-                    button?.beginInlineRename()
-                }
-                // Override context menu to wire Rename… to inline rename
-                let itemProvider = item.contextMenuProvider
-                button.contextMenuProvider = { [weak button] in
-                    guard let menu = itemProvider?() else { return nil }
-                    if let renameItem = menu.item(withTitle: "Rename…") {
-                        renameItem.onSelect { [weak button] in
-                            button?.beginInlineRename()
-                        }
-                    }
-                    return menu
-                }
-                workspaceButtons.append(button)
-                workspaceDragGroups.append(WorkspaceDragGroup(workspaceID: workspaceID, buttons: [button]))
-                button.onDragStarted = { [weak self] button, _ in
-                    self?.beginWorkspaceDrag(for: button)
-                }
-                button.onDragMoved = { [weak self] button, event in
-                    self?.updateWorkspaceDrag(for: button, with: event)
-                }
-                button.onDragEnded = { [weak self] button, _ in
-                    self?.finishWorkspaceDrag(for: button)
-                }
+            let key = Self.itemKey(for: item)
+            let button: SidebarItemButton
+            if let existing = itemButtonsByKey[key] {
+                button = existing
             } else {
-                button.workspaceID = nil
-                button.onDragStarted = nil
-                button.onDragMoved = nil
-                button.onDragEnded = nil
-                if let lastGroupIndex = workspaceDragGroups.indices.last {
-                    workspaceDragGroups[lastGroupIndex].buttons.append(button)
-                }
+                button = SidebarItemButton()
+                itemButtonsByKey[key] = button
+                itemStack.addArrangedSubview(button)
+                button.widthAnchor.constraint(equalTo: itemStack.widthAnchor).isActive = true
+                let heightConstraint = button.heightAnchor.constraint(equalToConstant: item.rowHeight)
+                heightConstraint.isActive = true
+                itemHeightConstraintsByKey[key] = heightConstraint
             }
-            itemStack.addArrangedSubview(button)
-            button.widthAnchor.constraint(equalTo: itemStack.widthAnchor).isActive = true
-            button.heightAnchor.constraint(equalToConstant: item.rowHeight).isActive = true
-            itemButtons.append(button)
+
+            itemHeightConstraintsByKey[key]?.constant = item.rowHeight
+            configure(
+                button: button,
+                for: item,
+                theme: theme,
+                onToggleWorkspaceExpansion: onToggleWorkspaceExpansion,
+                onRenameWorkspace: onRenameWorkspace,
+                buttonHandler: buttonHandler
+            )
+            desiredButtons.append(button)
         }
+
+        // Existing views are reordered only when their sequence changed. They
+        // remain in the hierarchy, preserving their constraints and responder
+        // state instead of tearing down every row for a metadata update.
+        if itemStack.arrangedSubviews.elementsEqual(desiredButtons, by: { $0 === $1 }) == false {
+            for button in desiredButtons {
+                itemStack.removeArrangedSubview(button)
+            }
+            for (index, button) in desiredButtons.enumerated() {
+                itemStack.insertArrangedSubview(button, at: index)
+            }
+        }
+
+        itemButtons = desiredButtons
+        reorderHandler = onMoveWorkspace
+    }
+
+    private func configure(
+        button: SidebarItemButton,
+        for item: SidebarItem,
+        theme: WorkspaceShellTheme,
+        onToggleWorkspaceExpansion: @escaping (WorkspaceID) -> Void,
+        onRenameWorkspace: @escaping (WorkspaceID, String) -> Void,
+        buttonHandler: @escaping (SidebarItem) -> Void
+    ) {
+        button.configure(item: item, theme: theme)
+        button.onPress = { buttonHandler(item) }
+        button.onToggleExpansion = {
+            if let workspaceID = item.workspaceID {
+                onToggleWorkspaceExpansion(workspaceID)
+            }
+        }
+        button.contextMenuProvider = item.contextMenuProvider
+        if let workspaceID = item.workspaceID {
+            button.workspaceID = workspaceID
+            button.onRename = { newName in onRenameWorkspace(workspaceID, newName) }
+            button.onBeginRename = { [weak button] in button?.beginInlineRename() }
+            let itemProvider = item.contextMenuProvider
+            button.contextMenuProvider = { [weak button] in
+                guard let menu = itemProvider?() else { return nil }
+                if let renameItem = menu.item(withTitle: "Rename…") {
+                    renameItem.onSelect { [weak button] in button?.beginInlineRename() }
+                }
+                return menu
+            }
+            workspaceButtons.append(button)
+            workspaceDragGroups.append(WorkspaceDragGroup(workspaceID: workspaceID, buttons: [button]))
+            button.onDragStarted = { [weak self] button, _ in self?.beginWorkspaceDrag(for: button) }
+            button.onDragMoved = { [weak self] button, event in self?.updateWorkspaceDrag(for: button, with: event) }
+            button.onDragEnded = { [weak self] button, _ in self?.finishWorkspaceDrag(for: button) }
+        } else {
+            button.workspaceID = nil
+            button.onDragStarted = nil
+            button.onDragMoved = nil
+            button.onDragEnded = nil
+            if let lastGroupIndex = workspaceDragGroups.indices.last {
+                workspaceDragGroups[lastGroupIndex].buttons.append(button)
+            }
+        }
+    }
+
+    private static func itemKey(for item: SidebarItem) -> String {
+        "\(item.kind.signature):\(item.identifier)"
     }
 
     private static func renderSignature(
